@@ -299,54 +299,6 @@ Una vez tengamos los selectores reales de un sitio, probamos el scraping real y 
 
 ---
 
-## Cómo subir este proyecto a GitHub
-
-Como no puedo ejecutar comandos de git directamente, acá tenés los pasos exactos para que los corras en tu terminal:
-
-```powershell
-# 1. Entrá a la carpeta del proyecto
-cd "G:/Proyectos OpenCode/Buscador BiciOcasion"
-
-# 2. Inicializá el repositorio git (si no está inicializado)
-git init
-
-# 3. Agregá todos los archivos
-git add .
-
-# 4. Creá el primer commit
-git commit -m "feat: esqueleto inicial del buscador de e-MTB de ocasión"
-
-# 5. Creá el repositorio en GitHub (desde github.com, nombre: buscador-bici-ocasion)
-#    No lo inicialices con README ni .gitignore para evitar conflictos.
-
-# 6. Asociá el remoto (reemplazá TU-USUARIO por tu usuario de GitHub)
-git remote add origin https://github.com/TU-USUARIO/buscador-bici-ocasion.git
-
-# 7. Subí el código
-git branch -M main
-git push -u origin main
-```
-
-### Archivos que NO debes subir a GitHub
-
-- `.env` (contiene tus credenciales de Telegram) — ya está excluido si creás un `.gitignore`.
-- `bicis_enviadas.db` (base de datos local con tus datos).
-- `__pycache__/` y `.pytest_cache/`.
-
-Te recomiendo crear un `.gitignore` con esto:
-
-```
-.env
-*.db
-__pycache__/
-*.pyc
-.env.example
-```
-
-> **Nota:** `.env.example` sí se sube porque es solo la plantilla sin credenciales reales.
-
----
-
 ## Licencia
 
 MIT
