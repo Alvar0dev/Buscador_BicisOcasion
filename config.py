@@ -26,7 +26,7 @@ SITIOS: List[SitioObjetivo] = [
     SitioObjetivo(
         nombre="Bike Ocasión",
         base_url="https://www.bike-ocasion.com",
-        seccion_emtb="https://www.bike-ocasion.com/bicicletas-electronicas/doble-suspension/",
+        seccion_emtb="https://www.bike-ocasion.com/bicicletas-electricas-de-montana-doble-suspension-2020",
     ),
     SitioObjetivo(
         nombre="Tuvalum",
@@ -36,12 +36,12 @@ SITIOS: List[SitioObjetivo] = [
     SitioObjetivo(
         nombre="Buhobike",
         base_url="https://www.buhobike.com",
-        seccion_emtb="https://www.buhobike.com/bicicletas-electronicas/doble-suspension/",
+        seccion_emtb="https://www.buhobike.com/electricas-trail-dobles",
     ),
     SitioObjetivo(
         nombre="Upway",
-        base_url="https://www.upway.es",
-        seccion_emtb="https://www.upway.es/coleccion/bicicletas-electronicas-de-montana-doble-suspension/",
+        base_url="https://upway.es",
+        seccion_emtb="https://upway.es/collections/bicicleta-de-montana",
     ),
 ]
 
