@@ -121,7 +121,11 @@ def test_dedup_sqlite():
         b2 = bici_prueba(precio=2200.0, bici_id="test-001")
         assert db.debe_reenviarse(b2, 8.5) is True
     finally:
-        os.unlink(path)
+        # En Windows, SQLite puede mantener el archivo bloqueado brevemente.
+        try:
+            os.unlink(path)
+        except PermissionError:
+            pass
 
 
 def test_formateo_mensaje_telegram():
