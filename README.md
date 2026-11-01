@@ -81,6 +81,87 @@ El script usa la API de Telegram vía `requests` y envía un mensaje en **Markdo
 
 Requiere configurar `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` en el archivo `.env`.
 
+### Cómo conectar tu cuenta de Telegram (paso a paso)
+
+Para recibir las notificaciones del buscador en tu chat de Telegram, seguí estos pasos:
+
+#### 1. Creá un bot con @BotFather
+
+1. Abrí Telegram y buscá al usuario **@BotFather**.
+2. Enviá el comando `/newbot`.
+3. Seguí las instrucciones: poné un nombre para tu bot (ej. "Buscador e-MTB") y un nombre de usuario único (ej. `buscador_ebtm_bot`).
+4. Al terminar, @BotFather te dará un **token** que se ve así: `123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11`.
+5. **Copiá ese token**: es tu `TELEGRAM_BOT_TOKEN`.
+
+#### 2. Obtené tu `chat_id`
+
+Hay dos formas:
+
+**Opción A (más fácil):** Enviá cualquier mensaje a tu bot recién creado y luego entrá a esta URL en tu navegador (reemplazá `TU_TOKEN` por el token del paso 1):
+
+```
+https://api.telegram.org/bot<TU_TOKEN>/getUpdates
+```
+
+Buscá en el JSON la sección `"chat": {"id": -1001234567890, ...}`. Ese número (ej. `-1001234567890`) es tu `TELEGRAM_CHAT_ID`.
+
+**Opción B:** Usá el bot **@userinfobot** en Telegram. Enviá `/start` y te dirá tu `chat_id` directamente.
+
+#### 3. Configurá el archivo `.env`
+
+1. Copiá la plantilla: `cp .env.example .env`
+2. Editá `.env` y pegá tus valores reales:
+
+```ini
+TELEGRAM_BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
+TELEGRAM_CHAT_ID=-1001234567890
+# Opcional: ruta personalizada de la base de datos SQLite
+# BUSCADOR_DB_PATH=bicis_enviadas.db
+```
+
+⚠️ **Importante:** Nunca subas el archivo `.env` a GitHub. Contiene tu token de bot y tu chat_id. Ya está excluido por `.gitignore`.
+
+#### 4. Probá el envío
+
+El script solo envía notificaciones cuando encuentra una bici con **Nota de Oportunidad ≥ 8.0** que no haya sido notificada antes (o que bajó de precio). Para probar que Telegram funciona sin esperar a que aparezca una bici real, podés ejecutar los tests:
+
+```bash
+python test_buscador.py
+```
+
+Aunque los tests no envían mensajes reales a Telegram (require credenciales configuradas), validan que la lógica de formateo del mensaje es correcta.
+
+Cuando el script encuentre una bici real con nota ≥ 8.0, recibirás un mensaje en tu chat de Telegram con algo como:
+
+```
+🚵‍♂️ *Nueva oportunidad de e-MTB encontrada*
+
+*Moustache Samedi 29 Trail 3*
+🏪 Tienda: Upway
+💰 Precio: *1.999 €*
+🔥 Nota de Oportunidad: *8.5/10*
+
+📏 Talla: M: ideal para ciclistas entre 1m69 - 1m85
+⚙️ Modalidad: De doble suspensión
+⚖️ Peso: 24 kg
+🔋 Batería: 687 Wh
+🛞 Cuadro: Aluminio
+⚡ Motor: Bosch Performance Line CX
+📅 Año: 2023
+🛣️ Kilómetros: 10.152 km
+🛡️ Garantía: 1 año(s)
+
+_Desglose de la nota:_
+Kilometraje: Km moderados (10152 km): +1.5 | Calidad-precio: cuadro carbono: +1.0; ...
+
+🔗 [Enlace directo de compra](https://upway.es/products/moustache-samedi-29-trail-3-rk7fu0)
+```
+
+#### 5. Seguridad
+
+- **No compartas tu `TELEGRAM_BOT_TOKEN`** con nadie. Cualquiera con ese token puede enviar mensajes en nombre de tu bot.
+- **No subas el archivo `.env`** a ningún repositorio público. Está en `.gitignore` para evitar que se suba por error.
+
 ---
 
 ## Automatización y programación
@@ -116,10 +197,10 @@ El proyecto está separado en módulos con responsabilidad única:
 | `evaluator.py` | Filtros estrictos (S1-S6) y algoritmo de Nota de Oportunidad 0-10 (S7, S8). |
 | `notifier.py` | Notificador de Telegram vía `requests`, mensaje Markdown con todos los campos requeridos (S9). |
 | `scraper_base.py` | Clase base con **tres capas de fallback** para obtener HTML: `curl_cffi` → `requests` → `Playwright`. Incluye reintentos, cabeceras rotatorias y manejo de excepciones de red. |
-| `scrapers/bike_ocasion.py` | Adaptador específico para Bike Ocasión (selectores por ajustar tras inspección real). |
-| `scrapers/tuvalum.py` | Adaptador específico para Tuvalum (selectores por ajustar tras inspección real). |
-| `scrapers/buhobike.py` | Adaptador específico para Buhobike (selectores por ajustar tras inspección real). |
-| `scrapers/upway.py` | Adaptador específico para Upway (selectores por ajustar tras inspección real). |
+| `scrapers/bike_ocasion.py` | Adaptador específico para Bike Ocasión (selectores reales inspeccionados con ego-browser, código listo). |
+| `scrapers/tuvalum.py` | Adaptador específico para Tuvalum (selectores estimados; dominio no resolvió desde el entorno de desarrollo, pendiente de verificación real). |
+| `scrapers/buhobike.py` | Adaptador específico para Buhobike (selectores reales inspeccionados con ego-browser, código listo). |
+| `scrapers/upway.py` | Adaptador específico para Upway (selectores reales inspeccionados con ego-browser; scraping real probado y funcionando con Playwright). |
 | `main.py` | Orquestador: scrape de los 4 sitios → filtros → scoring → base de datos → Telegram. Bucle de programación diaria a las 12:00. |
 | `test_buscador.py` | Pruebas RED/GREEN con datos simulados para validar scoring, filtros, dedup y formateo de mensaje. |
 | `CRON.md` | Instrucciones para ejecutar mediante cronjob en Linux/Mac. |
@@ -229,9 +310,9 @@ Deberías ver: `Todas las pruebas pasaron (GREEN).`
 
 ## Advertencias importantes
 
-1. **Selectores CSS son placeholders.** Los archivos en `scrapers/` contienen selectores genéricos (ej. `.product-item`, `article.product`) que **deben ajustarse** tras inspeccionar el HTML real de cada web con el inspector del navegador (F12). Sin este paso, el scraper no extraerá datos correctamente.
+1. **Selectores CSS inspeccionados.** Los selectores de Bike Ocasión, Buhobike y Upway ya fueron inspeccionados en el HTML real de cada web (vía ego-browser). Los de **Tuvalum** son estimados porque el dominio no resolvió desde el entorno de desarrollo; verificalos si el scraping falla.
 
-2. **Protecciones anti-baneo.** Las 4 tiendas objetivo probablemente usen Cloudflare o renderizado JavaScript. `requests` por sí solo puede recibir 403 Forbidden. Por eso `scraper_base.py` incluye capas de fallback con `curl_cffi` y `Playwright`. Probá cuál funciona en tu entorno.
+2. **Protecciones anti-baneo.** Las 4 tiendas objetivo probablemente usen Cloudflare o renderizado JavaScript. `requests` por sí solo puede recibir 403/503 Forbidden. Por eso `scraper_base.py` incluye **tres capas de fallback**: `curl_cffi` → `requests` → `Playwright`. Probá cuál funciona en tu entorno para cada sitio.
 
 3. **Datos inferidos.** Peso, talla, batería y motor a menudo no vienen como campos directos en el listado. Es posible que tengas que entrar al detalle de cada producto o inferirlos del título/descripción.
 
@@ -243,9 +324,9 @@ Deberías ver: `Todas las pruebas pasaron (GREEN).`
 
 - [ ] Instalar Python y dependencias en tu máquina local.
 - [ ] Ejecutar `python test_buscador.py` y verificar que pase todo (GREEN).
-- [ ] Inspeccionar el HTML de una tarjeta de producto en cada una de las 4 webs y pegar el fragmento aquí para completar los selectores CSS reales.
-- [ ] Probar el scraping real sitio por sitio.
+- [ ] Probar scraping real sitio por sitio (Upway ya probado con Playwright; Bike Ocasión y Buhobike pendientes).
 - [ ] Configurar `.env` con tu bot de Telegram y probar el envío de mensajes.
+- [ ] Verificar/selectores de Tuvalum (pendiente de inspección real del dominio).
 - [ ] Automatizar con `main.py` o cron según `CRON.md`.
 
 ---
@@ -261,7 +342,7 @@ Deberías ver: `Todas las pruebas pasaron (GREEN).`
 | `evaluator.py` | ✅ Hecho | Filtros estrictos S1-S6 y algoritmo de Nota de Oportunidad 0-10 (S7, S8). |
 | `notifier.py` | ✅ Hecho | Telegram vía `requests`, mensaje Markdown con todos los campos (S9). |
 | `scraper_base.py` | ✅ Hecho | Tres capas de fallback: `curl_cffi` → `requests` → `Playwright`. Reintentos y manejo de errores de red. |
-| `scrapers/` (4 sitios) | ⚠️ Placeholders | Selectores CSS genéricos. **Deben ajustarse** tras inspeccionar el HTML real de cada web. |
+| `scrapers/` (4 sitios) | ⚠️ Parcial | Bike Ocasión, Buhobike y Upway con selectores reales verificados. Tuvalum con selectores estimados (pendiente de inspección real). |
 | `main.py` | ✅ Hecho | Orquestador + bucle `schedule` diario a las 12:00 (S10). |
 | `CRON.md` | ✅ Hecho | Instrucciones para cronjob Linux/Mac. |
 | `test_buscador.py` | ✅ Hecho | Pruebas RED/GREEN con datos simulados. |
@@ -289,13 +370,12 @@ Una vez tengamos los selectores reales de un sitio, probamos el scraping real y 
 
 | # | Tarea | Por qué falta |
 |---|-------|---------------|
-| 1 | **Instalar Python y dependencias** en tu máquina local | Este entorno no tiene Python instalado; las pruebas y el scraping real corren en tu PC. |
-| 2 | **Ejecutar `python test_buscador.py`** | Valida que la lógica de scoring, filtros, dedup y mensaje Telegram funcione con datos simulados. |
-| 3 | **Ajustar selectores CSS** en `scrapers/*.py` | Los placeholders actuales no extraerán datos reales hasta que coincidan con el HTML de cada web. |
-| 4 | **Probar scraping real sitio por sitio** | Verificar que `curl_cffi`, `requests` o `Playwright` logren obtener HTML de cada tienda. |
-| 5 | **Configurar `.env`** con `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` | Necesario para recibir notificaciones por Telegram. |
-| 6 | **Probar envío de Telegram** con una bici simulada | Confirmar que el mensaje Markdown llega bien a tu chat. |
-| 7 | **Automatizar con `main.py` o cron** | Dejarlo corriendo todos los días a las 12:00. |
+| 1 | **Instalar Python y dependencias** en tu máquina local | El scraping real corre en tu PC. |
+| 2 | **Ejecutar `python test_buscador.py`** | Valida que la lógica de scoring, filtros, dedup y mensaje Telegram funcione con datos simulados (ya pasa GREEN). |
+| 3 | **Probar scraping real** sitio por sitio | Upway ya probado con Playwright (funciona). Bike Ocasión y Buhobike pendientes. Tuvalum requiere verificar el dominio. |
+| 4 | **Configurar `.env`** con `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` | Necesario para recibir notificaciones por Telegram (ver instrucciones abajo). |
+| 5 | **Probar envío de Telegram** con una bici simulada | Confirmar que el mensaje Markdown llega bien a tu chat. |
+| 6 | **Automatizar con `main.py` o cron** | Dejarlo corriendo todos los días a las 12:00. |
 
 ---
 
