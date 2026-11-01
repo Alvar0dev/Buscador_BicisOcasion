@@ -379,6 +379,56 @@ Una vez tengamos los selectores reales de un sitio, probamos el scraping real y 
 
 ---
 
+## Proceso de desarrollo y dificultades encontradas
+
+### Qué se hizo en esta sesión
+
+1. **Análisis inicial del proyecto**: Se leyó el README completo y se analizó cada archivo (`config.py`, `models.py`, `db.py`, `evaluator.py`, `notifier.py`, `scraper_base.py`, `main.py`, `test_buscador.py`, `CRON.md`, `scrapers/*.py`).
+2. **Archivos faltantes creados**: `requirements.txt`, `.gitignore`, `.env.example` (no existían en el repositorio inicial).
+3. **Tests unitarios**: Se corrieron y pasaron todos (GREEN). Se corrigió un `PermissionError` en `test_buscador.py` al borrar archivos temporales de SQLite en Windows (`os.unlink` envuelto en `try/except PermissionError`).
+4. **Instalación de dependencias**: `pip install -r requirements.txt` (se instaló `requests`; el resto ya estaba presente).
+5. **Inspección de páginas web con `ego-browser`**: Se usó `ego-browser` (Ego Lite / Citrolabs) para navegar a las 4 tiendas y extraer los selectores CSS reales de sus páginas de producto.
+   - **Bike Ocasión**: URLs de categoría corregidas (la original devolvía 404). Selectores verificados en página de producto real: `.product_name`, `.price` / `.current-price`, `.bo-product-reference`, `.bo-pdp-size-main`, `.product-information`.
+   - **Buhobike**: Selectores verificados: `h1.p-name`, `.current-price` / `.price`, `.caracteristicas-tecnicas`. Tiendas físicas en Madrid (Rivas-Vaciamadrid, Tres Cantos).
+   - **Tuvalum**: El dominio `tuvalum.com` **no resolvió** desde el entorno de desarrollo (DNS error). Los selectores son estimados y requieren verificación real.
+   - **Upway**: Categoría `https://upway.es/collections/bicicleta-de-montana` funciona (1.429 productos). Selectores verificados: `a.w-full[href*="/products/"]` con título, precio y ID en el slug. Scraping real probado exitosamente con Playwright (23 productos extraídos).
+6. **Scrapers actualizados**: Los 4 scrapers (`bike_ocasion.py`, `buhobike.py`, `tuvalum.py`, `upway.py`) fueron reescritos con los selectores reales o estimados.
+7. **`scraper_base.py` actualizado**: Se implementaron las 3 capas de fallback descritas en el README: `curl_cffi` → `requests` → `Playwright` (con Chromium instalado). Cada capa tiene reintentos con backoff exponencial.
+8. **Documentación (README)**: Se actualizó con estado real de cada scraper, guía paso a paso de Telegram (BotFather, chat_id, .env, ejemplo de mensaje, seguridad), y tabla de estado del proyecto.
+
+### Dificultades encontradas
+
+| Dificultad | Sitio afectado | Solución / Estado |
+|------------|---------------|-------------------|
+| **URL de categoría 404** | Bike Ocasión | La URL original (`bicicletas-electronicas/doble-suspension/`) devolvía 404. Se inspeccionó el menú y se encontró la URL correcta: `bicicletas-electricas-de-montana-doble-suspension-2020`. |
+| **Dominio no resuelve** | Tuvalum | `tuvalum.com` y `www.tuvalum.com` no resuelven desde el entorno de desarrollo (error DNS). Los selectores son estimados y requieren verificación en máquina local. |
+| **Protección anti-baneo (503)** | Buhobike | Todas las capas de fallback (curl_cffi, requests, Playwright) devolvieron 503. El sitio tiene Cloudflare muy agresivo. Puede requerir proxies o ejecución desde otra red. |
+| **Timeout en scraping** | Upway | `curl_cffi` y `requests` agotaron el timeout. Playwright con Chromium funcionó correctamente y extrajo 23 productos. |
+| **Selectores placeholders** | Todos | Los scrapers originales usaban selectores genéricos (`.product-item`, `article.product`) que no coinciden con el HTML real de ningún sitio. Se inspeccionó y se reemplazaron por selectores reales. |
+| **Permiso de archivo en Windows** | `test_buscador.py` | `os.unlink()` fallaba con `PermissionError` al borrar archivos temporales de SQLite bloqueados por el driver. Se arregló con `try/except PermissionError`. |
+| **Archivos de configuración faltantes** | Proyecto general | `requirements.txt`, `.gitignore` y `.env.example` no existían en el repositorio inicial. Se crearon desde cero. |
+
+### Dependencias instaladas
+
+- `curl_cffi` (ya estaba instalado, v0.17.0)
+- `playwright` + `playwright install chromium` (Chromium descargado y listo para usar como capa 3)
+
+### Estado final
+
+| Componente | Estado |
+|------------|--------|
+| Lógica de filtros, scoring, dedup, Telegram | ✅ Verificado (tests GREEN) |
+| Selectores Bike Ocasión | ✅ Verificados en HTML real |
+| Selectores Buhobike | ✅ Verificados en HTML real |
+| Selectores Upway | ✅ Verificados + scraping real probado |
+| Selectores Tuvalum | ⚠️ Estimados (pendiente verificación real) |
+| Scraping real Upway | ✅ Funciona con Playwright |
+| Scraping real Buhobike | ❌ Bloqueado (503 Cloudflare) |
+| Scraping real Bike Ocasión | ⏳ Pendiente |
+| Scraping real Tuvalum | ⏳ Pendiente (dominio no resuelve) |
+
+---
+
 ## Licencia
 
 MIT
