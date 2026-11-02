@@ -8,6 +8,10 @@ import os
 from dataclasses import dataclass
 from typing import List
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 @dataclass(frozen=True)
 class SitioObjetivo:
@@ -78,7 +82,8 @@ PRECIO_MIN_EUR: int = 2000  # Rango principal 2.000 € (S5)
 PRECIO_MAX_EUR: int = 3000  # Rango principal 3.000 € (S5)
 PRECIO_MAX_EXCEPCIONAL_EUR: int = 3300  # Oportunidad excepcional hasta 3.300 € (S6)
 
-NOTA_MIN_AGUARDAR: float = 8.0  # Solo nota >= 8.0 se guarda/notifica (S8)
+NOTA_MIN_AGUARDAR: float = 8.0  # Solo nota >= 8.0 pasa filtros estrictos (S8)
+NOTA_MIN_NOTIFICAR: float = 8.5  # Umbral para notificar por Telegram (fallback a mejor nota si ninguna llega)
 
 # ---------------------------------------------------------------------------
 # TELEGRAM (S9)
