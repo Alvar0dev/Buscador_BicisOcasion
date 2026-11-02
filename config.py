@@ -85,6 +85,7 @@ NOTA_MIN_AGUARDAR: float = 8.0  # Solo nota >= 8.0 se guarda/notifica (S8)
 # ---------------------------------------------------------------------------
 TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_API_URL: str = "https://api.telegram.org/bot{token}/sendMessage"
 
 # ---------------------------------------------------------------------------
 # BASE DE DATOS (S12)

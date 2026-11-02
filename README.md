@@ -342,11 +342,47 @@ Deberías ver: `Todas las pruebas pasaron (GREEN).`
 | `evaluator.py` | ✅ Hecho | Filtros estrictos S1-S6 y algoritmo de Nota de Oportunidad 0-10 (S7, S8). |
 | `notifier.py` | ✅ Hecho | Telegram vía `requests`, mensaje Markdown con todos los campos (S9). |
 | `scraper_base.py` | ✅ Hecho | Tres capas de fallback: `curl_cffi` → `requests` → `Playwright`. Reintentos y manejo de errores de red. |
-| `scrapers/` (4 sitios) | ⚠️ Parcial | Bike Ocasión, Buhobike y Upway con selectores reales verificados. Tuvalum con selectores estimados (pendiente de inspección real). |
+| `scrapers/` (4 sitios) | ⚠️ Parcial | Bike Ocasión y Upway con selectores reales verificados y scraping real probado. Buhobike con selectores reales verificados pero bloqueado por Cloudflare (503). Tuvalum con selectores estimados (pendiente de inspección real). |
 | `main.py` | ✅ Hecho | Orquestador + bucle `schedule` diario a las 12:00 (S10). |
 | `CRON.md` | ✅ Hecho | Instrucciones para cronjob Linux/Mac. |
 | `test_buscador.py` | ✅ Hecho | Pruebas RED/GREEN con datos simulados. |
 | `README.md` | ✅ Hecho | Documentación completa (este archivo). |
+
+---
+
+## Resultados de scraping real (validación de sesión)
+
+Se ejecutó scraping real contra **Bike Ocasión** y **Buhobike** con las 3 capas de fallback (`curl_cffi` → `requests` → `Playwright`).
+
+### Bike Ocasión — ✅ 33 bicicletas extraídas
+
+El scraper extrajo 33 bicicletas de la categoría e-MTB doble suspensión. Luego se aplicaron los filtros estrictos (S1–S6) y la regla de nota ≥ 8.0 (S8). **Ninguna bici pasó todos los filtros** en el inventario actual:
+
+| Motivo de descarte | Cantidad |
+|--------------------|----------|
+| Talla no es M (S1) | 22 bicis |
+| Precio > 3.300 € (S5/S6) | 4 bicis |
+| Batería ≤ 500 Wh (S4) | 2 bicis |
+| Nota < 8.0 tras pasar filtros | 5 bicis |
+
+Las bicicletas con precios más interesantes dentro del rango fueron descartadas principalmente por talla (no M) o por precio superior a 3.300 €. El inventario cambia constantemente; se recomienda ejecutar el buscador periódicamente.
+
+### Buhobike — ❌ Bloqueado por Cloudflare (503)
+
+Todas las capas de fallback fallaron:
+- **curl_cffi**: 503 Server Error (2 reintentos)
+- **requests**: 503 Server Error (2 reintentos)
+- **Playwright**: llegó a un challenge de "Verificando tu conexión…" (cookie + redirect JS) que no se resuelve automáticamente.
+
+El sitio tiene protección anti-bot muy agresiva. Para sortearlo haría falta proxies residenciales, resolver el challenge manualmente, o ejecutar desde otra red/IP.
+
+### Upway — ✅ Ya validado previamente
+
+Scraping real probado exitosamente con Playwright (23 productos extraídos con títulos y precios correctos).
+
+### Tuvalum — ⏳ Pendiente
+
+El dominio `tuvalum.com` no resolvió desde el entorno de desarrollo (error DNS). Los selectores son estimados y requieren verificación en máquina local.
 
 ---
 
@@ -372,7 +408,7 @@ Una vez tengamos los selectores reales de un sitio, probamos el scraping real y 
 |---|-------|---------------|
 | 1 | **Instalar Python y dependencias** en tu máquina local | El scraping real corre en tu PC. |
 | 2 | **Ejecutar `python test_buscador.py`** | Valida que la lógica de scoring, filtros, dedup y mensaje Telegram funcione con datos simulados (ya pasa GREEN). |
-| 3 | **Probar scraping real** sitio por sitio | Upway ya probado con Playwright (funciona). Bike Ocasión y Buhobike pendientes. Tuvalum requiere verificar el dominio. |
+| 3 | **Probar scraping real** sitio por sitio | Upway ✅ probado con Playwright. Bike Ocasión ✅ 33 bicis extraídas (ninguna pasa filtros S1-S8 hoy). Buhobike ❌ bloqueado por Cloudflare (503). Tuvalum ⏳ dominio no resuelve. |
 | 4 | **Configurar `.env`** con `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` | Necesario para recibir notificaciones por Telegram (ver instrucciones abajo). |
 | 5 | **Probar envío de Telegram** con una bici simulada | Confirmar que el mensaje Markdown llega bien a tu chat. |
 | 6 | **Automatizar con `main.py` o cron** | Dejarlo corriendo todos los días a las 12:00. |
