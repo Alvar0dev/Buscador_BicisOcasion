@@ -22,7 +22,7 @@ class BikeOcasionScraper(BaseScraper):
 
         # Selectores reales observados en bike-ocasion.com (página de producto y listado)
         # Cada producto es un <article> o contenedor con título, precio y enlace
-        productos = soup.select("article.product, .product-item, .product-grid-item, .product-card")
+        productos = soup.select("article.ajax_block_product, article.js-product-miniature, article.product, .product-item, .product-grid-item, .product-card")
 
         for p in productos:
             try:
