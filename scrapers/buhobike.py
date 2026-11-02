@@ -23,6 +23,7 @@ class BuhobikeScraper(BaseScraper):
         # Selectores observados en buhobike.com (listado de eléctricas)
         # Cada producto es un contenedor con anchor (URL), párrafo con título y texto de precio
         productos = soup.select(
+            "article.product-miniature, article.js-product-miniature, "
             "article.product, .product-item, .product-grid-item, .product-card, "
             "div.product, .producto, .item-producto"
         )

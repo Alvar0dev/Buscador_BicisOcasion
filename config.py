@@ -36,7 +36,7 @@ SITIOS: List[SitioObjetivo] = [
     SitioObjetivo(
         nombre="Buhobike",
         base_url="https://www.buhobike.com",
-        seccion_emtb="https://www.buhobike.com/electricas-trail-dobles",
+        seccion_emtb="https://www.buhobike.com/3230-electricas-trail-dobles",
     ),
     SitioObjetivo(
         nombre="Upway",

@@ -101,7 +101,10 @@ class BaseScraper(ABC):
                 page.set_extra_http_headers({
                     "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
                 })
-                page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
+                page.goto(url, wait_until="networkidle", timeout=timeout * 1000)
+                # Espera adicional para challenges de Cloudflare/JS que necesitan
+                # tiempo para establecer cookies y cargar el contenido real.
+                page.wait_for_timeout(2000)
                 html = page.content()
                 browser.close()
                 return html
