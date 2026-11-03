@@ -12,9 +12,9 @@ import schedule
 import time
 from datetime import datetime
 
-from config import SITIOS, HORA_EJECUCION, NOTA_MIN_NOTIFICAR
+from config import SITIOS, HORA_EJECUCION, NOTA_MIN_NOTIFICAR, NOTA_MIN_AGUARDAR
 from db import BaseDatos
-from evaluator import evaluar
+from evaluator import evaluar, calcular_nota_oportunidad, pasa_filtros_estrictos
 from notifier import enviar
 from scrapers.bike_ocasion import BikeOcasionScraper
 from scrapers.tuvalum import TuvalumScraper
@@ -32,9 +32,14 @@ SCRAPERS = {
 
 def _recolectar_oportunidades(db: BaseDatos) -> list:
     """
-    Recorre los 4 sitios objetivo, aplica filtros estrictos y puntuacion,
-    y devuelve una lista de (bici, nota, desglose) para bicis aptas
+    Recorre los 4 sitios objetivo, aplica filtros estrictos S1-S6
+    (incluyendo talla M, precio 2.000-3.300 €, batería > 500 Wh, etc.)
+    y calcula la nota de oportunidad a las que los pasan.
+
+    Devuelve una lista de (bici, nota, desglose) para bicis aptas
     que aun no se hayan notificado (o que bajaron de precio).
+
+    Se excluyen las que ya se hayan notificado (dedup salvo bajada de precio).
     """
     oportunidades = []
 
@@ -53,11 +58,14 @@ def _recolectar_oportunidades(db: BaseDatos) -> list:
             continue
 
         for bici in bicis:
-            apto, nota, desglose = evaluar(bici)
-
+            # Filtros estrictos S1-S6: talla M, precio, batería, peso, modalidad.
+            apto, motivo = pasa_filtros_estrictos(bici)
             if not apto:
-                print(f"  DESCARTADA [{sitio.nombre}]: {bici.titulo} - {desglose}")
+                print(f"  DESCARTADA [{sitio.nombre}]: {bici.titulo} - {motivo}")
                 continue
+
+            # Nota de oportunidad solo para bicis que pasan filtros estrictos.
+            nota, desglose = calcular_nota_oportunidad(bici)
 
             if not db.debe_reenviarse(bici, nota):
                 print(f"  YA ENVIADA [{sitio.nombre}] (sin bajada de precio): {bici.titulo}")
@@ -72,9 +80,13 @@ def ejecutar_busqueda() -> None:
     """Ejecuta una pasada completa de busqueda y notificacion.
 
     Logica de umbral (S8 actualizada):
+      - Se aplican filtros estrictos S1-S6 (talla M, precio 2.000-3.300 €,
+        bateria > 500 Wh, etc.) a todas las bicis encontradas.
       - Si hay bicis con nota >= NOTA_MIN_NOTIFICAR (8.5), se notifican todas.
-      - Si ninguna alcanza 8.5, se notifica solo la de mejor nota de entre
-        todas las paginas buscadas, para no quedar sin informar.
+      - Si ninguna alcanza 8.5 pero hay alguna que pasa filtros estrictos,
+        se notifica solo la de mejor nota (aunque este por debajo de 8.5),
+        para no quedar sin informar. Nunca se notifica una bici que no
+        cumpla los filtros de busqueda (por ejemplo, talla distinta a M).
     """
     print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Iniciando busqueda de e-MTB...")
     db = BaseDatos()
@@ -100,7 +112,7 @@ def ejecutar_busqueda() -> None:
     else:
         a_notificar = [oportunidades[0]]
         print(f"[main] Ninguna bici alcanza {NOTA_MIN_NOTIFICAR}. "
-              f"Notificando solo la mejor (nota {mejor_nota}/10): {a_notificar[0][0].titulo}")
+              f"Notificando solo la mejor apta (nota {mejor_nota}/10): {a_notificar[0][0].titulo}")
 
     total_notificadas = 0
     for bici, nota, desglose in a_notificar:

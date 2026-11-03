@@ -23,6 +23,7 @@ class Bicicleta:
     km: Optional[int] = None
     ano: Optional[int] = None
     componentes: Optional[str] = None
+    suspension_trasera: Optional[str] = None  # Amortiguador trasero -> doble suspensión
     garantia_anos: Optional[int] = None
 
     def to_dict(self) -> dict:

@@ -30,12 +30,21 @@ class BuhobikeScraper(BaseScraper):
 
         for p in productos:
             try:
-                # Título: anchor dentro de párrafo, o h2/h3
-                titulo_el = p.select_one("p > a, h2, h3, .product-title, .product-name")
-                # Precio: texto que contenga €
+                # Título: el texto del producto está en un <a> dentro del article.
+                # Buscamos el <a> con texto significativo (evitamos href='#' y texto vacío).
+                titulo_el = None
+                for a in p.select("a[href]"):
+                    href = a.get("href", "")
+                    t = self.limpiar_texto(a.get_text())
+                    if t and href != "#" and t.lower() not in ("", "añadir al carrito", "ver rápido"):
+                        titulo_el = a
+                        break
+
+                # Precio: .price (span.price en el HTML real)
                 precio_el = p.select_one(".price, .current-price, .product-price, [class*='precio']")
-                # Enlace: anchor con href
-                link_el = p.select_one("a[href]")
+
+                # Enlace: href del mismo <a> que trae el título, o el primer <a[href]> como fallback.
+                link_el = titulo_el if titulo_el else p.select_one("a[href]")
 
                 if not (titulo_el and precio_el and link_el):
                     continue

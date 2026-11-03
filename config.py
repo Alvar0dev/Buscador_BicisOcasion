@@ -110,5 +110,5 @@ USER_AGENTS: List[str] = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
 ]
 
-# Horario de ejecución (S10): todos los días a las 12:00
-HORA_EJECUCION: str = "12:00"
+# Horario de ejecución (S10): todos los días a las 12:30
+HORA_EJECUCION: str = "12:30"
