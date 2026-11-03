@@ -2,18 +2,179 @@
 enriquecedor_web.py
 Búsqueda web automática para completar datos faltantes de bicicletas
 cuando el scraping de detalle no los tiene.
-Usa DuckDuckGo HTML (sin API key).
-Solo se usa como fallback para campos críticos: peso, suspensión trasera, año, km.
+
+Estrategia (en orden de fiabilidad):
+  1. Ficha del producto del propio sitio (Scrapling) - mas fiable, datos reales.
+  2. DuckDuckGo HTML (sin API key) - fallback general.
+
+Solo se usa como fallback para campos críticos: peso, suspension, ano, km,
+talla, bateria y motor.
 """
 
 import re
-import requests
+import json
+import logging
+import os
+from typing import Optional, Dict
+from pathlib import Path
 from bs4 import BeautifulSoup
 from models import Bicicleta
+import config as cfg
 
+log = logging.getLogger("enriquecedor")
+
+try:
+    from scrapling.fetchers import Fetcher, StealthyFetcher
+    SCRAPLING_AVAILABLE = True
+except ImportError:
+    SCRAPLING_AVAILABLE = False
+
+
+# ---------------------------------------------------------------------------
+# Caché de fichas de detalle (tarea 12, Fase D)
+# ---------------------------------------------------------------------------
+CACHE_DIR = Path("cache")
+CACHE_FILE = CACHE_DIR / "fichas_detalle.json"
+
+
+def _cargar_cache() -> Dict[str, dict]:
+    """Carga el caché de fichas de detalle desde disco."""
+    if not CACHE_FILE.exists():
+        return {}
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        log.warning(f"[Caché] No se pudo leer {CACHE_FILE}: {e}")
+        return {}
+
+
+def _guardar_cache(cache: Dict[str, dict]) -> None:
+    """Guarda el caché de fichas de detalle en disco."""
+    CACHE_DIR.mkdir(exist_ok=True)
+    try:
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        log.warning(f"[Caché] No se pudo escribir {CACHE_FILE}: {e}")
+
+
+def _buscar_en_cache(url: str) -> Optional[dict]:
+    """Busca los datos extraídos de una ficha en el caché."""
+    cache = _cargar_cache()
+    return cache.get(url)
+
+
+def _guardar_en_cache(url: str, datos: dict) -> None:
+    """Guarda los datos extraídos de una ficha en el caché."""
+    cache = _cargar_cache()
+    cache[url] = datos
+    _guardar_cache(cache)
+
+
+# ---------------------------------------------------------------------------
+# 1. Enriquecimiento desde la ficha del propio sitio (Scrapling)
+# ---------------------------------------------------------------------------
+
+def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str) -> dict:
+    """
+    Entra a la ficha de producto del sitio y extrae los campos que pueda:
+    talla, bateria_wh, km, motor, cuadro_material, ano, peso_kg,
+    suspension_trasera, componentes, modalidad.
+    Devuelve un dict con los campos encontrados (puede estar parcialmente vacio).
+    """
+    detalle: dict = {}
+    if not SCRAPLING_AVAILABLE:
+        return detalle
+
+    # --- Caché: verificar si ya consultamos esta ficha antes ---
+    cache_hit = _buscar_en_cache(url)
+    if cache_hit:
+        log.info(f"[Caché] Ficha ya consultada: {url} -> {list(cache_hit.keys())}")
+        return dict(cache_hit)
+
+    try:
+        page = Fetcher.get(url, impersonate="chrome120", timeout=30)
+        if page.status != 200:
+            # Fallback a stealth si el sitio tiene Cloudflare
+            page = StealthyFetcher.fetch(
+                url, headless=True, solve_cloudflare=True, timeout=60
+            )
+        if page.status != 200:
+            log.warning(f"[Enriquecedor] No se pudo abrir ficha {url} (status {page.status})")
+            return detalle
+    except Exception as e:
+        log.warning(f"[Enriquecedor] Error abriendo ficha {url}: {e}")
+        return detalle
+
+    html = page.html_content
+    soup = BeautifulSoup(html, "html.parser")
+    texto_completo = soup.get_text(" ", strip=True)
+
+    # --- Año ---
+    ano = _extraer_ano(texto_completo)
+    if ano:
+        detalle["ano"] = ano
+
+    # --- Peso ---
+    peso = _extraer_peso(texto_completo)
+    if peso is not None:
+        detalle["peso_kg"] = peso
+
+    # --- Batería ---
+    bateria = _extraer_bateria(texto_completo)
+    if bateria is not None:
+        detalle["bateria_wh"] = bateria
+
+    # --- Kilometraje ---
+    km = _extraer_km(texto_completo)
+    if km is not None:
+        detalle["km"] = km
+
+    # --- Motor ---
+    motor = _extraer_motor(texto_completo)
+    if motor:
+        detalle["motor"] = motor
+
+    # --- Talla ---
+    talla = _extraer_talla(texto_completo)
+    if talla:
+        detalle["talla"] = talla
+
+    # --- Suspensión trasera ---
+    susp = _detectar_suspension_trasera(texto_completo)
+    if susp is not None:
+        detalle["suspension_trasera"] = "si" if susp else "no"
+
+    # --- Material de cuadro ---
+    cuadro = _extraer_cuadro(texto_completo)
+    if cuadro:
+        detalle["cuadro_material"] = cuadro
+
+    # --- Componentes ---
+    componentes = _extraer_componentes(texto_completo)
+    if componentes:
+        detalle["componentes"] = componentes
+
+    # --- Modalidad ---
+    modalidad = _extraer_modalidad(texto_completo)
+    if modalidad:
+        detalle["modalidad"] = modalidad
+
+    # --- Guardar en caché para futuras consultas ---
+    if detalle:
+        _guardar_en_cache(url, detalle)
+
+    return detalle
+
+
+# ---------------------------------------------------------------------------
+# 2. DuckDuckGo (fallback general)
+# ---------------------------------------------------------------------------
 
 def _buscar_duckduckgo(consulta: str) -> str:
     """Hace una búsqueda en DuckDuckGo HTML y devuelve el HTML de resultados."""
+    import requests
     url = "https://html.duckduckgo.com/html/"
     try:
         resp = requests.post(url, data={"q": consulta}, headers={
@@ -28,8 +189,20 @@ def _buscar_duckduckgo(consulta: str) -> str:
     return ""
 
 
-def _extraer_peso(texto: str):
-    """Extrae peso en kg de un texto. Devuelve float o None."""
+# ---------------------------------------------------------------------------
+# Extractores de texto
+# ---------------------------------------------------------------------------
+
+def _extraer_ano(texto: str) -> Optional[int]:
+    match = re.search(r"\b(20\d{2})\b", texto)
+    if match:
+        ano = int(match.group(1))
+        if 2015 <= ano <= 2030:
+            return ano
+    return None
+
+
+def _extraer_peso(texto: str) -> Optional[float]:
     match = re.search(r"(\d+(?:[.,]\d+)?)\s*kg\b", texto, re.IGNORECASE)
     if match:
         try:
@@ -39,19 +212,52 @@ def _extraer_peso(texto: str):
     return None
 
 
-def _extraer_ano(texto: str):
-    """Extrae año de un texto. Devuelve int o None."""
-    match = re.search(r"\b(20\d{2})\b", texto)
+def _extraer_bateria(texto: str) -> Optional[int]:
+    match = re.search(r"(\d+)\s*wh\b", texto, re.IGNORECASE)
     if match:
-        return int(match.group(1))
+        try:
+            return int(match.group(1))
+        except ValueError:
+            pass
     return None
 
 
-def _detectar_suspension_trasera(texto: str):
-    """
-    Detecta si el texto indica suspensión trasera (doble suspensión).
-    Devuelve True si sí tiene, False si claramente no, None si no se puede saber.
-    """
+def _extraer_km(texto: str) -> Optional[int]:
+    match = re.search(r"([\d.,]+)\s*km\b", texto, re.IGNORECASE)
+    if match:
+        try:
+            km_str = match.group(1).replace(".", "").replace(",", "")
+            return int(km_str)
+        except ValueError:
+            pass
+    return None
+
+
+def _extraer_motor(texto: str) -> Optional[str]:
+    texto_lower = texto.lower()
+    motores_conocidos = [
+        "shimano ep8", "shimano ep801", "shimano ep6",
+        "bosch sx", "bosch performance line cx", "bosch performance line",
+        "fazua", "tq", "mahle", "specialized", "yamaha", "giant",
+    ]
+    for m in motores_conocidos:
+        if m in texto_lower:
+            return m.title()
+    return None
+
+
+def _extraer_talla(texto: str) -> Optional[str]:
+    match = re.search(r"\btalla\s*:\s*([A-Za-z]+)\b", texto, re.IGNORECASE)
+    if match:
+        return match.group(1).upper()
+    # Buscar patrones como "Talla M" o "Talla: M"
+    match2 = re.search(r"\bTalla\s+([SMLXL]+)\b", texto, re.IGNORECASE)
+    if match2:
+        return match2.group(1).upper()
+    return None
+
+
+def _detectar_suspension_trasera(texto: str) -> Optional[bool]:
     texto_lower = texto.lower()
     negativos = ["no tiene suspensión trasera", "sin amortiguador", "solo horquilla",
                  "hardtail", "rigid", "sin suspensión trasera", "no amortiguador"]
@@ -64,51 +270,129 @@ def _detectar_suspension_trasera(texto: str):
     return None
 
 
-def enriquecer_bici(bici: Bicicleta) -> Bicicleta:
+def _extraer_cuadro(texto: str) -> Optional[str]:
+    texto_lower = texto.lower()
+    if any(m in texto_lower for m in ["carbono", "carbon", "fibra de carbono"]):
+        return "Carbono"
+    if any(m in texto_lower for m in ["aluminio", "aluminium", "alu"]):
+        return "Aluminio"
+    return None
+
+
+def _extraer_componentes(texto: str) -> Optional[str]:
+    texto_lower = texto.lower()
+    partes = []
+    if any(m in texto_lower for m in ["xt", "axs", "x0", "xtr"]):
+        partes.append("XT/AXS")
+    if any(m in texto_lower for m in ["kashima", "ultimate", "factory"]):
+        partes.append("Suspensión premium")
+    if partes:
+        return "; ".join(partes)
+    return None
+
+
+def _extraer_modalidad(texto: str) -> Optional[str]:
+    texto_lower = texto.lower()
+    modalidades = ["xc", "cross country", "downcountry", "light e-mtb", "light emtb",
+                   "trail", "enduro", "all mountain"]
+    for m in modalidades:
+        if m in texto_lower:
+            return m.title()
+    return None
+
+
+# ---------------------------------------------------------------------------
+# API principal
+# ---------------------------------------------------------------------------
+
+def enriquecer_bici(bici: Bicicleta, url_ficha: Optional[str] = None) -> Bicicleta:
     """
-    Intenta completar datos faltantes de una bici mediante búsqueda web.
-    Solo busca los campos que faltan: peso_kg, suspension_trasera, ano, km.
+    Intenta completar datos faltantes de una bici.
+
+    Orden:
+      1. Ficha del producto del propio sitio (Scrapling) - si se pasa url_ficha.
+      2. DuckDuckGo HTML - fallback general.
+
+    Solo busca los campos que faltan: peso_kg, suspension_trasera, ano, km,
+    talla, bateria_wh, motor, cuadro_material, componentes, modalidad.
+
     Devuelve la bici con los campos que se lograron completar.
     """
-    faltan_peso = bici.peso_kg is None
-    faltan_suspension = bici.suspension_trasera is None
-    faltan_ano = bici.ano is None
+    faltan = (
+        bici.peso_kg is None or bici.suspension_trasera is None or bici.ano is None
+        or bici.km is None or bici.talla is None or bici.bateria_wh is None
+        or bici.motor is None or bici.cuadro_material is None
+        or bici.componentes is None or bici.modalidad is None
+    )
 
-    if not (faltan_peso or faltan_suspension or faltan_ano):
+    if not faltan:
         return bici
 
-    consulta = f"{bici.sitio} {bici.titulo} especificaciones peso kg"
-    html = _buscar_duckduckgo(consulta)
-    if not html:
-        return bici
+    # Paso 1: ficha del propio sitio (mas fiable)
+    if url_ficha and SCRAPLING_AVAILABLE:
+        try:
+            detalle = _extraer_desde_ficha_sitio(url_ficha, bici.sitio)
+            if detalle:
+                bici = _aplicar_detalle(bici, detalle)
+                log.info(
+                    f"[Enriquecedor] {bici.titulo} completado desde ficha del sitio: "
+                    f"{list(detalle.keys())}"
+                )
+        except Exception as e:
+            log.warning(f"[Enriquecedor] Ficha del sitio fallo para {bici.titulo}: {e}")
 
-    soup = BeautifulSoup(html, "html.parser")
-    fragmentos = []
-    for res in soup.select(".result")[:5]:
-        titulo_el = res.select_one(".result__a")
-        snippet_el = res.select_one(".result__snippet")
-        texto = ""
-        if titulo_el:
-            texto += titulo_el.get_text(" ", strip=True) + " "
-        if snippet_el:
-            texto += snippet_el.get_text(" ", strip=True) + " "
-        fragmentos.append(texto)
+    # Si faltan campos críticos, intentar DuckDuckGo como fallback
+    faltan_criticos = (
+        bici.peso_kg is None or bici.suspension_trasera is None or bici.ano is None
+    )
+    if faltan_criticos:
+        try:
+            consulta = f"{bici.sitio} {bici.titulo} especificaciones peso kg año"
+            html = _buscar_duckduckgo(consulta)
+            if html:
+                soup = BeautifulSoup(html, "html.parser")
+                fragmentos = []
+                for res in soup.select(".result")[:5]:
+                    titulo_el = res.select_one(".result__a")
+                    snippet_el = res.select_one(".result__snippet")
+                    texto = ""
+                    if titulo_el:
+                        texto += titulo_el.get_text(" ", strip=True) + " "
+                    if snippet_el:
+                        texto += snippet_el.get_text(" ", strip=True) + " "
+                    fragmentos.append(texto)
 
-    texto_completo = " ".join(fragmentos)
+                texto_completo = " ".join(fragmentos)
+                if texto_completo:
+                    detalle = {}
+                    if bici.peso_kg is None:
+                        peso = _extraer_peso(texto_completo)
+                        if peso is not None:
+                            detalle["peso_kg"] = peso
+                    if bici.ano is None:
+                        ano = _extraer_ano(texto_completo)
+                        if ano is not None:
+                            detalle["ano"] = ano
+                    if bici.suspension_trasera is None:
+                        susp = _detectar_suspension_trasera(texto_completo)
+                        if susp is not None:
+                            detalle["suspension_trasera"] = "si" if susp else "no"
 
-    if faltan_peso:
-        peso = _extraer_peso(texto_completo)
-        if peso is not None:
-            bici.peso_kg = peso
+                    if detalle:
+                        bici = _aplicar_detalle(bici, detalle)
+                        log.info(
+                            f"[Enriquecedor] {bici.titulo} completado desde DuckDuckGo: "
+                            f"{list(detalle.keys())}"
+                        )
+        except Exception as e:
+            log.warning(f"[Enriquecedor] DuckDuckGo fallo para {bici.titulo}: {e}")
 
-    if faltan_ano:
-        ano = _extraer_ano(texto_completo)
-        if ano is not None:
-            bici.ano = ano
+    return bici
 
-    if faltan_suspension:
-        susp = _detectar_suspension_trasera(texto_completo)
-        if susp is True:
-            bici.suspension_trasera = "detectada por búsqueda web"
 
+def _aplicar_detalle(bici: Bicicleta, detalle: dict) -> Bicicleta:
+    """Aplica los campos del detalle a la bici solo si faltan."""
+    for campo, valor in detalle.items():
+        if valor is not None and getattr(bici, campo, None) is None:
+            setattr(bici, campo, valor)
     return bici

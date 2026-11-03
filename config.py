@@ -110,5 +110,20 @@ USER_AGENTS: List[str] = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
 ]
 
+# ---------------------------------------------------------------------------
+# PROXIES (S13, opcional)
+# ---------------------------------------------------------------------------
+# Scrapling trae ProxyRotator integrado. Configurar proxies rotatorios
+# para evitar bloqueos por IP en sitios con Cloudflare agresivo.
+# Variables de entorno:
+#   PROXY_LIST: lista de proxies separados por coma (ej. "http://user:pass@ip:port,http://...")
+#   PROXY_ROTATION: "cyclic" o "custom" (default: cyclic)
+PROXY_LIST: List[str] = [
+    p.strip()
+    for p in os.getenv("PROXY_LIST", "").split(",")
+    if p.strip()
+]
+PROXY_ROTATION: str = os.getenv("PROXY_ROTATION", "cyclic")
+
 # Horario de ejecución (S10): todos los días a las 12:30
 HORA_EJECUCION: str = "12:30"

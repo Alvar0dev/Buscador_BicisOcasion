@@ -3,6 +3,8 @@ beautifulsoup4>=4.12.0
 schedule>=1.2.0
 python-dotenv>=1.0.0
 
-# Opcionales: capas anti-baneo (ver README)
-# curl_cffi>=0.6.0
-# playwright>=1.40.0
+# Motor de scraping principal (Scrapling): HTTP stealth + navegador + Cloudflare solver
+scrapling>=0.5
+patchright>=1.64
+browserforge>=1.2
+msgspec>=0.22

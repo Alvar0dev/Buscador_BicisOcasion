@@ -1,8 +1,15 @@
 """
 scraper_base.py
 Clase base para los scrapers de cada sitio.
-Incluye fetch robusto con 3 capas de fallback: curl_cffi → requests → Playwright.
-Reintentos, cabeceras rotatorias y manejo de excepciones de red (S11, S13).
+Motor de scraping: Scrapling (https://github.com/D4Vinci/Scrapling).
+
+Capas de fetch:
+  1. Fetcher (HTTP con impersonación TLS de navegador) - rápido, ideal para sitios sin Cloudflare agresivo.
+  2. StealthyFetcher (navegador stealth con solve_cloudflare=True) - para Cloudflare / JS pesado.
+
+La interfaz pública (sopa, url_absoluta, limpiar_texto) se mantiene igual que antes para que
+los scrapers existentes sigan funcionando sin cambios. Internamente ahora usa Scrapling.
+(S11, S13)
 """
 
 import time
@@ -19,146 +26,232 @@ import config as cfg
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("scraper")
 
-# Capa 1: curl_cffi (evade Cloudflare/JS básico)
+# Scrapling: Fetcher (HTTP stealth) y StealthyFetcher (navegador + Cloudflare solver)
 try:
-    from curl_cffi import requests as curl_requests
-    CURL_CFFI_AVAILABLE = True
+    from scrapling.fetchers import Fetcher, StealthyFetcher, FetcherSession, StealthySession, ProxyRotator
+    SCRAPLING_AVAILABLE = True
 except ImportError:
-    CURL_CFFI_AVAILABLE = False
-
-# Capa 2: requests (estándar)
-import requests
-
-# Capa 3: Playwright (opcional, para Cloudflare fuerte/JS pesado)
-try:
-    from playwright.sync_api import sync_playwright
-    PLAYWRIGHT_AVAILABLE = True
-except ImportError:
-    PLAYWRIGHT_AVAILABLE = False
+    SCRAPLING_AVAILABLE = False
 
 
 class BaseScraper(ABC):
     def __init__(self, sitio: cfg.SitioObjetivo) -> None:
         self.sitio = sitio
-        self.session = requests.Session()
-        self._rotar_cabeceras()
+        self._delay_ultimo_request: float = 0.0
+        self._session_proxy = self._crear_sesion_con_proxy()
 
-    def _rotar_cabeceras(self) -> None:
-        """Asigna cabeceras rotatorias para evitar baneos básicos (S11)."""
-        self.session.headers.update({
-            "User-Agent": random.choice(cfg.USER_AGENTS),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-            "Connection": "keep-alive",
-        })
-
-    def _obtener_con_curl_cffi(self, url: str, timeout: int = 30) -> Optional[str]:
-        """Capa 1: curl_cffi con impersonate para evadir detección de bot."""
-        if not CURL_CFFI_AVAILABLE:
+    def _crear_sesion_con_proxy(self):
+        """
+        Crea una sesión de Scrapling con ProxyRotator si hay proxies configurados
+        en config.py (variable de entorno PROXY_LIST).
+        Devuelve None si no hay proxies o Scrapling no está disponible.
+        """
+        if not SCRAPLING_AVAILABLE or not cfg.PROXY_LIST:
             return None
         try:
-            resp = curl_requests.get(
-                url,
-                impersonate="chrome120",
-                headers={
-                    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-                },
-                timeout=timeout,
-            )
-            if resp.status_code == 200:
-                return resp.text
+            rotator = ProxyRotator()
+            for proxy_url in cfg.PROXY_LIST:
+                rotator.add(proxy_url)
+            # Sesión HTTP con proxy rotator (para Fetcher)
+            session = FetcherSession(proxy_rotator=rotator)
+            return session
+        except Exception as e:
             log.warning(
-                f"[{self.sitio.nombre}] curl_cffi devolvió {resp.status_code} para {url}"
+                f"[{self.sitio.nombre}] No se pudo crear sesión con proxy: {e}"
+            )
+            return None
+
+    def _espera_cortesa(self) -> None:
+        """Pequeno delay aleatorio entre requests para no saturar el sitio objetivo (S13)."""
+        delay = random.uniform(1.0, 2.5)
+        if self._delay_ultimo_request > 0:
+            transcurrido = time.time() - self._delay_ultimo_request
+            if transcurrido < delay:
+                time.sleep(delay - transcurrido)
+        self._delay_ultimo_request = time.time()
+
+    def _obtener_con_fetcher(self, url: str, timeout: int = 30) -> Optional[str]:
+        """Capa 1: Scrapling Fetcher con impersonacion de Chrome (TLS fingerprint + headers)."""
+        if not SCRAPLING_AVAILABLE:
+            return None
+        try:
+            if self._session_proxy is not None:
+                # Usar sesión con proxy rotator
+                page = self._session_proxy.get(url, impersonate="chrome120", timeout=timeout)
+            else:
+                page = Fetcher.get(url, impersonate="chrome120", timeout=timeout)
+            if page.status == 200:
+                return page.html_content
+            log.warning(
+                f"[{self.sitio.nombre}] Fetcher devolvio {page.status} para {url}"
             )
             return None
         except Exception as e:
             log.warning(
-                f"[{self.sitio.nombre}] curl_cffi falló para {url}: {e}"
+                f"[{self.sitio.nombre}] Fetcher fallo para {url}: {e}"
             )
             return None
 
-    def _obtener_con_requests(self, url: str, timeout: int = 30) -> Optional[str]:
-        """Capa 2: requests estándar con sesión y cabeceras rotatorias."""
+    def _obtener_con_stealth(self, url: str, timeout: int = 60) -> Optional[str]:
+        """Capa 2: Scrapling StealthyFetcher con solve_cloudflare (navegador stealth)."""
+        if not SCRAPLING_AVAILABLE:
+            return None
         try:
-            self._rotar_cabeceras()
-            resp = self.session.get(url, timeout=timeout)
-            resp.raise_for_status()
-            return resp.text
-        except requests.RequestException as e:
+            if self._session_proxy is not None:
+                # Sesión stealth con proxy rotator
+                stealth_session = StealthySession(
+                    headless=True,
+                    solve_cloudflare=True,
+                    proxy_rotator=self._session_proxy.proxy_rotator,
+                )
+                page = stealth_session.fetch(url, timeout=timeout)
+            else:
+                page = StealthyFetcher.fetch(
+                    url,
+                    headless=True,
+                    solve_cloudflare=True,
+                    timeout=timeout,
+                )
+            if page.status == 200:
+                return page.html_content
             log.warning(
-                f"[{self.sitio.nombre}] requests falló para {url}: {e}"
+                f"[{self.sitio.nombre}] StealthyFetcher devolvio {page.status} para {url}"
             )
             return None
-
-    def _obtener_con_playwright(self, url: str, timeout: int = 45) -> Optional[str]:
-        """Capa 3: Playwright con Chromium (para Cloudflare fuerte o renderizado JS)."""
-        if not PLAYWRIGHT_AVAILABLE:
-            return None
-        try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                page = browser.new_page()
-                page.set_extra_http_headers({
-                    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-                })
-                page.goto(url, wait_until="networkidle", timeout=timeout * 1000)
-                # Espera adicional para challenges de Cloudflare/JS que necesitan
-                # tiempo para establecer cookies y cargar el contenido real.
-                page.wait_for_timeout(2000)
-                html = page.content()
-                browser.close()
-                return html
         except Exception as e:
             log.warning(
-                f"[{self.sitio.nombre}] Playwright falló para {url}: {e}"
+                f"[{self.sitio.nombre}] StealthyFetcher fallo para {url}: {e}"
             )
             return None
 
     def obtener_html(self, url: str, reintentos: int = 2) -> Optional[str]:
         """
-        Descarga el HTML con 3 capas de fallback y reintentos.
-        Orden: curl_cffi → requests → Playwright.
+        Descarga el HTML con capas de fallback usando Scrapling.
+        Orden: Fetcher (HTTP rapido) -> StealthyFetcher (Cloudflare/JS).
         Devuelve None si todas las capas fallan (S13).
         """
-        # --- Capa 1: curl_cffi (2 reintentos, luego pasa a requests) ---
+        self._espera_cortesa()
+
+        # --- Capa 1: Fetcher (reintentos con backoff) ---
         for intento in range(1, reintentos + 1):
-            html = self._obtener_con_curl_cffi(url)
+            html = self._obtener_con_fetcher(url)
             if html:
                 return html
             wait = 2 ** intento + random.uniform(0, 1)
             log.warning(
-                f"[{self.sitio.nombre}] Intento {intento}/{reintentos} (curl_cffi) falló para {url}. "
+                f"[{self.sitio.nombre}] Intento {intento}/{reintentos} (Fetcher) fallo para {url}. "
                 f"Reintentando en {wait:.1f}s"
             )
             time.sleep(wait)
 
-        # --- Capa 2: requests (2 reintentos, luego pasa a Playwright) ---
-        for intento in range(1, reintentos + 1):
-            html = self._obtener_con_requests(url)
-            if html:
-                return html
-            wait = 2 ** intento + random.uniform(0, 1)
-            log.warning(
-                f"[{self.sitio.nombre}] Intento {intento}/{reintentos} (requests) falló para {url}. "
-                f"Reintentando en {wait:.1f}s"
-            )
-            time.sleep(wait)
+        self._espera_cortesa()
 
-        # --- Capa 3: Playwright (un solo intento, es más lento) ---
-        html = self._obtener_con_playwright(url)
+        # --- Capa 2: StealthyFetcher (para Cloudflare agresivo / JS pesado) ---
+        html = self._obtener_con_stealth(url)
         if html:
             return html
 
         log.error(
-            f"[{self.sitio.nombre}] No se pudo obtener {url} tras todas las capas de fallback."
+            f"[{self.sitio.nombre}] No se pudo obtener {url} tras todas las capas de Scrapling."
         )
         return None
 
     def sopa(self, url: str) -> Optional[BeautifulSoup]:
+        """Devuelve BeautifulSoup construido desde el HTML obtenido por Scrapling.
+
+        Mantiene retrocompatibilidad con los scrapers existentes que usan
+        soup.select(), soup.find(), etc.
+        """
         html = self.obtener_html(url)
         if html is None:
             return None
-        return BeautifulSoup(html, "html.parser")
+        # page.html_content de Scrapling es un TextHandler (subclase de str);
+        # convertirlo explícitamente a str para evitar problemas con BeautifulSoup.
+        html_str = str(html)
+        return BeautifulSoup(html_str, "html.parser")
+
+    def respuesta_scrapling(self, url: str):
+        """Devuelve el objeto Response nativo de Scrapling para un URL.
+
+        Permite usar selectores nativos de Scrapling (.css, .xpath, .getall, ...)
+        en lugar de BeautifulSoup. Devuelve None si falla.
+        """
+        if not SCRAPLING_AVAILABLE:
+            return None
+        self._espera_cortesa()
+        try:
+            page = Fetcher.get(url, impersonate="chrome120", timeout=30)
+            if page.status == 200:
+                return page
+            return None
+        except Exception:
+            try:
+                page = StealthyFetcher.fetch(
+                    url, headless=True, solve_cloudflare=True, timeout=60
+                )
+                if page.status == 200:
+                    return page
+            except Exception:
+                pass
+        return None
+
+    def extraer_bicicletas_paginado(
+        self,
+        construir_url_pagina,
+        max_paginas: int = 5,
+    ) -> List[Bicicleta]:
+        """
+        Extrae bicicletas de múltiples páginas de un listado.
+
+        Args:
+            construir_url_pagina: función que recibe el número de página (int)
+                y devuelve la URL absoluta de esa página.
+            max_paginas: límite máximo de páginas a recorrer (evita bucles infinitos).
+
+        Devuelve la lista acumulada de bicicletas de todas las páginas.
+        Se detiene cuando una página devuelve 0 productos o se alcanza max_paginas.
+        """
+        todas: List[Bicicleta] = []
+
+        for pagina in range(1, max_paginas + 1):
+            url = construir_url_pagina(pagina)
+            log.info(f"[{self.sitio.nombre}] Página {pagina}: {url}")
+
+            soup = self.sopa(url)
+            if soup is None:
+                log.warning(f"[{self.sitio.nombre}] Página {pagina}: no se pudo obtener HTML. Deteniendo paginación.")
+                break
+
+            # Contar productos antes de extraer (para saber si la página tiene contenido).
+            productos = soup.select(
+                "article.ajax_block_product, article.js-product-miniature, article.product, "
+                ".product-item, .product-grid-item, .product-card"
+            )
+            if not productos:
+                log.info(f"[{self.sitio.nombre}] Página {pagina}: 0 productos. Fin de paginación.")
+                break
+
+            # Extraer bicicletas de esta página reutilizando la lógica del scraper.
+            # Sobrescribimos temporalmente la URL del listado para que `extraer_bicicletas`
+            # lea de esta página. Cada scraper implementa su propia lógica en `extraer_bicicletas`,
+            # así que aquí delegamos al método de instancia pero con la URL de esta página.
+            bicis_pagina = self._extraer_de_sopa(soup)
+            if not bicis_pagina:
+                log.info(f"[{self.sitio.nombre}] Página {pagina}: 0 bicicletas extraídas. Fin de paginación.")
+                break
+
+            todas.extend(bicis_pagina)
+            log.info(f"[{self.sitio.nombre}] Página {pagina}: {len(bicis_pagina)} bicicletas extraídas (total {len(todas)}).")
+
+        return todas
+
+    def _extraer_de_sopa(self, soup: BeautifulSoup) -> List[Bicicleta]:
+        """
+        Extrae bicicletas de un objeto BeautifulSoup ya parseado.
+        Cada subclase debe implementar este método si quiere usar paginación.
+        Por defecto devuelve lista vacía (sin paginación).
+        """
+        return []
 
     @abstractmethod
     def extraer_bicicletas(self) -> List[Bicicleta]:
