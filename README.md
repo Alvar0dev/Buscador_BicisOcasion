@@ -26,10 +26,9 @@ Cuando encuentra una bicicleta con **Nota de Oportunidad ≥ 8.0/10**, la notifi
 
 ## ¿Qué hace este proyecto?
 
-Este script rastrea diariamente las secciones de e-MTB doble suspensión de cuatro tiendas profesionales de reacondicionado de bicicletas:
+Este script rastrea diariamente las secciones de e-MTB doble suspensión de tres tiendas profesionales de reacondicionado de bicicletas:
 
 - **Bike Ocasión** (bike-ocasion.com)
-- **Tuvalum** (tuvalum.com)
 - **Buhobike** (buhobike.com)
 - **Upway** (upway.es)
 
@@ -177,7 +176,6 @@ También se incluye el archivo `CRON.md` con las instrucciones exactas para conf
 El scraper está limitado **únicamente** a tiendas profesionales de reacondicionado que ofrecen por ley un mínimo de **1 año de garantía mecánica**:
 
 - bike-ocasion.com
-- tuvalum.com
 - buhobike.com
 - upway.es
 
@@ -198,7 +196,7 @@ El proyecto está separado en módulos con responsabilidad única:
 | `notifier.py` | Notificador de Telegram vía `requests`, mensaje Markdown con todos los campos requeridos (S9). | Notificador de Telegram vía `requests`, mensaje Markdown con todos los campos requeridos (S9). |
 | `scraper_base.py` | Clase base con **motor Scrapling**: `Fetcher` (HTTP con impersonación TLS) → `StealthyFetcher` (navegador stealth con `solve_cloudflare`). Incluye reintentos, delays aleatorios, `ProxyRotator` opcional, health check y caché de fichas de detalle. | Clase base con **motor Scrapling**: `Fetcher` (HTTP con impersonación TLS) → `StealthyFetcher` (navegador stealth con `solve_cloudflare`). Incluye reintentos, delays aleatorios, `ProxyRotator` opcional, health check y caché de fichas de detalle. |
 | `scrapers/bike_ocasion.py` | Adaptador específico para Bike Ocasión (selectores reales inspeccionados con ego-browser, código listo). Extrae talla, batería, km, motor, suspensión, cuadro y componentes directamente de la tarjeta de listado. Paginación de 5 páginas. | Adaptador específico para Bike Ocasión (selectores reales inspeccionados con ego-browser, código listo). Extrae talla, batería, km, motor, suspensión, cuadro y componentes directamente de la tarjeta de listado. Paginación de 5 páginas. |
-| `scrapers/tuvalum.py` | Adaptador específico para Tuvalum (selectores estimados; dominio no resolvió desde el entorno de desarrollo, pendiente de verificación real). | Adaptador específico para Tuvalum (selectores estimados; dominio no resolvió desde el entorno de desarrollo, pendiente de verificación real). |
+
 | `scrapers/buhobike.py` | Adaptador específico para Buhobike (selectores reales inspeccionados con ego-browser, código listo). Cloudflare resuelto con `StealthyFetcher` (`solve_cloudflare=True`). | Adaptador específico para Buhobike (selectores reales inspeccionados con ego-browser, código listo). Cloudflare resuelto con `StealthyFetcher` (`solve_cloudflare=True`). |
 | `scrapers/upway.py` | Adaptador específico para Upway (selectores reales inspeccionados con ego-browser; scraping real probado y funcionando con Playwright/Scrapling). | Adaptador específico para Upway (selectores reales inspeccionados con ego-browser; scraping real probado y funcionando con Playwright/Scrapling). |
 | `scrapers/enriquecedor_web.py` | Enriquecedor web para completar campos faltantes (peso, año, suspensión, cuadro, componentes, modalidad) usando la ficha del producto del propio sitio (Scrapling) + DuckDuckGo como fallback. Incluye caché JSON en disco para no re-consultar URLs ya visitadas. | Enriquecedor web para completar campos faltantes (peso, año, suspensión, cuadro, componentes, modalidad) usando la ficha del producto del propio sitio (Scrapling) + DuckDuckGo como fallback. Incluye caché JSON en disco para no re-consultar URLs ya visitadas. |
@@ -317,7 +315,7 @@ Deberías ver: `Todas las pruebas pasaron (GREEN).`
 
 ## Advertencias importantes
 
-1. **Selectores CSS inspeccionados.** Los selectores de Bike Ocasión, Buhobike y Upway ya fueron inspeccionados en el HTML real de cada web (vía ego-browser). Los de **Tuvalum** son estimados porque el dominio no resolvió desde el entorno de desarrollo; verificalos si el scraping falla.
+1. **Selectores CSS inspeccionados.** Los selectores de Bike Ocasión, Buhobike y Upway ya fueron inspeccionados en el HTML real de cada web (vía ego-browser).
 
 2. **Protecciones anti-baneo.** Las 4 tiendas objetivo probablemente usen Cloudflare o renderizado JavaScript. `scraper_base.py` usa **Scrapling** con dos capas: `Fetcher` (HTTP rápido con impersonación TLS) y `StealthyFetcher` (navegador stealth con `solve_cloudflare=True` para Cloudflare). Buhobike requiere la capa stealth porque devuelve 503 con HTTP simple. Si seguís teniendo bloqueos, configurá proxies rotatorios (`PROXY_LIST` en `.env`).
 
@@ -337,7 +335,6 @@ Deberías ver: `Todas las pruebas pasaron (GREEN).`
 - [x] Ejecutar `python test_buscador.py` y verificar que pase todo (GREEN).
 - [x] Probar scraping real sitio por sitio (Upway, Bike Ocasión y Buhobike probados con Scrapling).
 - [ ] Configurar `.env` con tu bot de Telegram y probar el envío de mensajes.
-- [ ] Verificar/selectores de Tuvalum (pendiente de inspección real del dominio en tu máquina local).
 - [ ] Automatizar con `main.py` o cron según `CRON.md`.
 - [ ] Configurar proxies rotatorios (`PROXY_LIST` en `.env`) si un sitio bloquea por IP.
 
@@ -354,7 +351,7 @@ Deberías ver: `Todas las pruebas pasaron (GREEN).`
 | `evaluator.py` | ✅ Hecho | Filtros estrictos S1-S6 y algoritmo de Nota de Oportunidad 0-10 (S7, S8). |
 | `notifier.py` | ✅ Hecho | Telegram vía `requests`, mensaje Markdown con todos los campos (S9). |
 | `scraper_base.py` | ✅ Hecho | Motor Scrapling: `Fetcher` → `StealthyFetcher` con `solve_cloudflare`. Delays aleatorios, `ProxyRotator` opcional, paginación, salud de scrapers. |
-| `scrapers/` (4 sitios) | ✅ Hecho | Bike Ocasión, Buhobike y Upway con selectores reales verificados y scraping real probado. Tuvalum con selectores estimados (pendiente de inspección real en tu máquina). |
+| `scrapers/` (3 sitios) | ✅ Hecho | Bike Ocasión, Buhobike y Upway con selectores reales verificados y scraping real probado. |
 | `scrapers/enriquecedor_web.py` | ✅ Hecho | Enriquece campos faltantes (peso, año, suspensión, cuadro, componentes, modalidad) desde ficha del sitio + DuckDuckGo fallback. Caché JSON en disco. |
 | `main.py` | ✅ Hecho | Orquestador + health check + enriquecimiento paralelo (3 workers) + logging a archivo + bucle `schedule` diario a las 12:30. |
 | `CRON.md` | ✅ Hecho | Instrucciones para cronjob Linux/Mac. |
@@ -415,9 +412,13 @@ El principal obstáculo en Buhobike es el precio: todos los modelos de trail el�
 
 Scraping real probado exitosamente con Playwright (23 productos extraídos con títulos y precios correctos).
 
-### Tuvalum — ⏳ Pendiente
+### Resumen de sitios activos
 
-El dominio `tuvalum.com` no resolvió desde el entorno de desarrollo (error DNS). Los selectores son estimados y requieren verificación en máquina local.
+| Sitio | Estado | Bicis extraídas |
+|-------|--------|-----------------|
+| Bike Ocasión | ✅ Funciona con Scrapling Fetcher | 153 (5 páginas) |
+| Buhobike | ✅ Funciona con Scrapling StealthyFetcher | 32 |
+| Upway | ✅ Funciona con Scrapling Fetcher | 23 |
 
 ---
 
@@ -427,9 +428,8 @@ El scraping real ya funciona en Bike Ocasión, Buhobike y Upway. Los próximos p
 
 1. **Configurar `.env`** con `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` para recibir notificaciones por Telegram.
 2. **Probar envío de Telegram** con una bici simulada.
-3. **Verificar/selectores de Tuvalum** en tu máquina local (desde este entorno el dominio no resuelve DNS).
-4. **Automatizar con `main.py` o cron** según `CRON.md`.
-5. **Configurar proxies rotatorios** (`PROXY_LIST` en `.env`) si algún sitio bloquea por IP.
+3. **Automatizar con `main.py` o cron** según `CRON.md`.
+4. **Configurar proxies rotatorios** (`PROXY_LIST` en `.env`) si algún sitio bloquea por IP.
 
 ## Qué falta hacer
 
@@ -437,9 +437,8 @@ El scraping real ya funciona en Bike Ocasión, Buhobike y Upway. Los próximos p
 |---|-------|---------------|
 | 1 | **Configurar `.env`** con `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` | Necesario para recibir notificaciones por Telegram. |
 | 2 | **Probar envío de Telegram** con una bici simulada | Confirmar que el mensaje Markdown llega bien a tu chat. |
-| 3 | **Verificar selectores de Tuvalum** en tu máquina local | El dominio no resuelve desde este entorno (DNS error). Los selectores son estimados. |
-| 4 | **Automatizar con `main.py` o cron** | Dejarlo corriendo todos los días a las 12:30. |
-| 5 | **Configurar proxies** (`PROXY_LIST`) si un sitio bloquea por IP | Para sitios con Cloudflare muy agresivo que no responden ni con Fetcher ni con StealthyFetcher. |
+| 3 | **Automatizar con `main.py` o cron** | Dejarlo corriendo todos los días a las 12:30. |
+| 4 | **Configurar proxies** (`PROXY_LIST`) si un sitio bloquea por IP | Para sitios con Cloudflare muy agresivo que no responden ni con Fetcher ni con StealthyFetcher. |
 
 ---
 
@@ -462,7 +461,6 @@ El scraping real ya funciona en Bike Ocasión, Buhobike y Upway. Los próximos p
 | Dificultad | Sitio afectado | Solución / Estado |
 |------------|---------------|-------------------|
 | **URL de categoría 404** | Bike Ocasión | La URL original (`bicicletas-electronicas/doble-suspension/`) devolvía 404. Se inspeccionó el menú y se encontró la URL correcta: `bicicletas-electricas-de-montana-doble-suspension-2020`. |
-| **Dominio no resuelve** | Tuvalum | `tuvalum.com` y `www.tuvalum.com` no resuelven desde el entorno de desarrollo (error DNS). Los selectores son estimados y requieren verificación en máquina local. |
 | **Protección anti-baneo (503)** | Buhobike | `Fetcher` HTTP devuelve 503. `StealthyFetcher` con `solve_cloudflare=True` resuelve el desafío Cloudflare. |
 | **Incompatibilidad TextHandler vs BeautifulSoup** | Bike Ocasión | `page.html_content` de Scrapling es un `TextHandler` (subclase de `str`). Se arregla con `str(html)` en `scraper_base.py`. |
 | **Selectores placeholders** | Todos | Los scrapers originales usaban selectores genéricos (`.product-item`, `article.product`) que no coinciden con el HTML real de ningún sitio. Se inspeccionó y se reemplazaron por selectores reales. |
@@ -484,11 +482,9 @@ El scraping real ya funciona en Bike Ocasión, Buhobike y Upway. Los próximos p
 | Selectores Bike Ocasión | ✅ Verificados en HTML real |
 | Selectores Buhobike | ✅ Verificados en HTML real |
 | Selectores Upway | ✅ Verificados + scraping real probado |
-| Selectores Tuvalum | ⚠️ Estimados (pendiente verificación real) |
 | Scraping real Upway | ✅ Funciona con Playwright/Scrapling |
 | Scraping real Buhobike | ✅ Funciona con Scrapling StealthyFetcher (32 bicis extraídas, 0 pasan filtros S1-S8 por precio) |
 | Scraping real Bike Ocasión | ✅ Funciona con Scrapling Fetcher (153 bicis en 5 páginas, 0 pasan filtros S1-S8 hoy) |
-| Scraping real Tuvalum | ⏳ Pendiente (dominio no resuelve) |
 | Enriquecedor web (ficha del sitio + DuckDuckGo) | ✅ Implementado e integrado en main.py |
 | Caché de fichas de detalle | ✅ Implementado (cache/fichas_detalle.json) |
 | Health check de scrapers | ✅ Implementado (alerta por log y Telegram) |

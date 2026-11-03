@@ -22,7 +22,6 @@ from db import BaseDatos
 from evaluator import evaluar, calcular_nota_oportunidad, pasa_filtros_estrictos
 from notifier import enviar
 from scrapers.bike_ocasion import BikeOcasionScraper
-from scrapers.tuvalum import TuvalumScraper
 from scrapers.buhobike import BuhobikeScraper
 from scrapers.upway import UpwayScraper
 from scrapers.enriquecedor_web import enriquecer_bici
@@ -30,7 +29,6 @@ from scrapers.enriquecedor_web import enriquecer_bici
 # Mapa sitio -> clase scraper
 SCRAPERS = {
     "Bike Ocasión": BikeOcasionScraper,
-    "Tuvalum": TuvalumScraper,
     "Buhobike": BuhobikeScraper,
     "Upway": UpwayScraper,
 }

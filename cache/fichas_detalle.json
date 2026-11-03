@@ -1,0 +1,22 @@
+{
+  "https://bike-ocasion.com/bicicletas-electricas-de-montana-doble-suspension/463722-cannondale-moterra-neo-tm-8445881713373.html": {
+    "bateria_wh": 750,
+    "km": 9101,
+    "motor": "Bosch Performance Line Cx",
+    "talla": "M",
+    "suspension_trasera": "no",
+    "cuadro_material": "Carbono",
+    "componentes": "XT/AXS",
+    "modalidad": "Trail"
+  },
+  "https://bike-ocasion.com/bicicletas-electricas-de-montana-doble-suspension/463562-trek-powerfly-fs-7-tm-8445881713182.html": {
+    "bateria_wh": 625,
+    "km": 9101,
+    "motor": "Bosch Performance Line Cx",
+    "talla": "M",
+    "suspension_trasera": "no",
+    "cuadro_material": "Carbono",
+    "componentes": "XT/AXS",
+    "modalidad": "Xc"
+  }
+}

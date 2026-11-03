@@ -33,11 +33,6 @@ SITIOS: List[SitioObjetivo] = [
         seccion_emtb="https://www.bike-ocasion.com/bicicletas-electricas-de-montana-doble-suspension-2020",
     ),
     SitioObjetivo(
-        nombre="Tuvalum",
-        base_url="https://www.tuvalum.com",
-        seccion_emtb="https://www.tuvalum.com/es/bicicletas-electricas/montana/doble-suspension/",
-    ),
-    SitioObjetivo(
         nombre="Buhobike",
         base_url="https://www.buhobike.com",
         seccion_emtb="https://www.buhobike.com/3230-electricas-trail-dobles",
