@@ -34,14 +34,14 @@ def pasa_filtros_estrictos(bici: Bicicleta) -> Tuple[bool, str]:
     if bici.bateria_wh is not None and bici.bateria_wh <= cfg.BATERIA_MIN_WH:
         return False, f"Batería <= 500 Wh: {bici.bateria_wh} Wh"
 
-    # S3: Peso > 21 kg se descarta explícitamente
-    if bici.peso_kg is not None and bici.peso_kg > cfg.PESO_DESCARTE_KG:
-        return False, f"Peso > 21 kg: {bici.peso_kg} kg"
+    # S3: Peso >= 21 kg se descarta explícitamente (objetivo: estrictamente < 21 kg)
+    if bici.peso_kg is not None and bici.peso_kg >= cfg.PESO_DESCARTE_KG:
+        return False, f"Peso >= 21 kg: {bici.peso_kg} kg"
 
     # S3bis: Doble suspensión obligatoria.
     # Si se verificó explícitamente que NO tiene amortiguador trasero, descartar.
     # Si no se pudo verificar (None), dar el beneficio de la duda y no descartar por este motivo.
-    if bici.suspension_trasera is not None and not bici.suspension_trasera:
+    if bici.suspension_trasera is not None and str(bici.suspension_trasera).lower() in ("false", "no", "0"):
         return False, "No tiene suspensión trasera (no es doble suspensión)"
 
     # S5/S6: Precio entre 2.000 € y 3.300 € (excepcional hasta 3.300 €)

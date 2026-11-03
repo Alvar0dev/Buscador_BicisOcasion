@@ -1,7 +1,8 @@
 """
 test_buscador.py
 Pruebas RED/GREEN con datos simulados.
-Valida scoring, filtros estrictos, dedup de SQLite y formateo de mensaje Telegram.
+Valida scoring, filtros estrictos, clasificador híbrido (IA + motor autónomo),
+dedup de SQLite y formateo de mensaje Telegram.
 No depende de la web real ni de credenciales de Telegram.
 """
 
@@ -9,17 +10,22 @@ import os
 import tempfile
 from models import Bicicleta
 from evaluator import evaluar, calcular_nota_oportunidad, pasa_filtros_estrictos
+from gemini_classifier import (
+    completar_con_catalogo,
+    evaluar_documentacion_motor,
+    valorar_autonomo,
+)
 from db import BaseDatos
 from notifier import formatear_mensaje
 
 
 def bici_prueba(**kwargs) -> Bicicleta:
     datos = dict(
-        sitio="Tuvalum",
+        sitio="Bike Ocasión",
         bici_id="test-001",
         titulo="e-MTB XC Carbono Shimano EP8",
         precio=2500.0,
-        url="https://tuvalum.com/bici/test-001",
+        url="https://bike-ocasion.com/bici/test-001",
         talla="M",
         modalidad="XC",
         peso_kg=17.5,
@@ -61,10 +67,14 @@ def test_descarta_bateria_500_wh():
 
 
 def test_descarta_peso_mas_21_kg():
-    """S3: descarta modelos > 21 kg."""
-    b = bici_prueba(peso_kg=22.0)
+    """S3: descarta modelos >= 21 kg (objetivo < 21 kg)."""
+    b = bici_prueba(peso_kg=21.0)
     apto, _ = pasa_filtros_estrictos(b)
     assert apto is False
+
+    b2 = bici_prueba(peso_kg=22.0)
+    apto2, _ = pasa_filtros_estrictos(b2)
+    assert apto2 is False
 
 
 def test_descarta_precio_fuera_rango():
@@ -90,7 +100,6 @@ def test_nota_baja_kilometraje_alto():
     """S7: km > 4000 penaliza fuerte."""
     b = bici_prueba(km=5000, precio=2400.0)
     apto, nota, desglose = evaluar(b)
-    # Alta probabilidad de quedar bajo 8.0 por km altos
     print(f"Km altos -> nota: {nota} | {desglose}")
 
 
@@ -100,6 +109,33 @@ def test_filtro_nota_minimo_8():
     apto, nota, _ = evaluar(b)
     assert apto is True
     assert nota >= 8.0
+
+
+def test_clasificador_hibrido_catalogo_y_5_ejes():
+    """Verifica completado de especificaciones y valoración en los 5 ejes."""
+    b = Bicicleta(
+        sitio="Bike Ocasión",
+        bici_id="bh-001",
+        titulo="BH iLynx Race Carbon 8.4 LT",
+        precio=2890.0,
+        url="https://bike-ocasion.com/bici/bh-001",
+        talla="M",
+        km=650,
+    )
+    b = completar_con_catalogo(b)
+    assert b.peso_kg is not None and b.peso_kg < 21.0
+    assert b.bateria_wh == 540
+    assert b.cuadro_material == "Carbono"
+    assert b.suspension_trasera == "si"
+
+    nota, desglose = valorar_autonomo(b)
+    assert nota >= 8.0
+    assert "Diagnóstico motor" in desglose
+    assert "Estado batería" in desglose
+
+    pts_bosch, txt_bosch = evaluar_documentacion_motor("Bosch Performance Line SX")
+    assert pts_bosch >= 1.9
+    assert "Bosch DiagnosticTool" in txt_bosch
 
 
 def test_dedup_sqlite():
@@ -149,6 +185,7 @@ if __name__ == "__main__":
     test_nota_alta_bici_excelente()
     test_nota_baja_kilometraje_alto()
     test_filtro_nota_minimo_8()
+    test_clasificador_hibrido_catalogo_y_5_ejes()
     test_dedup_sqlite()
     test_formateo_mensaje_telegram()
     print("Todas las pruebas pasaron (GREEN).")

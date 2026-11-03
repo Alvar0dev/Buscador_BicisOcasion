@@ -27,6 +27,13 @@ def formatear_mensaje(bici, nota: float, desglose: str) -> str:
         else cfg.SITIOS[0].garantia_anos
     )
 
+    desglose_seguro = (
+        str(desglose)
+        .replace("_", "-")
+        .replace("*", "")
+        .replace("`", "'")
+    )
+
     mensaje = (
         f"🚵‍♂️ *Nueva oportunidad de e-MTB encontrada*\n\n"
         f"*{bici.titulo}*\n"
@@ -42,7 +49,7 @@ def formatear_mensaje(bici, nota: float, desglose: str) -> str:
         f"📅 Año: {ano}\n"
         f"🛣️ Kilómetros: {km}\n"
         f"🛡️ Garantía: {garantia} año(s)\n\n"
-        f"_Desglose de la nota:_\n{desglose}\n\n"
+        f"_Valoración técnica (IA / 5 ejes):_\n{desglose_seguro}\n\n"
         f"🔗 [Enlace directo de compra]({bici.url})"
     )
     return mensaje
@@ -58,15 +65,20 @@ def enviar(bici, nota: float, desglose: str) -> bool:
         return False
 
     url = cfg.TELEGRAM_API_URL.format(token=cfg.TELEGRAM_BOT_TOKEN)
+    texto = formatear_mensaje(bici, nota, desglose)
     payload = {
         "chat_id": cfg.TELEGRAM_CHAT_ID,
-        "text": formatear_mensaje(bici, nota, desglose),
+        "text": texto,
         "parse_mode": "Markdown",
         "disable_web_page_preview": False,
     }
 
     try:
         resp = requests.post(url, json=payload, timeout=15)
+        if resp.status_code == 400:
+            # Fallback sin parse_mode por si algún carácter especial rompe Markdown v1
+            payload.pop("parse_mode", None)
+            resp = requests.post(url, json=payload, timeout=15)
         resp.raise_for_status()
         print(f"[Telegram] Enviado: {bici.resumen_corto()}")
         return True

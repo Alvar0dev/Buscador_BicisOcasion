@@ -17,9 +17,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import config as cfg
-from config import SITIOS, HORA_EJECUCION, NOTA_MIN_NOTIFICAR, NOTA_MIN_AGUARDAR
+from config import SITIOS, HORA_EJECUCION, NOTA_MIN_NOTIFICAR, NOTA_MIN_AGUARDAR, TOP_N_NOTIFICAR
 from db import BaseDatos
 from evaluator import evaluar, calcular_nota_oportunidad, pasa_filtros_estrictos
+from gemini_classifier import enriquecer_y_valorar_bici
 from notifier import enviar
 from scrapers.bike_ocasion import BikeOcasionScraper
 from scrapers.buhobike import BuhobikeScraper
@@ -123,16 +124,15 @@ def _enviar_alerta_telegram(texto: str) -> None:
 
 def _recolectar_oportunidades(db: BaseDatos) -> list:
     """
-    Recorre los 4 sitios objetivo, aplica filtros estrictos S1-S6
-    (incluyendo talla M, precio 2.000-3.300 €, batería > 500 Wh, etc.)
-    y calcula la nota de oportunidad a las que los pasan.
+    Recorre los sitios objetivo en una sola pasada (con health check integrado),
+    pre-filtra candidatas, enriquece y valora con el clasificador híbrido
+    (ficha del sitio + catálogo + Gemini Flash / motor autónomo), y aplica
+    los filtros estrictos S1-S6 post-enriquecimiento.
 
-    Devuelve una lista de (bici, nota, desglose) para bicis aptas
-    que aun no se hayan notificado (o que bajaron de precio).
-
-    Se excluyen las que ya se hayan notificado (dedup salvo bajada de precio).
+    Devuelve una lista de (bici, nota, desglose) ordenada por relevancia
+    para las mejores bicicletas disponibles que aún no se hayan notificado.
     """
-    oportunidades = []
+    candidatas_pre = []
 
     for sitio in SITIOS:
         clase = SCRAPERS.get(sitio.nombre)
@@ -143,115 +143,111 @@ def _recolectar_oportunidades(db: BaseDatos) -> list:
         try:
             scraper = clase(sitio)
             bicis = scraper.extraer_bicicletas()
-            logger.info(f"[{sitio.nombre}] {len(bicis)} bicicletas extraidas.")
+            cantidad = len(bicis)
+            if cantidad == 0:
+                logger.critical(
+                    f"[Health check] {sitio.nombre} devolvió 0 productos. "
+                    f"POSIBLES SELECTORES ROTOS — revisar HTML de {sitio.seccion_emtb}"
+                )
+            else:
+                logger.info(f"[{sitio.nombre}] {cantidad} bicicletas extraídas OK.")
         except Exception as e:
             logger.error(f"[{sitio.nombre}] Error durante el scraping: {e}")
             continue
 
         for bici in bicis:
-            # Filtros estrictos S1-S6: talla M, precio, batería, peso, modalidad.
-            apto, motivo = pasa_filtros_estrictos(bici)
-            if not apto:
-                logger.debug(f"  DESCARTADA [{sitio.nombre}]: {bici.titulo} - {motivo}")
+            # Pre-filtro rápido con los campos ya conocidos de la tarjeta (precio, talla, batería...)
+            apto_pre, motivo_pre = pasa_filtros_estrictos(bici)
+            if not apto_pre:
+                logger.debug(f"  DESCARTADA PRE [{sitio.nombre}]: {bici.titulo} - {motivo_pre}")
                 continue
+            candidatas_pre.append(bici)
 
-            # Nota de oportunidad solo para bicis que pasan filtros estrictos.
-            nota, desglose = calcular_nota_oportunidad(bici)
+    if not candidatas_pre:
+        return []
+
+    logger.info(f"[IA/Enriquecedor] Analizando y completando {len(candidatas_pre)} candidatas pre-filtradas...")
+
+    estrictas = []
+    respaldo_ligeras = []
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futuros = {
+            executor.submit(enriquecer_y_valorar_bici, bici): bici
+            for bici in candidatas_pre
+        }
+        for futuro in as_completed(futuros):
+            bici_orig = futuros[futuro]
+            try:
+                bici, nota, desglose = futuro.result()
+            except Exception as e:
+                logger.warning(f"[IA/Enriquecedor] Error en {bici_orig.titulo}: {e}")
+                nota, desglose = calcular_nota_oportunidad(bici_orig)
+                bici = bici_orig
+
+            # Verificar Talla M, Doble Suspensión, Batería > 500 Wh y Precio 2.000-3.300 €
+            if bici.talla and bici.talla.strip().upper() != cfg.TALLA_OBJETIVO.upper():
+                continue
+            if bici.bateria_wh is not None and bici.bateria_wh <= cfg.BATERIA_MIN_WH:
+                continue
+            if bici.suspension_trasera is not None and str(bici.suspension_trasera).lower() in ("false", "no", "0"):
+                continue
+            if not (cfg.PRECIO_MIN_EUR <= bici.precio <= cfg.PRECIO_MAX_EXCEPCIONAL_EUR):
+                continue
 
             if not db.debe_reenviarse(bici, nota):
-                logger.debug(f"  YA ENVIADA [{sitio.nombre}] (sin bajada de precio): {bici.titulo}")
+                logger.debug(f"  YA ENVIADA [{bici.sitio}] (sin bajada de precio): {bici.titulo}")
                 continue
 
-            oportunidades.append((bici, nota, desglose))
+            apto_post, motivo_post = pasa_filtros_estrictos(bici)
+            if apto_post:
+                estrictas.append((bici, nota, desglose))
+            else:
+                logger.info(f"  [Candidata cercana] {bici.titulo}: {motivo_post} (Nota {nota}/10)")
+                respaldo_ligeras.append((bici, nota, desglose))
 
-    return oportunidades
+    # Ordenar las estrictas (< 21 kg) por nota descendente y menor peso
+    estrictas.sort(key=lambda x: (x[1], -(x[0].peso_kg or 20.0)), reverse=True)
+
+    # Si hay menos de TOP_N_NOTIFICAR estrictas (< 21 kg), completar hasta TOP_N_NOTIFICAR
+    # con las más ligeras y mejor puntuadas que cumplen Talla M + Doble Suspensión + >500 Wh + Precio
+    if len(estrictas) < TOP_N_NOTIFICAR and respaldo_ligeras:
+        respaldo_ligeras.sort(key=lambda x: (-(x[0].peso_kg or 25.0), x[1]), reverse=True)
+        faltantes = TOP_N_NOTIFICAR - len(estrictas)
+        estrictas.extend(respaldo_ligeras[:faltantes])
+
+    return estrictas
 
 
 def ejecutar_busqueda() -> None:
-    """Ejecuta una pasada completa de busqueda y notificacion.
-
-    Logica de umbral (S8 actualizada):
-      - Se aplican filtros estrictos S1-S6 (talla M, precio 2.000-3.300 €,
-        bateria > 500 Wh, etc.) a todas las bicis encontradas.
-      - Si hay bicis con nota >= NOTA_MIN_NOTIFICAR (8.5), se notifican todas.
-      - Si ninguna alcanza 8.5 pero hay alguna que pasa filtros estrictos,
-        se notifica solo la de mejor nota (aunque este por debajo de 8.5),
-        para no quedar sin informar. Nunca se notifica una bici que no
-        cumpla los filtros de busqueda (por ejemplo, talla distinta a M).
-
-    Antes de notificar, se intenta completar los campos faltantes (talla,
-    bateria, km, motor, ano, peso, suspensión) usando la ficha del producto
-    del propio sitio (Scrapling) y, como fallback, DuckDuckGo.
-    """
-    logger.info(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Iniciando busqueda de e-MTB...")
-
-    # Health check: verificar que todos los scrapers devuelvan productos (tarea 10).
-    estado_scrapers = _health_check_scrapers()
-    sitios_con_problemas = [s for s, c in estado_scrapers.items() if c == 0]
-    if sitios_con_problemas:
-        logger.warning(
-            f"[Health check] Sitios con problemas (0 productos): {', '.join(sitios_con_problemas)}. "
-            f"Continuando con los que sí funcionan."
-        )
+    """Ejecuta una pasada completa de búsqueda, clasificación IA y notificación Top N."""
+    logger.info(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Iniciando búsqueda de e-MTB...")
 
     db = BaseDatos()
-
     oportunidades = _recolectar_oportunidades(db)
 
     if not oportunidades:
         logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Finalizado. "
-                    "No se encontraron bicis aptas en ninguno de los 4 sitios.\n")
+                    "No se encontraron bicis aptas en ninguno de los sitios.\n")
         return
 
-    # Ordenar por nota descendente para priorizar las mejores.
-    oportunidades.sort(key=lambda x: x[1], reverse=True)
-
-    mejor_nota = oportunidades[0][1]
-
-    # Separar las que cumplen el umbral 8.5 de las que no.
-    umbral_cumplen = [o for o in oportunidades if o[1] >= NOTA_MIN_NOTIFICAR]
-
-    if umbral_cumplen:
-        a_notificar = umbral_cumplen
-        logger.info(f"[main] {len(umbral_cumplen)} bici(s) con nota >= {NOTA_MIN_NOTIFICAR}. Notificando todas.")
-    else:
-        a_notificar = [oportunidades[0]]
-        logger.info(f"[main] Ninguna bici alcanza {NOTA_MIN_NOTIFICAR}. "
-                    f"Notificando solo la mejor apta (nota {mejor_nota}/10): {a_notificar[0][0].titulo}")
-
-    # Enriquecer campos faltantes en paralelo (concurrencia controlada para no saturar los sitios).
-    ENRIQUECIMIENTO_WORKERS = 3
-    enriquecidas = []
-    with ThreadPoolExecutor(max_workers=ENRIQUECIMIENTO_WORKERS) as executor:
-        futuros = {
-            executor.submit(enriquecer_bici, bici, url_ficha=bici.url): (bici, nota, desglose)
-            for bici, nota, desglose in a_notificar
-        }
-        for futuro in as_completed(futuros):
-            bici_orig, nota, desglose = futuros[futuro]
-            try:
-                bici = futuro.result()
-                logger.info(
-                    f"[Enriquecido] {bici.titulo} | talla={bici.talla} bateria={bici.bateria_wh} "
-                    f"km={bici.km} motor={bici.motor} ano={bici.ano} peso={bici.peso_kg} "
-                    f"suspension={bici.suspension_trasera} cuadro={bici.cuadro_material} "
-                    f"modalidad={bici.modalidad}"
-                )
-                enriquecidas.append((bici, nota, desglose))
-            except Exception as e:
-                logger.warning(f"[Enriquecido] Error enriqueciendo {bici_orig.titulo}: {e}")
-                enriquecidas.append((bici_orig, nota, desglose))
+    # Seleccionar el Top N (por defecto las 3 más interesantes)
+    a_notificar = oportunidades[:TOP_N_NOTIFICAR]
+    logger.info(
+        f"[main] Seleccionadas las {len(a_notificar)} bicicletas más interesantes "
+        f"(mejor nota: {a_notificar[0][1]}/10)."
+    )
 
     total_notificadas = 0
-    for bici, nota, desglose in enriquecidas:
+    for bici, nota, desglose in a_notificar:
         precio_anterior = db.precio_previo(bici.bici_id)
         if enviar(bici, nota, desglose):
             db.registrar(bici, nota, precio_anterior=precio_anterior)
             total_notificadas += 1
-            logger.info(f"  NOTIFICADA: {bici.titulo} - Nota {nota}/10")
+            logger.info(f"  NOTIFICADA: {bici.titulo} ({bici.peso_kg} kg) - Nota {nota}/10")
 
     logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Finalizado. "
-                f"{len(oportunidades)} aptas, {total_notificadas} notificadas.\n")
+                f"{len(oportunidades)} candidatas aptas, {total_notificadas} notificadas.\n")
 
 
 def main() -> None:
