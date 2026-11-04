@@ -47,13 +47,21 @@ class BikeOcasionScraper(BaseScraper):
 
         for p in productos:
             try:
-                # --- Título: <a> con texto significativo (no "Añadir al carrito") ---
-                titulo_el = None
-                for a in p.select("a[href]"):
-                    t = self.limpiar_texto(a.get_text())
-                    if t and t.lower() != "añadir al carrito":
-                        titulo_el = a
-                        break
+                # --- Título: priorizar bloque de título h3/h2 o atributo title, evitando badges "% DTO" ---
+                titulo_el = p.select_one(
+                    "h3.s_title_block a, h3 a, h2 a, .product-title a, .product-name a"
+                )
+                if titulo_el is None:
+                    for a in p.select("a[href]"):
+                        t = self.limpiar_texto(a.get_text())
+                        if (
+                            t
+                            and t.lower() != "añadir al carrito"
+                            and "dto" not in t.lower()
+                            and not re.match(r"^[-+\s\d%]+$", t)
+                        ):
+                            titulo_el = a
+                            break
 
                 # --- Precio ---
                 precio_el = p.select_one(".price, .current-price, .product-price")
@@ -65,6 +73,8 @@ class BikeOcasionScraper(BaseScraper):
                     continue
 
                 titulo = self.limpiar_texto(titulo_el.get_text())
+                if not titulo or "dto" in titulo.lower():
+                    titulo = self.limpiar_texto(titulo_el.get("title", ""))
                 precio = self._parsear_precio(precio_el.get_text())
                 url = self.url_absoluta(link_el.get("href", ""))
                 bici_id = self._extraer_id_url(url)
@@ -75,6 +85,12 @@ class BikeOcasionScraper(BaseScraper):
                 # --- Extraer campos de la tarjeta de listado ---
                 texto_tarjeta = p.get_text(" ", strip=True)
                 detalle = self._extraer_de_tarjeta(texto_tarjeta)
+                if detalle.get("suspension_trasera") is None:
+                    url_lower = f"{url} {self.sitio.seccion_emtb}".lower()
+                    if "doble-suspension" in url_lower and not any(
+                        k in texto_tarjeta.lower() for k in ["rígida", "rigida", "hardtail"]
+                    ):
+                        detalle["suspension_trasera"] = "si"
 
                 bici = Bicicleta(
                     sitio=self.sitio.nombre,
@@ -138,15 +154,29 @@ class BikeOcasionScraper(BaseScraper):
             except ValueError:
                 pass
 
-        # --- Motor: marca que aparece en el texto ---
-        motores_conocidos = [
-            "Yamaha", "Bosch", "Shimano", "Specialized", "Giant", "Brose",
-            "Panasonic", "Fazua", "TQ", "Mahle",
-        ]
-        for m in motores_conocidos:
-            if re.search(rf"\b{m}\b", texto, re.IGNORECASE):
-                detalle["motor"] = m
-                break
+        # --- Motor: extraer primero del badge "Km / <MarcaMotor>" de Bike Ocasión ---
+        match_motor_badge = re.search(
+            r"Km\s*/\s*(BH|Bosch|Shimano|Specialized|Yamaha|Giant|Brose|Panasonic|Fazua|TQ|Mahle|Polini|Bafang)\b",
+            texto,
+            re.IGNORECASE,
+        )
+        if match_motor_badge:
+            marca_m = match_motor_badge.group(1)
+            if marca_m.upper() == "BH":
+                detalle["motor"] = "BH 2EXMAG"
+            elif marca_m.upper() == "TQ":
+                detalle["motor"] = "TQ"
+            else:
+                detalle["motor"] = marca_m.capitalize()
+        else:
+            motores_conocidos = [
+                "Bosch", "Shimano EP8", "Shimano EP6", "Yamaha", "Specialized",
+                "Giant", "Brose", "Panasonic", "Fazua", "TQ", "Mahle", "BH 2EXMAG",
+            ]
+            for m in motores_conocidos:
+                if re.search(rf"\b{re.escape(m)}\b", texto, re.IGNORECASE):
+                    detalle["motor"] = m
+                    break
 
         # --- Suspensión trasera (doble suspensión) ---
         if any(k in texto_lower for k in ["doble suspensión", "doble suspension", "full suspension", "full-suspension", "amortiguador"]):

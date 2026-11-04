@@ -51,20 +51,31 @@ La ejecución está programada para correr todos los días a las **12:00 de la m
 
 ---
 
-## Algoritmo de Nota de Oportunidad (0-10)
+## Algoritmo de Nota de Oportunidad (Perito Mecánico Senior)
 
-Cada bicicleta que pasa los filtros estrictos recibe una nota basada en cuatro criterios:
+El sistema opera bajo la **Regla Maestra del Perito Mecánico Senior**: **NUNCA** realiza medias optimistas. La evaluación parte de una nota base de **10.0** y aplica deducciones aritméticas irreversibles y límites por **Líneas Rojas**:
 
-| Criterio | Peso máximo | Qué evalúa |
-|----------|-------------|------------|
-| Kilometraje | 2.5 | Premia < 2.000 km (+2.5); penaliza > 4.000 km (+0.5). |
-| Calidad-precio | 3.0 | Cuadro de carbono, transmisión XT/AXS, suspensiones Kashima/Ultimate, precio en rango principal. |
-| Motor | 2.5 | Marcas con diagnóstico claro (Shimano EP8/EP801, Bosch SX, Fazua, TQ, Mahle) y pocos kilómetros en el motor. |
-| Precio excepcional | 2.0 | Precio dentro del rango principal o excepcional. |
+### 1. Penalizaciones por Kilometraje (Factor Crítico)
+* **0 a 1.000 km**: -0.0 pts (Estado óptimo de reestreno, desgaste despreciable).
+* **1.001 a 2.000 km**: -1.0 pts (Rodada y aceptable; prever mantenimiento de cadena y pastillas).
+* **2.001 a 4.000 km**: -2.5 pts (Desgaste medio en transmisión y ciclos de celdas; revisión de holguras).
+* **4.001 a 6.000 km**: -4.5 pts (Exige cambio de retenes, revisión de motor y batería mermada).
+* **Más de 6.000 km**: **LÍNEA ROJA ACTIVADA**. La nota final **NUNCA puede superar el 4.5/10**, sin importar cuadro o componentes.
 
-**Total máximo: 10.0**
+### 2. Penalizaciones y Bonificaciones por Peso
+* **< 19.0 kg**: +0.5 pts (Bonificación por peso pluma; menor fatiga estructural).
+* **19.1 a 20.0 kg**: -0.0 pts (Peso neutro ideal para Light e-MTB).
+* **20.1 a 21.0 kg**: -1.5 pts (Límite admisible; mayor inercia y consumo).
+* **> 21.0 kg**: **LÍNEA ROJA ACTIVADA**. Nota máxima limitada a **4.0/10**.
 
-**Regla de salida (S8):** Solo se guardan y notifican bicicletas con nota final **≥ 8.0**.
+### 3. Motor, Centralita y Transparencia de Diagnóstico
+* **Shimano (EP8 / EP801 / EP6) o Bosch (Performance Line CX / SX)**: -0.0 pts (Permiten informe PDF pericial oficial mediante Shimano E-Tube PCE02 o Bosch DiagnosticTool 3).
+* **Bicicletas BH (iLynx, AtomX, BH 2EXMAG)**: -1.0 pt directo por centralita con software propietario y opaco que impide al comprador extraer un informe veraz en PDF de salud de celdas (SoH) y ciclos.
+* **BH 2EXMAG o Brose con > 3.000 km**: -1.5 pts extra acumulativos (total -2.5 pts en motor) por kilometraje elevado a ciegas sin diagnóstico abierto.
+
+### 4. Precio frente a Kilometraje
+* **Rango base 2.000 € a 3.000 €**: -0.0 pts.
+* **Precio > 3.000 € y kilometraje > 2.000 km**: -1.5 pts (Sobrecoste penalizado frente al desgaste acumulado).
 
 ---
 

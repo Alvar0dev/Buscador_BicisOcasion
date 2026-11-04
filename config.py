@@ -6,11 +6,13 @@ Comentarios en español, tal como se solicitó.
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List
 
 from dotenv import load_dotenv
 
-load_dotenv()
+BASE_DIR: Path = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
 
 
 @dataclass(frozen=True)
@@ -107,7 +109,7 @@ TELEGRAM_API_URL: str = "https://api.telegram.org/bot{token}/sendMessage"
 # ---------------------------------------------------------------------------
 # BASE DE DATOS (S12)
 # ---------------------------------------------------------------------------
-DB_PATH: str = os.getenv("BUSCADOR_DB_PATH", "bicis_enviadas.db")
+DB_PATH: str = os.getenv("BUSCADOR_DB_PATH", str(BASE_DIR / "bicis_enviadas.db"))
 
 # ---------------------------------------------------------------------------
 # CABECERAS ROTATORIAS (S11)

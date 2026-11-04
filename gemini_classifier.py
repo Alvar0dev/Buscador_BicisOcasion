@@ -23,6 +23,7 @@ Responsabilidades:
 import json
 import logging
 import re
+import threading
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -34,8 +35,9 @@ from scrapers.enriquecedor_web import enriquecer_bici, _buscar_en_cache
 
 log = logging.getLogger("buscador.ia")
 
-CACHE_DIR = Path("cache")
+CACHE_DIR = cfg.BASE_DIR / "cache"
 CACHE_IA_FILE = CACHE_DIR / "valoraciones_ia.json"
+_CACHE_LOCK = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -53,10 +55,10 @@ CATALOGO_EMTB = [
         "modalidad": "XC / Downcountry",
     },
     {
-        "patrones": ["bh ilynx trail carbon", "ilynx trail carbon"],
-        "peso_kg": 18.2,
+        "patrones": ["bh ilynx+ trail carbon", "ilynx+ trail carbon", "bh ilynx trail carbon", "ilynx trail carbon"],
+        "peso_kg": 18.6,
         "bateria_wh_default": 540,
-        "motor": "BH 2EXMAG",
+        "motor": "Shimano EP801 / BH 2EXMAG",
         "cuadro_material": "Carbono",
         "suspension_trasera": "si",
         "modalidad": "Light e-MTB / Trail",
@@ -259,6 +261,78 @@ CATALOGO_EMTB = [
         "suspension_trasera": "si",
         "modalidad": "Trail / Enduro",
     },
+    {
+        "patrones": ["cube stereo hybrid"],
+        "peso_kg": 23.4,
+        "bateria_wh_default": 625,
+        "motor": "Bosch Performance Line CX",
+        "cuadro_material": "Carbono",
+        "suspension_trasera": "si",
+        "modalidad": "Trail / All Mountain",
+    },
+    {
+        "patrones": ["cannondale habit neo"],
+        "peso_kg": 22.4,
+        "bateria_wh_default": 625,
+        "motor": "Bosch Performance Line CX",
+        "cuadro_material": "Carbono",
+        "suspension_trasera": "si",
+        "modalidad": "Trail",
+    },
+    {
+        "patrones": ["cannondale moterra neo"],
+        "peso_kg": 23.8,
+        "bateria_wh_default": 625,
+        "motor": "Bosch Performance Line CX",
+        "cuadro_material": "Aluminio",
+        "suspension_trasera": "si",
+        "modalidad": "Trail / Enduro",
+    },
+    {
+        "patrones": ["haibike allmtn", "haibike alltrail"],
+        "peso_kg": 24.2,
+        "bateria_wh_default": 630,
+        "motor": "Yamaha PW-X3 / Bosch CX",
+        "cuadro_material": "Aluminio",
+        "suspension_trasera": "si",
+        "modalidad": "Trail / All Mountain",
+    },
+    {
+        "patrones": ["ktm macina kapoho", "ktm macina chacana"],
+        "peso_kg": 24.5,
+        "bateria_wh_default": 750,
+        "motor": "Bosch Performance Line CX",
+        "cuadro_material": "Aluminio",
+        "suspension_trasera": "si",
+        "modalidad": "Trail / All Mountain",
+    },
+    {
+        "patrones": ["bh atomx lynx", "atomx lynx"],
+        "peso_kg": 22.8,
+        "bateria_wh_default": 720,
+        "motor": "Brose S Mag",
+        "cuadro_material": "Aluminio",
+        "suspension_trasera": "si",
+        "modalidad": "Trail / Enduro",
+    },
+    {
+        "patrones": ["specialized turbo tero x", "turbo tero x"],
+        "peso_kg": 21.8,
+        "bateria_wh_default": 530,
+        "motor": "Specialized Full Power 2.0E",
+        "cuadro_material": "Aluminio",
+        "suspension_trasera": "si",
+        "modalidad": "Trail",
+    },
+    {
+        "patrones": ["trek powerfly fs"],
+        "peso_kg": 23.9,
+        "bateria_wh_default": 625,
+        "motor": "Bosch Performance Line CX",
+        "cuadro_material": "Aluminio",
+        "suspension_trasera": "si",
+        "modalidad": "Trail",
+    },
 ]
 
 
@@ -319,28 +393,38 @@ def evaluar_documentacion_motor(motor_str: Optional[str], titulo: str = "") -> T
 # Caché de valoraciones IA
 # ---------------------------------------------------------------------------
 def _cargar_cache_ia() -> Dict[str, dict]:
-    if not CACHE_IA_FILE.exists():
-        return {}
-    try:
-        with open(CACHE_IA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+    with _CACHE_LOCK:
+        if not CACHE_IA_FILE.exists():
+            return {}
+        try:
+            with open(CACHE_IA_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
 
 
-def _guardar_cache_ia(cache: Dict[str, dict]) -> None:
-    CACHE_DIR.mkdir(exist_ok=True)
-    try:
-        with open(CACHE_IA_FILE, "w", encoding="utf-8") as f:
-            json.dump(cache, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        log.warning(f"[IA Caché] No se pudo guardar {CACHE_IA_FILE}: {e}")
+def _guardar_entrada_cache_ia(cache_key: str, entry: dict) -> None:
+    with _CACHE_LOCK:
+        CACHE_DIR.mkdir(exist_ok=True)
+        actual = {}
+        if CACHE_IA_FILE.exists():
+            try:
+                with open(CACHE_IA_FILE, "r", encoding="utf-8") as f:
+                    actual = json.load(f)
+            except Exception:
+                actual = {}
+        actual[cache_key] = entry
+        try:
+            with open(CACHE_IA_FILE, "w", encoding="utf-8") as f:
+                json.dump(actual, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            log.warning(f"[IA Caché] No se pudo guardar {CACHE_IA_FILE}: {e}")
 
 
 # ---------------------------------------------------------------------------
 # Paso 1: Enriquecimiento con catálogo técnico local + ficha de tienda
 # ---------------------------------------------------------------------------
-def completar_con_catalogo(bici: Bicicleta) -> Bicicleta:
+def completar_con_catalogo(bici: Bicicleta, aplicar_heuristica_peso: bool = True) -> Bicicleta:
     """
     Completa campos faltantes de la bicicleta cruzando su título y datos actuales
     con el catálogo técnico de referencia de modelos e-MTB.
@@ -370,7 +454,7 @@ def completar_con_catalogo(bici: Bicicleta) -> Bicicleta:
         elif any(k in texto for k in ["aluminio", "alloy", "alu", " h10", " h20", " h30"]):
             bici.cuadro_material = "Aluminio"
 
-    if bici.peso_kg is None:
+    if aplicar_heuristica_peso and bici.peso_kg is None:
         # Estimación conservadora basada en material de cuadro y capacidad de batería
         es_carbono = (bici.cuadro_material or "").lower() == "carbono"
         bat = bici.bateria_wh or 540
@@ -383,8 +467,8 @@ def completar_con_catalogo(bici: Bicicleta) -> Bicicleta:
         else:
             bici.peso_kg = 22.8
 
-    if not bici.modalidad:
-        if bici.peso_kg is not None and bici.peso_kg < 21.0:
+    if not bici.modalidad and bici.peso_kg is not None:
+        if bici.peso_kg < 21.0:
             bici.modalidad = "Light e-MTB / Trail"
         else:
             bici.modalidad = "Trail"
@@ -393,108 +477,220 @@ def completar_con_catalogo(bici: Bicicleta) -> Bicicleta:
 
 
 # ---------------------------------------------------------------------------
-# Paso 2: Valoración técnica autónoma (5 ejes) — funciona sin API
+# Paso 2: Auditoría Pericial Determinista (Perito Mecánico Senior)
 # ---------------------------------------------------------------------------
+def auditar_perito_mecanico(bici: Bicicleta) -> dict:
+    """
+    Aplica la Regla Maestra del Perito Mecánico Senior:
+    Parte de base 10.0 y aplica restas estrictas e irreversibles + Líneas Rojas:
+      - Km > 6.000 -> LÍNEA ROJA (nota máxima 4.5)
+      - Peso > 21.0 kg -> LÍNEA ROJA (nota máxima 4.0)
+    """
+    base = 10.0
+    techo = 10.0
+    lineas_rojas = []
+
+    km = bici.km
+    peso = bici.peso_kg
+    precio = bici.precio
+    texto_motor = f"{bici.motor or ''} {bici.titulo}".lower()
+
+    # 1. PENALIZACIONES POR KILOMETRAJE
+    if km is None:
+        delta_km = -2.0
+        txt_km = (
+            "Km no declarados en ficha (-2.0 pts preventivos). Coste oculto potencial en "
+            "transmisión y retenes; exigir lectura de odómetro antes de comprar."
+        )
+    elif km <= 1000:
+        delta_km = 0.0
+        txt_km = (
+            f"{km} km (-0.0 pts, rango 0-1.000 km): Estado óptimo de reestreno; "
+            f"desgaste despreciable en casete, cadena y rodamientos."
+        )
+    elif km <= 2000:
+        delta_km = -1.0
+        txt_km = (
+            f"{km} km (-1.0 pts, rango 1.001-2.000 km): Rodada y aceptable; "
+            f"prever cambio de cadena/pastillas a corto plazo para no marcar coronas."
+        )
+    elif km <= 4000:
+        delta_km = -2.5
+        txt_km = (
+            f"{km} km (-2.5 pts, rango 2.001-4.000 km): Desgaste medio en transmisión "
+            f"y ciclos de celdas; revisar holguras en basculante y mantenimiento de horquilla."
+        )
+    elif km <= 6000:
+        delta_km = -4.5
+        txt_km = (
+            f"{km} km (-4.5 pts, rango 4.001-6.000 km): Exige cambio de retenes de suspensión, "
+            f"revisión de rodamientos de motor y batería con degradación palpable (coste oculto 250-400 €)."
+        )
+    else:
+        delta_km = -5.5
+        techo = min(techo, 4.5)
+        lineas_rojas.append("LÍNEA ROJA KM >6.000 (máx 4.5)")
+        txt_km = (
+            f"{km} km (-5.5 pts, >6.000 km -> LÍNEA ROJA ACTIVADA, nota máx 4.5): "
+            f"Riesgo crítico de fatiga en celdas, holguras en basculante y desgaste interno del motor."
+        )
+
+    # 2. PENALIZACIONES POR PESO
+    if peso is None:
+        delta_peso = 0.0
+        txt_peso = f"Peso estimado en rango ({bici.cuadro_material or 'Carbono'}) (-0.0 pts)."
+    elif peso < 19.0:
+        delta_peso = 0.5
+        txt_peso = (
+            f"{peso} kg (+0.5 pts, <19.0 kg): Bonificación por peso pluma en chasis de "
+            f"{bici.cuadro_material or 'Carbono'}; mínima inercia y menor estrés en frenos/suspensiones."
+        )
+    elif peso <= 20.0:
+        delta_peso = 0.0
+        txt_peso = (
+            f"{peso} kg (-0.0 pts, rango 19.1-20.0 kg): Peso neutro y equilibrado para "
+            f"Light e-MTB en cuadro de {bici.cuadro_material or 'serie'}."
+        )
+    elif peso <= 21.0:
+        delta_peso = -1.5
+        txt_peso = (
+            f"{peso} kg (-1.5 pts, rango 20.1-21.0 kg): Al límite del umbral admisible; "
+            f"mayor inercia en tramos técnicos y mayor consumo por kilómetro."
+        )
+    else:
+        delta_peso = -6.0
+        techo = min(techo, 4.0)
+        lineas_rojas.append("LÍNEA ROJA PESO >21.0 kg (máx 4.0)")
+        txt_peso = (
+            f"{peso} kg (-6.0 pts, >21.0 kg -> LÍNEA ROJA ACTIVADA, nota máx 4.0): "
+            f"Incumple especificación ligera; mayor castigo mecánico en frenos, ruedas y basculante."
+        )
+
+    # 3. EVALUACIÓN DE MOTOR, CENTRALITA Y DIAGNÓSTICO
+    motor_lower = (bici.motor or "").lower()
+    titulo_lower = bici.titulo.lower()
+    es_marca_bh = (
+        any(k in titulo_lower for k in ["bh ", "ilynx", "atomx"])
+        or any(k in motor_lower for k in ["2exmag", "2esmag", "bh"])
+    )
+    es_brose = "brose" in motor_lower
+    es_shimano_o_bosch = not es_marca_bh and not es_brose and (
+        any(k in motor_lower for k in ["shimano", "ep8", "ep6", "bosch"])
+        or any(k in titulo_lower for k in ["ep8", "ep6", "bosch", "orbea rise"])
+    )
+
+    if es_marca_bh:
+        if (km or 0) > 3000:
+            delta_motor = -2.5
+            txt_motor = (
+                f"Centralita/Motor BH ({bici.motor or 'BH 2EXMAG'}) con {km} km "
+                f"(-1.0 pt por centralita BH con software propietario y opaco sin informe PDF veraz "
+                f"-1.5 pts extra por superar 3.000 km a ciegas = -2.5 pts): Riesgo alto al no poder "
+                f"auditar ciclos reales ni SoH de celdas mediante informe oficial."
+            )
+        else:
+            delta_motor = -1.0
+            txt_motor = (
+                f"Centralita/Motor BH ({bici.motor or 'BH'}) (-1.0 pt): Penalización directa porque "
+                f"BH utiliza una centralita con software propietario y opaco que impide extraer un "
+                f"informe pericial veraz en PDF sobre ciclos y salud real de la batería."
+            )
+    elif es_brose and (km or 0) > 3000:
+        delta_motor = -1.5
+        txt_motor = (
+            f"{bici.motor or 'Brose'} con {km} km (-1.5 pts por >3.000 km): "
+            f"Imposibilidad de verificar salud de batería y ciclos sin software cerrado de la marca."
+        )
+    elif es_shimano_o_bosch:
+        delta_motor = 0.0
+        _, doc_ref = evaluar_documentacion_motor(bici.motor, bici.titulo)
+        txt_motor = f"{bici.motor or 'Shimano/Bosch'} (-0.0 pts): {doc_ref}."
+    else:
+        delta_motor = 0.0
+        _, doc_ref = evaluar_documentacion_motor(bici.motor, bici.titulo)
+        txt_motor = (
+            f"{bici.motor or 'Motor de serie'} (-0.0 pts, km <=3.000): {doc_ref}."
+        )
+
+    # 4. ESTADO DE BATERÍA (Análisis pericial vinculado a Wh y ciclos por km)
+    bat = bici.bateria_wh or 540
+    ciclos_aprox = max(1, int((km or 1500) / 45))
+    if (km or 0) > 6000:
+        txt_bateria = (
+            f"{bat} Wh (~{ciclos_aprox} ciclos estimados): Degradación severa acumulada; "
+            f"alta probabilidad de caída de tensión bajo carga intensa (SoH estimado <80%)."
+        )
+    elif (km or 0) > 3000:
+        txt_bateria = (
+            f"{bat} Wh (~{ciclos_aprox} ciclos estimados): Desgaste moderado de celdas "
+            f"(SoH estimado 84-89%); verificar equilibrio de celdas en diagnóstico."
+        )
+    else:
+        txt_bateria = (
+            f"{bat} Wh (~{ciclos_aprox} ciclos estimados): Salud óptima de celdas "
+            f"(SoH estimado 93-99%) respaldada por 1 año de garantía profesional."
+        )
+
+    # 5. PRECIO FRENTE A COMPONENTES
+    if precio > 3000 and (km or 0) > 2000:
+        delta_precio = -1.5
+        txt_precio = (
+            f"{precio:.0f} € (-1.5 pts por superar 3.000 € con >{km} km): "
+            f"Sobrecoste penalizado frente al desgaste acumulado pese al montaje ({bici.componentes or 'serie'})."
+        )
+    else:
+        delta_precio = 0.0
+        txt_precio = (
+            f"{precio:.0f} € (-0.0 pts, rango 2.000-3.000 €): "
+            f"Precio coherente para chasis {bici.cuadro_material or 'Carbono'} y montaje ({bici.componentes or 'serie'})."
+        )
+
+    nota_aritmetica = base + delta_km + delta_peso + delta_motor + delta_precio
+    nota_final = round(max(0.0, min(10.0, nota_aritmetica, techo)), 2)
+
+    signo_peso = f"+{delta_peso:.1f}" if delta_peso > 0 else f"{delta_peso:.1f}"
+    formula_str = (
+        f"Base 10.0 {delta_km:.1f} (Km) {signo_peso} (Peso) "
+        f"{delta_motor:.1f} (Motor) {delta_precio:.1f} (Precio) = {nota_aritmetica:.1f}"
+    )
+    if lineas_rojas:
+        formula_str += f" -> Límite [{', '.join(lineas_rojas)}] => {nota_final}/10"
+    else:
+        formula_str += f" => {nota_final}/10"
+
+    return {
+        "nota_final": nota_final,
+        "nota_aritmetica": round(nota_aritmetica, 2),
+        "techo": techo,
+        "lineas_rojas": lineas_rojas,
+        "delta_km": delta_km,
+        "delta_peso": delta_peso,
+        "delta_motor": delta_motor,
+        "delta_precio": delta_precio,
+        "formula_str": formula_str,
+        "txt_km": txt_km,
+        "txt_peso": txt_peso,
+        "txt_motor": txt_motor,
+        "txt_bateria": txt_bateria,
+        "txt_precio": txt_precio,
+    }
+
+
 def valorar_autonomo(bici: Bicicleta) -> Tuple[float, str]:
     """
-    Calcula la nota de oportunidad (0.0 a 10.0) y genera la valoración técnica
-    estructurada en los 5 ejes solicitados (km, peso, documentación motor,
-    estado de batería y componentes/precio).
+    Calcula la nota de oportunidad (0.0 a 10.0) y genera la auditoría técnica
+    del Perito Mecánico Senior en los 5 ejes con justificación matemática exacta.
     """
-    # 1. Kilómetros (0 - 2.0 pts)
-    if bici.km is None:
-        p_km = 1.2
-        txt_km = "No especificado en ficha (se recomienda pedir lectura en tienda)"
-    elif bici.km < 500:
-        p_km = 2.0
-        txt_km = f"Excelente ({bici.km} km, prácticamente reestreno)"
-    elif bici.km < 1500:
-        p_km = 1.8
-        txt_km = f"Muy bajo ({bici.km} km, desgaste mínimo de transmisión)"
-    elif bici.km <= 3000:
-        p_km = 1.4
-        txt_km = f"Moderado ({bici.km} km, uso normal)"
-    elif bici.km <= 4500:
-        p_km = 0.9
-        txt_km = f"Medio-alto ({bici.km} km, revisar casete y cadena)"
-    else:
-        p_km = 0.4
-        txt_km = f"Alto ({bici.km} km, penaliza por desgaste acumulado)"
-
-    # 2. Peso y chasis (< 21 kg objetivo) (0 - 2.0 pts)
-    es_carbono = "carbon" in (bici.cuadro_material or "").lower()
-    if bici.peso_kg is not None:
-        if bici.peso_kg <= 18.5:
-            p_peso = 2.0
-            txt_peso = f"{bici.peso_kg} kg (ultraligera, cuadro {bici.cuadro_material or 'Carbono'})"
-        elif bici.peso_kg < 20.0:
-            p_peso = 1.8 if es_carbono else 1.6
-            txt_peso = f"{bici.peso_kg} kg (muy ágil, cumple < 21 kg holgadamente)"
-        elif bici.peso_kg < 21.0:
-            p_peso = 1.5 if es_carbono else 1.3
-            txt_peso = f"{bici.peso_kg} kg (dentro del límite < 21 kg)"
-        else:
-            p_peso = 0.5
-            txt_peso = f"{bici.peso_kg} kg (supera el objetivo de 21 kg)"
-    else:
-        p_peso = 1.2
-        txt_peso = f"Estimado según cuadro ({bici.cuadro_material or 'estándar'})"
-
-    # 3. Documentación fiable del motor (0 - 2.0 pts)
-    p_motor, txt_motor = evaluar_documentacion_motor(bici.motor, bici.titulo)
-
-    # 4. Estado y capacidad de la batería (0 - 2.0 pts)
-    bat = bici.bateria_wh
-    if bat is not None and bat >= 600:
-        p_bat = 1.9
-        salud_est = "92-98% SoH estimado" if (bici.km or 0) < 2500 else "85-90% SoH estimado"
-        txt_bat = f"{bat} Wh (gran autonomía, {salud_est}, con 1 año de garantía)"
-    elif bat is not None and bat > 500:
-        p_bat = 1.8 if (bici.km or 0) < 2000 else 1.5
-        salud_est = "94-99% SoH estimado" if (bici.km or 0) < 1500 else "88-93% SoH estimado"
-        txt_bat = f"{bat} Wh (óptimo equilibrio peso/autonomía, {salud_est})"
-    elif bat is not None:
-        p_bat = 0.8
-        txt_bat = f"{bat} Wh (capacidad ajustada <= 500 Wh)"
-    else:
-        p_bat = 1.1
-        txt_bat = "Capacidad pendiente de confirmar en ficha"
-
-    # 5. Componentes y relación calidad-precio (0 - 2.0 pts)
-    texto_comp = f"{bici.titulo} {bici.componentes or ''}".lower()
-    p_comp = 1.0
-    detalles_comp = []
-    if es_carbono:
-        p_comp += 0.3
-        detalles_comp.append("cuadro carbono")
-    if any(k in texto_comp for k in ["xt", "xtr", "axs", "x0", "gx"]):
-        p_comp += 0.4
-        detalles_comp.append("transmisión gama alta (XT/AXS)")
-    elif "deore" in texto_comp or "slx" in texto_comp:
-        p_comp += 0.2
-        detalles_comp.append("transmisión fiable (SLX/Deore)")
-    if any(k in texto_comp for k in ["kashima", "factory", "ultimate", "fox"]):
-        p_comp += 0.3
-        detalles_comp.append("suspensión Fox/ Factory")
-    if bici.precio <= cfg.PRECIO_MAX_EUR:
-        p_comp += 0.2
-        detalles_comp.append(f"precio en rango ideal ({bici.precio:.0f} €)")
-    else:
-        detalles_comp.append(f"precio en rango excepcional ({bici.precio:.0f} €)")
-
-    p_comp = min(2.0, p_comp)
-    txt_comp = ", ".join(detalles_comp) if detalles_comp else "Montaje estándar de serie"
-
-    nota = round(max(0.0, min(10.0, p_km + p_peso + p_motor + p_bat + p_comp)), 2)
-
+    audit = auditar_perito_mecanico(bici)
     desglose = (
-        f"• 🛣️ Km: {txt_km}\n"
-        f"• ⚖️ Peso: {txt_peso}\n"
-        f"• 🔍 Diagnóstico motor: {txt_motor}\n"
-        f"• 🔋 Estado batería: {txt_bat}\n"
-        f"• ⚙️ Componentes/Precio: {txt_comp}"
+        f"🧮 Cálculo Pericial: {audit['formula_str']}\n"
+        f"• 🛣️ Km: {audit['txt_km']}\n"
+        f"• ⚖️ Peso: {audit['txt_peso']}\n"
+        f"• 🔍 Diagnóstico motor: {audit['txt_motor']}\n"
+        f"• 🔋 Estado batería: {audit['txt_bateria']}\n"
+        f"• ⚙️ Componentes/Precio: {audit['txt_precio']}"
     )
-    return nota, desglose
+    return audit["nota_final"], desglose
 
 
 # ---------------------------------------------------------------------------
@@ -514,13 +710,12 @@ def _llamar_gemini_api(prompt: str, usar_busqueda: bool = False) -> Optional[dic
         payload: dict = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
-                "temperature": 0.2,
+                "temperature": 0.1,
                 "responseMimeType": "application/json",
             },
         }
         if usar_busqueda:
             payload["tools"] = [{"google_search": {}}]
-            # Cuando se activa google_search en algunas versiones de API no se admite responseMimeType
             payload["generationConfig"].pop("responseMimeType", None)
 
         try:
@@ -539,7 +734,6 @@ def _llamar_gemini_api(prompt: str, usar_busqueda: bool = False) -> Optional[dic
             if not texto_respuesta:
                 continue
 
-            # Extraer bloque JSON aunque venga envuelto en ```json ... ```
             match = re.search(r"\{.*\}", texto_respuesta, re.DOTALL)
             if match:
                 return json.loads(match.group(0))
@@ -552,16 +746,13 @@ def _llamar_gemini_api(prompt: str, usar_busqueda: bool = False) -> Optional[dic
 
 def enriquecer_y_valorar_bici(bici: Bicicleta) -> Tuple[Bicicleta, float, str]:
     """
-    Flujo híbrido completo para una bicicleta candidata:
+    Flujo híbrido completo bajo las reglas del Perito Mecánico Senior:
       1. Extrae ficha de producto del sitio con Scrapling (enriquecer_bici).
       2. Completa especificaciones de referencia con el catálogo técnico local.
-      3. Si GEMINI_API_KEY está activa, consulta Gemini Flash (gemini-3.5-flash)
-         para afinar cualquier dato faltante y obtener la valoración inteligente
-         de los 5 ejes (km, peso < 21 kg, documentación fiable del motor,
-         estado de batería y componentes).
-      4. Si Gemini no está disponible o falla, usa el motor autónomo local.
-
-    Devuelve (bici_enriquecida, nota, desglose_valoracion).
+      3. Si GEMINI_API_KEY está activa, consulta Gemini Flash con la tabla estricta
+         de restas y Líneas Rojas del Perito Mecánico Senior, y audita la nota final
+         matemáticamente para impedir medias optimistas.
+      4. Si Gemini no está disponible o falla, usa el motor pericial autónomo local.
     """
     # 1. Enriquecimiento desde la ficha HTML del sitio (con caché local)
     try:
@@ -570,10 +761,10 @@ def enriquecer_y_valorar_bici(bici: Bicicleta) -> Tuple[Bicicleta, float, str]:
         log.warning(f"[IA] Error en enriquecer_bici para {bici.titulo}: {e}")
 
     # 2. Enriquecimiento desde catálogo técnico de modelos e-MTB
-    bici = completar_con_catalogo(bici)
+    bici = completar_con_catalogo(bici, aplicar_heuristica_peso=False)
 
-    # Verificar caché de valoración IA para esta bici y precio
-    cache_key = f"{bici.sitio}:{bici.bici_id}:{int(bici.precio)}"
+    # Verificar caché de valoración IA (versión v3 perito con penalización BH -1.0) para esta bici y precio
+    cache_key = f"perito_v3:{bici.sitio}:{bici.bici_id}:{int(bici.precio)}"
     cache_ia = _cargar_cache_ia()
     if cache_key in cache_ia:
         entry = cache_ia[cache_key]
@@ -581,52 +772,74 @@ def enriquecer_y_valorar_bici(bici: Bicicleta) -> Tuple[Bicicleta, float, str]:
                       "motor", "km", "ano", "componentes", "suspension_trasera"):
             if entry.get(campo) is not None and getattr(bici, campo, None) is None:
                 setattr(bici, campo, entry[campo])
-        return bici, float(entry["nota"]), str(entry["desglose"])
+        bici = completar_con_catalogo(bici, aplicar_heuristica_peso=True)
+        audit_cached = auditar_perito_mecanico(bici)
+        return bici, audit_cached["nota_final"], str(entry["desglose"])
 
-    # 3. Intentar clasificación y valoración con Gemini Flash
-    _, doc_motor_ref = evaluar_documentacion_motor(bici.motor, bici.titulo)
-    prompt = f"""Eres un experto mecánico y tasador de bicicletas eléctricas de montaña (e-MTB) de ocasión en España.
-Analiza esta bicicleta y completa los datos técnicos que falten según el catálogo oficial del fabricante:
+    # Pre-auditoría con los datos conocidos hasta ahora
+    audit_pre = auditar_perito_mecanico(bici)
 
-Datos actuales extraídos de la tienda ({bici.sitio}):
-- Título: {bici.titulo}
+    # 3. Clasificación y auditoría con Gemini Flash como Perito Mecánico Senior
+    prompt = f"""Actúa como un Perito Mecánico Senior de bicicletas eléctricas. Tu tarea es auditar los datos de una e-MTB de ocasión y generar una "Nota de Oportunidad" (0.0 a 10.0).
+
+REGLA MAESTRA: NUNCA hagas una media optimista. La evaluación parte de una nota base de 10.0 y se aplican restas estrictas e irreversibles según la siguiente tabla de penalizaciones:
+
+1. PENALIZACIONES POR KILOMETRAJE (Factor Crítico):
+- De 0 a 1.000 km: -0.0 puntos (Estado óptimo).
+- De 1.001 a 2.000 km: -1.0 puntos (Rodada, aceptable).
+- De 2.001 a 4.000 km: -2.5 puntos (Desgaste medio en transmisión y celdas).
+- De 4.001 a 6.000 km: -4.5 puntos (Exige cambio de retenes, revisión de motor y batería mermada).
+- Más de 6.000 km: LÍNEA ROJA. La nota máxima final NUNCA puede superar el 4.5, independientemente de los componentes o el cuadro.
+
+2. PENALIZACIONES POR PESO:
+- Menos de 19.0 kg: +0.5 puntos (Bonificación por peso pluma).
+- De 19.1 a 20.0 kg: -0.0 puntos.
+- De 20.1 a 21.0 kg: -1.5 puntos.
+- Más de 21.0 kg: LÍNEA ROJA. Nota máxima de 4.0.
+
+3. EVALUACIÓN DE MOTOR, CENTRALITA Y DIAGNÓSTICO:
+- Motor Shimano (EP8/EP8-RS) o Bosch (CX) en marcas con diagnóstico abierto: -0.0 puntos (Permiten informe PDF pericial oficial, máxima transparencia).
+- Bicicletas BH (iLynx, AtomX, BH 2EXMAG): Resta SIEMPRE -1.0 punto base porque no se le puede sacar un informe veraz en PDF de su centralita al tener un software propietario y opaco.
+- Además, en BH 2EXMAG o Brose con más de 3.000 km: resta -1.5 puntos extra por la imposibilidad de verificar salud de batería y ciclos sin software cerrado de la marca (total -2.5 pts en BH >3.000 km).
+
+4. PRECIO FRENTE A COMPONENTES:
+- Rango base: 2.000 € a 3.000 €.
+- Si supera los 3.000 € (ej. 3.100 €) y supera los 2.000 km: -1.5 puntos.
+
+Datos extraídos de la bicicleta ({bici.sitio}):
+- Modelo/Título: {bici.titulo}
 - Precio: {bici.precio} €
-- Talla: {bici.talla or 'desconocida'}
-- Peso (kg): {bici.peso_kg if bici.peso_kg is not None else 'desconocido'}
+- Talla: {bici.talla or 'M'}
+- Peso conocido (kg): {bici.peso_kg if bici.peso_kg is not None else 'inferir peso real de catálogo para este modelo exacto'}
 - Batería (Wh): {bici.bateria_wh if bici.bateria_wh is not None else 'desconocida'}
-- Motor: {bici.motor or 'desconocido'}
-- Cuadro: {bici.cuadro_material or 'desconocido'}
-- Kilómetros: {bici.km if bici.km is not None else 'desconocido'}
+- Motor: {bici.motor or 'inferir motor real del modelo'}
+- Cuadro: {bici.cuadro_material or 'inferir material'}
+- Kilómetros: {bici.km if bici.km is not None else 'no declarados'}
 - Año: {bici.ano if bici.ano is not None else 'desconocido'}
 - Componentes: {bici.componentes or 'de serie'}
-- Suspensión trasera (doble suspensión): {bici.suspension_trasera or 'si'}
-- Referencia diagnóstico motor: {doc_motor_ref}
+- Cálculo aritmético preliminar: {audit_pre['formula_str']}
 
-Parámetros objetivo del comprador:
-- Buscamos e-MTB doble suspensión en Talla M, precio 2.000-3.300 €, batería > 500 Wh y peso estricto < 21 kg (priorizando <= 19 kg y carbono).
-- Valora de 0.0 a 10.0 la oportunidad de compra evaluando obligatoriamente:
-  1) Kilómetros y desgaste
-  2) Peso real (penalizando si llega o supera 21 kg, premiando < 19.5 kg)
-  3) Posibilidad de sacarle documentación/diagnóstico fiable al motor (informe Bosch, Shimano E-Tube, Specialized, etc.)
-  4) Estado estimado y capacidad de la batería (Wh, ciclos esperados por km/año y garantía)
-  5) Componentes (transmisión, suspensiones, cuadro) frente al precio.
+PROCEDIMIENTO DE SALIDA (CHAIN OF THOUGHT):
+Antes de dar la respuesta final, realiza el cálculo aritmético paso a paso en base a estas reglas. Si una línea roja se activa (ej. >6.000 km o >21.0 kg), limita la nota máxima automáticamente.
+Redacta la valoración en 5 ejes (Km, Peso, Diagnóstico, Batería, Precio), justificando matemáticamente por qué se han restado los puntos. Sé crítico, directo y técnico, advirtiendo de los costes ocultos (rodamientos, retenes, celdas degradadas) en kilometrajes altos.
 
 Devuelve ÚNICAMENTE un objeto JSON válido con esta estructura exacta:
 {{
-  "peso_kg": numero_float_peso_estimado_real,
+  "peso_kg": numero_float_peso_real_catalogo,
   "bateria_wh": numero_int_wh,
-  "motor": "marca y modelo del motor",
+  "motor": "marca y modelo real del motor",
   "cuadro_material": "Carbono o Aluminio",
   "suspension_trasera": "si o no",
   "modalidad": "Light e-MTB / XC / Downcountry / Trail",
   "ano": numero_int_ano,
   "componentes": "resumen breve de transmisión y suspensiones",
+  "calculo_paso_a_paso": "Base 10.0 - X.X (Km) ... = Nota",
   "nota": numero_float_de_0_a_10,
-  "km_analisis": "valoración breve de los km",
-  "peso_analisis": "valoración breve del peso y chasis",
-  "motor_doc_analisis": "explicación de qué informe/diagnóstico fiable se puede extraer del motor",
-  "bateria_analisis": "valoración del estado y capacidad de la batería",
-  "componentes_analisis": "valoración de componentes y relación calidad-precio"
+  "km_analisis": "justificación matemática de la resta por km y costes ocultos (retenes, transmisión, rodamientos)",
+  "peso_analisis": "justificación matemática por peso (+/- puntos o línea roja) y comportamiento dinámico",
+  "motor_doc_analisis": "justificación matemática del motor (-0.0 o -1.5 pts) y viabilidad de informe pericial PDF",
+  "bateria_analisis": "auditoría crítica de degradación de celdas, ciclos estimados y riesgo fuera de garantía",
+  "componentes_analisis": "justificación matemática del precio (-0.0 o -1.5 pts) frente a los componentes equipados"
 }}"""
 
     res_gemini = _llamar_gemini_api(prompt, usar_busqueda=False)
@@ -649,17 +862,22 @@ Devuelve ÚNICAMENTE un objeto JSON válido con esta estructura exacta:
             if not bici.componentes and res_gemini.get("componentes"):
                 bici.componentes = str(res_gemini["componentes"])
 
-            nota_ia = round(max(0.0, min(10.0, float(res_gemini.get("nota", 8.0)))), 2)
+            bici = completar_con_catalogo(bici, aplicar_heuristica_peso=True)
+
+            # Re-auditar matemáticamente con los campos definitivos (garantiza que la regla maestra se cumpla al 100%)
+            audit_post = auditar_perito_mecanico(bici)
+            nota_final = audit_post["nota_final"]
+
             desglose_ia = (
-                f"🤖 Valoración Gemini Flash:\n"
-                f"• 🛣️ Km: {res_gemini.get('km_analisis', '')}\n"
-                f"• ⚖️ Peso: {res_gemini.get('peso_analisis', '')}\n"
-                f"• 🔍 Diagnóstico motor: {res_gemini.get('motor_doc_analisis', '')}\n"
-                f"• 🔋 Estado batería: {res_gemini.get('bateria_analisis', '')}\n"
-                f"• ⚙️ Componentes/Precio: {res_gemini.get('componentes_analisis', '')}"
+                f"🧮 Auditoría Pericial: {audit_post['formula_str']}\n"
+                f"• 🛣️ Km: {res_gemini.get('km_analisis', audit_post['txt_km'])}\n"
+                f"• ⚖️ Peso: {res_gemini.get('peso_analisis', audit_post['txt_peso'])}\n"
+                f"• 🔍 Diagnóstico motor: {res_gemini.get('motor_doc_analisis', audit_post['txt_motor'])}\n"
+                f"• 🔋 Estado batería: {res_gemini.get('bateria_analisis', audit_post['txt_bateria'])}\n"
+                f"• 💰 Precio/Componentes: {res_gemini.get('componentes_analisis', audit_post['txt_precio'])}"
             )
 
-            cache_ia[cache_key] = {
+            entry_data = {
                 "talla": bici.talla,
                 "modalidad": bici.modalidad,
                 "peso_kg": bici.peso_kg,
@@ -670,16 +888,20 @@ Devuelve ÚNICAMENTE un objeto JSON válido con esta estructura exacta:
                 "ano": bici.ano,
                 "componentes": bici.componentes,
                 "suspension_trasera": bici.suspension_trasera,
-                "nota": nota_ia,
+                "nota": nota_final,
                 "desglose": desglose_ia,
             }
-            _guardar_cache_ia(cache_ia)
-            log.info(f"[Gemini Flash] Valorada: {bici.titulo} -> {nota_ia}/10 (peso={bici.peso_kg} kg)")
-            return bici, nota_ia, desglose_ia
+            _guardar_entrada_cache_ia(cache_key, entry_data)
+            log.info(
+                f"[Perito IA] {bici.titulo} -> {nota_final}/10 "
+                f"(km={bici.km}, peso={bici.peso_kg} kg) | {audit_post['formula_str']}"
+            )
+            return bici, nota_final, desglose_ia
         except Exception as e:
             log.warning(f"[Gemini Flash] Error procesando respuesta JSON para {bici.titulo}: {e}")
 
-    # 4. Fallback al motor autónomo local (100% sin API)
+    # 4. Fallback al motor autónomo pericial local (100% sin API)
+    bici = completar_con_catalogo(bici, aplicar_heuristica_peso=True)
     nota_auto, desglose_auto = valorar_autonomo(bici)
-    log.info(f"[Motor Autónomo] Valorada: {bici.titulo} -> {nota_auto}/10 (peso={bici.peso_kg} kg)")
+    log.info(f"[Perito Autónomo] {bici.titulo} -> {nota_auto}/10 (km={bici.km}, peso={bici.peso_kg} kg)")
     return bici, nota_auto, desglose_auto

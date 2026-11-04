@@ -176,6 +176,60 @@ def test_formateo_mensaje_telegram():
     assert "Enlace directo de compra" in mensaje
 
 
+def test_extraccion_titulo_sin_dto_y_suspension_rigidez():
+    """Verifica que Bike Ocasión ignore badges '% DTO' en el título y que 'rigidez' no marque hardtail."""
+    from bs4 import BeautifulSoup
+    import config as cfg
+    from scrapers.bike_ocasion import BikeOcasionScraper
+    from scrapers.enriquecedor_web import _detectar_suspension_trasera
+
+    html = """
+    <article class="ajax_block_product">
+      <a class="product_img_link" href="/bicicletas-electricas-de-montana-doble-suspension/463333-bh.html" title="BH iLynx Trail Carbon 8.7 XT">- 46% DTO</a>
+      <h3 class="s_title_block"><a href="/bicicletas-electricas-de-montana-doble-suspension/463333-bh.html">BH iLynx Trail Carbon 8.7 XT</a></h3>
+      <span class="price">2.981 €</span>
+      <div>Talla: M / 540Wh / 1.193 Km / Shimano</div>
+    </article>
+    """
+    scraper = BikeOcasionScraper(cfg.SITIOS[0])
+    bicis = scraper._extraer_de_sopa(BeautifulSoup(html, "html.parser"))
+    assert len(bicis) == 1
+    assert bicis[0].titulo == "BH iLynx Trail Carbon 8.7 XT"
+    assert bicis[0].suspension_trasera == "si"
+
+    # 'rigidez' no debe interpretarse como 'rigid' (sin suspensión trasera)
+    assert _detectar_suspension_trasera("Cuadro de carbono con gran rigidez torsional y doble suspensión") is True
+
+
+def test_perito_mecanico_senior_reglas_y_lineas_rojas():
+    """Verifica el cálculo paso a paso del Perito Mecánico Senior y sus Líneas Rojas."""
+    from gemini_classifier import auditar_perito_mecanico
+
+    # Caso 1: Línea Roja > 6.000 km + BH (-1.0 base centralita -1.5 >3000km = -2.5)
+    b_roja_km = bici_prueba(km=8407, peso_kg=16.8, motor="BH 2EXMAG", precio=2768.0)
+    res_km = auditar_perito_mecanico(b_roja_km)
+    assert res_km["nota_final"] <= 4.5, f"Línea roja >6000 km violada: {res_km}"
+    assert res_km["delta_motor"] == -2.5
+
+    # Caso 2: Línea Roja > 21.0 kg (nota máxima 4.0)
+    b_roja_peso = bici_prueba(km=500, peso_kg=22.4, motor="Bosch CX", precio=2500.0)
+    res_peso = auditar_perito_mecanico(b_roja_peso)
+    assert res_peso["nota_final"] <= 4.0, f"Línea roja >21 kg violada: {res_peso}"
+
+    # Caso 3: BH con 1.193 km (-1.0 km) + 18.2 kg (+0.5 peso) - 1.0 (centralita BH) => 8.5/10
+    b_bh_bajos_km = bici_prueba(km=1193, peso_kg=18.2, motor="BH 2EXMAG", precio=2981.0)
+    res_bh = auditar_perito_mecanico(b_bh_bajos_km)
+    assert res_bh["delta_motor"] == -1.0
+    assert res_bh["nota_final"] == 8.5, f"Esperado 8.5, obtenido: {res_bh}"
+
+    # Caso 4: Precio > 3.000 € y > 2.000 km (-1.5 precio, -2.5 km) con Shimano (-0.0)
+    b_cara_rodada = bici_prueba(km=2500, peso_kg=19.5, motor="Shimano EP8", precio=3150.0)
+    res_cara = auditar_perito_mecanico(b_cara_rodada)
+    assert res_cara["delta_km"] == -2.5
+    assert res_cara["delta_precio"] == -1.5
+    assert res_cara["nota_final"] == 6.0
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -188,4 +242,6 @@ if __name__ == "__main__":
     test_clasificador_hibrido_catalogo_y_5_ejes()
     test_dedup_sqlite()
     test_formateo_mensaje_telegram()
+    test_extraccion_titulo_sin_dto_y_suspension_rigidez()
+    test_perito_mecanico_senior_reglas_y_lineas_rojas()
     print("Todas las pruebas pasaron (GREEN).")

@@ -33,7 +33,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Caché de fichas de detalle (tarea 12, Fase D)
 # ---------------------------------------------------------------------------
-CACHE_DIR = Path("cache")
+CACHE_DIR = cfg.BASE_DIR / "cache"
 CACHE_FILE = CACHE_DIR / "fichas_detalle.json"
 
 
@@ -107,59 +107,124 @@ def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str) -> dict:
         log.warning(f"[Enriquecedor] Error abriendo ficha {url}: {e}")
         return detalle
 
-    html = page.html_content
+    html = str(page.html_content)
     soup = BeautifulSoup(html, "html.parser")
-    texto_completo = soup.get_text(" ", strip=True)
+
+    # 1. Extraer pares <dt>/<dd> estructurados si existen (Upway / PrestaShop data-sheet)
+    for dt in soup.find_all("dt"):
+        dd = dt.find_next_sibling("dd")
+        if not dd:
+            continue
+        label = dt.get_text(" ", strip=True).lower()
+        val = dd.get_text(" ", strip=True)
+        if not val:
+            continue
+        if label in ("año", "ano", "año del modelo") and "ano" not in detalle:
+            ano_dt = _extraer_ano(val)
+            if ano_dt:
+                detalle["ano"] = ano_dt
+        elif "peso" in label and "peso_kg" not in detalle:
+            peso_dt = _extraer_peso(val)
+            if peso_dt is not None:
+                detalle["peso_kg"] = peso_dt
+        elif ("batería" in label or "bateria" in label) and "bateria_wh" not in detalle:
+            bat_dt = _extraer_bateria(val)
+            if bat_dt is not None:
+                detalle["bateria_wh"] = bat_dt
+        elif "talla" in label and "talla" not in detalle:
+            talla_limpia = val.split(":")[0].strip() if ":" in val else val.split()[0].strip()
+            if talla_limpia in ("XS", "S", "M", "L", "XL", "XXL"):
+                detalle["talla"] = talla_limpia
+        elif "motor" in label and "motor" not in detalle:
+            detalle["motor"] = val
+        elif ("cuadro" in label or "material" in label) and "cuadro_material" not in detalle:
+            cuadro_dt = _extraer_cuadro(val)
+            if cuadro_dt:
+                detalle["cuadro_material"] = cuadro_dt
+        elif ("suspensión" in label or "suspension" in label or "amortiguador" in label):
+            if "semi" in val.lower() or "rígida" in val.lower() or "hardtail" in val.lower():
+                detalle["suspension_trasera"] = "no"
+            elif any(k in val.lower() for k in ["doble", "total", "completa", "full", "mm", "fox", "rockshox"]):
+                detalle["suspension_trasera"] = "si"
+
+    # 2. Eliminar menús, cabeceras, pies de página y carruseles de productos relacionados
+    # para que el texto de la ficha no se contamine con otras bicicletas o el menú del sitio.
+    for tag in soup.select(
+        "header, nav, footer, aside, script, style, noscript, "
+        ".header, .footer, .menu, .megamenu, #header, #footer, "
+        ".related-products, .product-accessories, .crossselling, .featured-products, "
+        ".products-section, .block-categories"
+    ):
+        tag.decompose()
+
+    contenedor_ficha = (
+        soup.select_one("#main .product-container, .product-container, #product-details, main, article")
+        or soup
+    )
+    texto_completo = contenedor_ficha.get_text(" ", strip=True)
 
     # --- Año ---
-    ano = _extraer_ano(texto_completo)
-    if ano:
-        detalle["ano"] = ano
+    if "ano" not in detalle:
+        ano = _extraer_ano(texto_completo)
+        if ano:
+            detalle["ano"] = ano
 
     # --- Peso ---
-    peso = _extraer_peso(texto_completo)
-    if peso is not None:
-        detalle["peso_kg"] = peso
+    if "peso_kg" not in detalle:
+        peso = _extraer_peso(texto_completo)
+        if peso is not None:
+            detalle["peso_kg"] = peso
 
     # --- Batería ---
-    bateria = _extraer_bateria(texto_completo)
-    if bateria is not None:
-        detalle["bateria_wh"] = bateria
+    if "bateria_wh" not in detalle:
+        bateria = _extraer_bateria(texto_completo)
+        if bateria is not None:
+            detalle["bateria_wh"] = bateria
 
     # --- Kilometraje ---
-    km = _extraer_km(texto_completo)
-    if km is not None:
-        detalle["km"] = km
+    if "km" not in detalle:
+        km = _extraer_km(texto_completo)
+        if km is not None:
+            detalle["km"] = km
 
     # --- Motor ---
-    motor = _extraer_motor(texto_completo)
-    if motor:
-        detalle["motor"] = motor
+    if "motor" not in detalle:
+        motor = _extraer_motor(texto_completo)
+        if motor:
+            detalle["motor"] = motor
 
     # --- Talla ---
-    talla = _extraer_talla(texto_completo)
-    if talla:
-        detalle["talla"] = talla
+    if "talla" not in detalle:
+        talla = _extraer_talla(texto_completo)
+        if talla:
+            detalle["talla"] = talla
 
     # --- Suspensión trasera ---
-    susp = _detectar_suspension_trasera(texto_completo)
-    if susp is not None:
-        detalle["suspension_trasera"] = "si" if susp else "no"
+    if "suspension_trasera" not in detalle:
+        if "doble-suspension" in url.lower():
+            detalle["suspension_trasera"] = "si"
+        else:
+            susp = _detectar_suspension_trasera(texto_completo)
+            if susp is not None:
+                detalle["suspension_trasera"] = "si" if susp else "no"
 
     # --- Material de cuadro ---
-    cuadro = _extraer_cuadro(texto_completo)
-    if cuadro:
-        detalle["cuadro_material"] = cuadro
+    if "cuadro_material" not in detalle:
+        cuadro = _extraer_cuadro(texto_completo)
+        if cuadro:
+            detalle["cuadro_material"] = cuadro
 
     # --- Componentes ---
-    componentes = _extraer_componentes(texto_completo)
-    if componentes:
-        detalle["componentes"] = componentes
+    if "componentes" not in detalle:
+        componentes = _extraer_componentes(texto_completo)
+        if componentes:
+            detalle["componentes"] = componentes
 
     # --- Modalidad ---
-    modalidad = _extraer_modalidad(texto_completo)
-    if modalidad:
-        detalle["modalidad"] = modalidad
+    if "modalidad" not in detalle:
+        modalidad = _extraer_modalidad(texto_completo)
+        if modalidad:
+            detalle["modalidad"] = modalidad
 
     # --- Guardar en caché para futuras consultas ---
     if detalle:
@@ -259,12 +324,16 @@ def _extraer_talla(texto: str) -> Optional[str]:
 
 def _detectar_suspension_trasera(texto: str) -> Optional[bool]:
     texto_lower = texto.lower()
-    negativos = ["no tiene suspensión trasera", "sin amortiguador", "solo horquilla",
-                 "hardtail", "rigid", "sin suspensión trasera", "no amortiguador"]
+    negativos = [
+        "no tiene suspensión trasera", "sin amortiguador", "solo horquilla",
+        "hardtail", "semirrígida", "semirrigida", "sin suspensión trasera", "no amortiguador",
+    ]
     if any(k in texto_lower for k in negativos):
         return False
-    positivos = ["amortiguador", "suspensión trasera", "doble suspensión",
-                 "full suspension", "full-suspension", "suspension trasera"]
+    positivos = [
+        "amortiguador", "suspensión trasera", "doble suspensión", "doble suspension",
+        "full suspension", "full-suspension", "suspension trasera",
+    ]
     if any(k in texto_lower for k in positivos):
         return True
     return None

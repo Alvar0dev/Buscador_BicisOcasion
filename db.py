@@ -6,12 +6,13 @@ Garantiza que no lleguen alertas duplicadas en días consecutivos, salvo que baj
 
 import sqlite3
 from typing import Optional, Tuple
+import config as cfg
 from models import Bicicleta
 
 
 class BaseDatos:
-    def __init__(self, ruta: str = "bicis_enviadas.db") -> None:
-        self.ruta = ruta
+    def __init__(self, ruta: Optional[str] = None) -> None:
+        self.ruta = ruta if ruta is not None else cfg.DB_PATH
         self._crear_tabla()
 
     def _conectar(self) -> sqlite3.Connection:

@@ -9,6 +9,7 @@ Orquesta: scrape de los 4 sitios -> filtros estrictos -> nota de oportunidad
 Ejecucion diaria a las 12:00 con schedule + while True (S10).
 """
 
+import argparse
 import schedule
 import time
 import logging
@@ -37,7 +38,7 @@ SCRAPERS = {
 # ---------------------------------------------------------------------------
 # Logging: consola + archivo logs/buscador.log
 # ---------------------------------------------------------------------------
-LOG_DIR = Path("logs")
+LOG_DIR = cfg.BASE_DIR / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
 logging.basicConfig(
@@ -122,15 +123,18 @@ def _enviar_alerta_telegram(texto: str) -> None:
         logger.error(f"[Alerta Telegram] Error enviando alerta: {e}")
 
 
-def _recolectar_oportunidades(db: BaseDatos) -> list:
+def _recolectar_oportunidades(db: BaseDatos, forzar_envio: bool = False) -> list:
     """
     Recorre los sitios objetivo en una sola pasada (con health check integrado),
     pre-filtra candidatas, enriquece y valora con el clasificador híbrido
     (ficha del sitio + catálogo + Gemini Flash / motor autónomo), y aplica
     los filtros estrictos S1-S6 post-enriquecimiento.
 
-    Devuelve una lista de (bici, nota, desglose) ordenada por relevancia
-    para las mejores bicicletas disponibles que aún no se hayan notificado.
+    Devuelve una lista de (bici, nota, desglose) ordenada por relevancia:
+      1. Estrictas (< 21 kg) nuevas o que bajaron de precio.
+      2. Estrictas (< 21 kg) vigentes en stock (para completar Top N antes que meter >= 21 kg).
+      3. Candidatas cercanas por peso nuevas.
+      4. Candidatas cercanas por peso vigentes.
     """
     candidatas_pre = []
 
@@ -168,8 +172,10 @@ def _recolectar_oportunidades(db: BaseDatos) -> list:
 
     logger.info(f"[IA/Enriquecedor] Analizando y completando {len(candidatas_pre)} candidatas pre-filtradas...")
 
-    estrictas = []
-    respaldo_ligeras = []
+    estrictas_nuevas = []
+    estrictas_conocidas = []
+    respaldo_nuevas = []
+    respaldo_conocidas = []
 
     with ThreadPoolExecutor(max_workers=3) as executor:
         futuros = {
@@ -195,36 +201,45 @@ def _recolectar_oportunidades(db: BaseDatos) -> list:
             if not (cfg.PRECIO_MIN_EUR <= bici.precio <= cfg.PRECIO_MAX_EXCEPCIONAL_EUR):
                 continue
 
-            if not db.debe_reenviarse(bici, nota):
-                logger.debug(f"  YA ENVIADA [{bici.sitio}] (sin bajada de precio): {bici.titulo}")
-                continue
-
+            es_nueva = forzar_envio or db.debe_reenviarse(bici, nota)
             apto_post, motivo_post = pasa_filtros_estrictos(bici)
+
             if apto_post:
-                estrictas.append((bici, nota, desglose))
+                if es_nueva:
+                    estrictas_nuevas.append((bici, nota, desglose))
+                else:
+                    estrictas_conocidas.append((bici, nota, desglose))
             else:
                 logger.info(f"  [Candidata cercana] {bici.titulo}: {motivo_post} (Nota {nota}/10)")
-                respaldo_ligeras.append((bici, nota, desglose))
+                if es_nueva:
+                    respaldo_nuevas.append((bici, nota, desglose))
+                else:
+                    respaldo_conocidas.append((bici, nota, desglose))
 
     # Ordenar las estrictas (< 21 kg) por nota descendente y menor peso
-    estrictas.sort(key=lambda x: (x[1], -(x[0].peso_kg or 20.0)), reverse=True)
+    estrictas_nuevas.sort(key=lambda x: (x[1], -(x[0].peso_kg or 20.0)), reverse=True)
+    estrictas_conocidas.sort(key=lambda x: (x[1], -(x[0].peso_kg or 20.0)), reverse=True)
 
-    # Si hay menos de TOP_N_NOTIFICAR estrictas (< 21 kg), completar hasta TOP_N_NOTIFICAR
-    # con las más ligeras y mejor puntuadas que cumplen Talla M + Doble Suspensión + >500 Wh + Precio
-    if len(estrictas) < TOP_N_NOTIFICAR and respaldo_ligeras:
-        respaldo_ligeras.sort(key=lambda x: (-(x[0].peso_kg or 25.0), x[1]), reverse=True)
-        faltantes = TOP_N_NOTIFICAR - len(estrictas)
-        estrictas.extend(respaldo_ligeras[:faltantes])
+    # Ordenar respaldo por menor peso primero y mayor nota
+    respaldo_nuevas.sort(key=lambda x: (-(x[0].peso_kg or 25.0), x[1]), reverse=True)
+    respaldo_conocidas.sort(key=lambda x: (-(x[0].peso_kg or 25.0), x[1]), reverse=True)
 
-    return estrictas
+    seleccion = list(estrictas_nuevas)
+    for pool in (estrictas_conocidas, respaldo_nuevas, respaldo_conocidas):
+        if len(seleccion) >= TOP_N_NOTIFICAR:
+            break
+        faltantes = TOP_N_NOTIFICAR - len(seleccion)
+        seleccion.extend(pool[:faltantes])
+
+    return seleccion
 
 
-def ejecutar_busqueda() -> None:
+def ejecutar_busqueda(forzar_envio: bool = False) -> None:
     """Ejecuta una pasada completa de búsqueda, clasificación IA y notificación Top N."""
     logger.info(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Iniciando búsqueda de e-MTB...")
 
     db = BaseDatos()
-    oportunidades = _recolectar_oportunidades(db)
+    oportunidades = _recolectar_oportunidades(db, forzar_envio=forzar_envio)
 
     if not oportunidades:
         logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Finalizado. "
@@ -251,13 +266,28 @@ def ejecutar_busqueda() -> None:
 
 
 def main() -> None:
-    """Bucle de programacion diaria a las 12:00 (S10)."""
+    """Punto de entrada CLI: soporta ejecución única (--once) o bucle diario a las 12:00 (S10)."""
+    parser = argparse.ArgumentParser(description="Buscador de e-MTB de Ocasión")
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Ejecuta una sola búsqueda inmediatamente y termina (ideal para Task Scheduler).",
+    )
+    parser.add_argument(
+        "--forzar",
+        action="store_true",
+        help="Fuerza el envío del Top 3 aunque ya figuren en bicis_enviadas.db.",
+    )
+    args = parser.parse_args()
+
+    if args.once:
+        ejecutar_busqueda(forzar_envio=args.forzar)
+        return
+
     logger.info(f"Buscador de e-MTB iniciado. Ejecucion diaria a las {HORA_EJECUCION}.")
     logger.info("Presiona Ctrl+C para detener.")
 
-    # Ejecuta una vez al iniciar (opcional; comentar si solo se quiere la hora programada)
-    # ejecutar_busqueda()
-
+    ejecutar_busqueda(forzar_envio=args.forzar)
     schedule.every().day.at(HORA_EJECUCION).do(ejecutar_busqueda)
 
     while True:
