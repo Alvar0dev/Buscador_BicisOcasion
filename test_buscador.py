@@ -230,6 +230,80 @@ def test_perito_mecanico_senior_reglas_y_lineas_rojas():
     assert res_cara["nota_final"] == 6.0
 
 
+def test_optimizacion_tarjetas_upway_y_buhobike():
+    """Verifica la extracción directa en tarjeta para Upway y Buhobike y los regex con bordes de palabra."""
+    from bs4 import BeautifulSoup
+    import config as cfg
+    from scrapers.upway import UpwayScraper
+    from scrapers.buhobike import BuhobikeScraper
+    from scrapers.enriquecedor_web import (
+        _extraer_modalidad,
+        _extraer_componentes,
+        _extraer_cuadro,
+        _extraer_peso,
+    )
+
+    # 1. Upway: tarjeta con espacio estrecho \u202f, rango de estatura y '< 5 km'
+    html_upway = """
+    <div>
+      <a class="w-full" href="/products/focus-thron-69-rk7qz2">
+        Mejor precio Recién llegada Focus THRON² 6.9 2023 1m60-1m70 1786\u202fkm 2.499 € 6.000 € nuevo
+      </a>
+      <a class="w-full" href="/products/bulls-sonic-evo-am-sx-1-rk8ab1">
+        Bulls Sonic Evo AM SX 1 2024 1m68-1m81 < 5\u202fkm 2.599 € 5.999 € nuevo
+      </a>
+    </div>
+    """
+    upway_scraper = UpwayScraper(cfg.SITIOS[2])
+    bicis_upway = upway_scraper._extraer_de_sopa(BeautifulSoup(html_upway, "html.parser"))
+    assert len(bicis_upway) == 2
+    assert bicis_upway[0].titulo == "Focus THRON² 6.9"
+    assert bicis_upway[0].talla == "S"
+    assert bicis_upway[0].km == 1786
+    assert bicis_upway[0].ano == 2023
+    assert bicis_upway[0].suspension_trasera == "si"
+    assert bicis_upway[1].titulo == "Bulls Sonic Evo AM SX 1"
+    assert bicis_upway[1].talla == "M"
+    assert bicis_upway[1].km == 5
+    assert bicis_upway[1].ano == 2024
+
+    # 2. Buhobike: tarjeta de segunda mano con alt completo, SKU KM5000 y #/16856-talla-m
+    html_buhobike = """
+    <article class="product-miniature js-product-miniature" data-id-product="25259">
+      <a class="thumbnail product-thumbnail" href="https://www.buhobike.com/segunda-mano-electricas/25259-bh-ilynx.html#/16856-talla-m">
+        <img alt="BH ILYNX RACE CARBON LT 7.6 T-M 2022 BICICLETA SEGUNDA MANO" class="thumbnail-img" />
+      </a>
+      <span class="discount-percentage">-3.700,00 €</span>
+      <p class="h3 product-title">
+        <a href="https://www.buhobike.com/segunda-mano-electricas/25259-bh-ilynx.html#/16856-talla-m">BH ILYNX RACE CARBON LT 7.6 T-M 2022...</a>
+      </p>
+      <meta content="BSM32910KM5000A" itemprop="sku"/>
+      <div class="product-price-and-shipping">
+        <span class="price current-price-discount">2.599,00 €</span>
+        <span class="regular-price">6.299,00 €</span>
+      </div>
+    </article>
+    """
+    buho_scraper = BuhobikeScraper(cfg.SITIOS[1])
+    bicis_buho = buho_scraper._extraer_de_sopa(
+        BeautifulSoup(html_buhobike, "html.parser"),
+        url_listado="https://www.buhobike.com/9448-segunda-mano-montana-electricas",
+    )
+    assert len(bicis_buho) == 1
+    assert bicis_buho[0].titulo == "BH ILYNX RACE CARBON LT 7.6 T-M 2022 BICICLETA SEGUNDA MANO"
+    assert bicis_buho[0].precio == 2599.0
+    assert bicis_buho[0].talla == "M"
+    assert bicis_buho[0].ano == 2022
+    assert bicis_buho[0].km == 5000
+    assert bicis_buho[0].suspension_trasera == "si"
+
+    # 3. Falsos positivos por subcadenas en español ('excelente' != XC, 'extra' != XT, 'salud' != Aluminio)
+    assert _extraer_modalidad("Estado excelente y exclusivo para montaña") is None
+    assert _extraer_componentes("Garantía extra en el exterior del cuadro") is None
+    assert _extraer_cuadro("Salud de la batería evaluada en Cataluña") is None
+    assert _extraer_peso("Peso estimado del producto + embalaje: 22,000 Kg. Peso máximo ciclista 120 kg. PESO 18,28Kg") == 18.28
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -244,4 +318,5 @@ if __name__ == "__main__":
     test_formateo_mensaje_telegram()
     test_extraccion_titulo_sin_dto_y_suspension_rigidez()
     test_perito_mecanico_senior_reglas_y_lineas_rojas()
+    test_optimizacion_tarjetas_upway_y_buhobike()
     print("Todas las pruebas pasaron (GREEN).")

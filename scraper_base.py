@@ -35,9 +35,12 @@ except ImportError:
 
 
 class BaseScraper(ABC):
+    usar_stealth_directo: bool = False
+
     def __init__(self, sitio: cfg.SitioObjetivo) -> None:
         self.sitio = sitio
         self._delay_ultimo_request: float = 0.0
+        self._ultimo_status_http: Optional[int] = None
         self._session_proxy = self._crear_sesion_con_proxy()
 
     def _crear_sesion_con_proxy(self):
@@ -80,6 +83,7 @@ class BaseScraper(ABC):
                 page = self._session_proxy.get(url, impersonate="chrome120", timeout=timeout)
             else:
                 page = Fetcher.get(url, impersonate="chrome120", timeout=timeout)
+            self._ultimo_status_http = page.status
             if page.status == 200:
                 return page.html_content
             log.warning(
@@ -128,23 +132,32 @@ class BaseScraper(ABC):
         """
         Descarga el HTML con capas de fallback usando Scrapling.
         Orden: Fetcher (HTTP rapido) -> StealthyFetcher (Cloudflare/JS).
+        Si `usar_stealth_directo` es True o Fetcher recibe bloqueo 403/503 de Cloudflare,
+        salta directamente a StealthyFetcher sin malgastar reintentos HTTP.
         Devuelve None si todas las capas fallan (S13).
         """
         self._espera_cortesa()
 
-        # --- Capa 1: Fetcher (reintentos con backoff) ---
-        for intento in range(1, reintentos + 1):
-            html = self._obtener_con_fetcher(url)
-            if html:
-                return html
-            wait = 2 ** intento + random.uniform(0, 1)
-            log.warning(
-                f"[{self.sitio.nombre}] Intento {intento}/{reintentos} (Fetcher) fallo para {url}. "
-                f"Reintentando en {wait:.1f}s"
-            )
-            time.sleep(wait)
-
-        self._espera_cortesa()
+        if not self.usar_stealth_directo:
+            # --- Capa 1: Fetcher (reintentos con backoff) ---
+            for intento in range(1, reintentos + 1):
+                self._ultimo_status_http = None
+                html = self._obtener_con_fetcher(url)
+                if html:
+                    return html
+                if self._ultimo_status_http in (403, 503):
+                    log.info(
+                        f"[{self.sitio.nombre}] Bloqueo Cloudflare ({self._ultimo_status_http}) detectado en {url}. "
+                        f"Saltando directamente a StealthyFetcher."
+                    )
+                    break
+                wait = 2 ** intento + random.uniform(0, 1)
+                log.warning(
+                    f"[{self.sitio.nombre}] Intento {intento}/{reintentos} (Fetcher) fallo para {url}. "
+                    f"Reintentando en {wait:.1f}s"
+                )
+                time.sleep(wait)
+            self._espera_cortesa()
 
         # --- Capa 2: StealthyFetcher (para Cloudflare agresivo / JS pesado) ---
         html = self._obtener_con_stealth(url)

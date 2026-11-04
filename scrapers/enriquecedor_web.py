@@ -94,12 +94,18 @@ def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str) -> dict:
         return dict(cache_hit)
 
     try:
-        page = Fetcher.get(url, impersonate="chrome120", timeout=30)
-        if page.status != 200:
-            # Fallback a stealth si el sitio tiene Cloudflare
+        es_buhobike = "buhobike.com" in url.lower() or sitio_nombre.lower() == "buhobike"
+        if es_buhobike:
             page = StealthyFetcher.fetch(
                 url, headless=True, solve_cloudflare=True, timeout=60
             )
+        else:
+            page = Fetcher.get(url, impersonate="chrome120", timeout=30)
+            if page.status != 200:
+                # Fallback a stealth si el sitio tiene Cloudflare
+                page = StealthyFetcher.fetch(
+                    url, headless=True, solve_cloudflare=True, timeout=60
+                )
         if page.status != 200:
             log.warning(f"[Enriquecedor] No se pudo abrir ficha {url} (status {page.status})")
             return detalle
@@ -268,27 +274,52 @@ def _extraer_ano(texto: str) -> Optional[int]:
 
 
 def _extraer_peso(texto: str) -> Optional[float]:
-    match = re.search(r"(\d+(?:[.,]\d+)?)\s*kg\b", texto, re.IGNORECASE)
-    if match:
+    texto_norm = texto.replace("\u202f", " ")
+    # 1. Priorizar 'Peso: XX kg' directo sin 'embalaje' ni 'ciclista'/'máximo'
+    for match in re.finditer(
+        r"\bpeso(?:\s+aprox\.?|\s+aproximado)?\s*[:\-]?\s*(\d+(?:[.,]\d+)?)\s*kg\b",
+        texto_norm,
+        re.IGNORECASE,
+    ):
         try:
-            return float(match.group(1).replace(",", "."))
+            val = float(match.group(1).replace(",", "."))
+            if 10.0 <= val <= 32.0:
+                return val
+        except ValueError:
+            pass
+
+    # 2. Fallback general ignorando peso con embalaje o peso máximo de ciclista
+    for match in re.finditer(r"(\d+(?:[.,]\d+)?)\s*kg\b", texto_norm, re.IGNORECASE):
+        inicio = max(0, match.start() - 45)
+        contexto = texto_norm[inicio:match.start()].lower()
+        if any(p in contexto for p in ("embalaje", "ciclista", "máximo", "maximo", "autorizado", "carga")):
+            continue
+        try:
+            val = float(match.group(1).replace(",", "."))
+            if 10.0 <= val <= 32.0:
+                return val
         except ValueError:
             pass
     return None
 
 
 def _extraer_bateria(texto: str) -> Optional[int]:
-    match = re.search(r"(\d+)\s*wh\b", texto, re.IGNORECASE)
-    if match:
+    for match in re.finditer(r"(\d+)\s*wh\b", texto.replace("\u202f", " "), re.IGNORECASE):
         try:
-            return int(match.group(1))
+            val = int(match.group(1))
+            if 250 <= val <= 1200:
+                return val
         except ValueError:
             pass
     return None
 
 
 def _extraer_km(texto: str) -> Optional[int]:
-    match = re.search(r"([\d.,]+)\s*km\b", texto, re.IGNORECASE)
+    texto_norm = texto.replace("\u202f", " ")
+    match_menor = re.search(r"<\s*(\d+)\s*km\b", texto_norm, re.IGNORECASE)
+    if match_menor:
+        return int(match_menor.group(1))
+    match = re.search(r"(\d[\d.,]*)\s*km\b", texto_norm, re.IGNORECASE)
     if match:
         try:
             km_str = match.group(1).replace(".", "").replace(",", "")
@@ -300,23 +331,37 @@ def _extraer_km(texto: str) -> Optional[int]:
 
 def _extraer_motor(texto: str) -> Optional[str]:
     texto_lower = texto.lower()
-    motores_conocidos = [
-        "shimano ep8", "shimano ep801", "shimano ep6",
-        "bosch sx", "bosch performance line cx", "bosch performance line",
-        "fazua", "tq", "mahle", "specialized", "yamaha", "giant",
+    patrones_motor = [
+        (r"\bshimano\s+ep801\b", "Shimano EP801"),
+        (r"\bshimano\s+ep8[\-\s]*rs\b", "Shimano EP8 RS"),
+        (r"\bshimano\s+ep8\b", "Shimano EP8"),
+        (r"\bshimano\s+ep6\b", "Shimano EP6"),
+        (r"\bbosch\s+performance\s+line\s+sx\b|\bbosch\s+sx\b", "Bosch Performance Line SX"),
+        (r"\bbosch\s+performance\s+line\s+cx\b|\bbosch\s+cx\b", "Bosch Performance Line CX"),
+        (r"\bbosch\s+performance\s+line\b", "Bosch Performance Line"),
+        (r"\bbh\s*2exmag\b|\b2exmag\b|\bbh\s*2e\b", "BH 2EXMAG"),
+        (r"\bfazua\b", "Fazua"),
+        (r"\btq\s*hpr\d*\b|\bmotor\s+tq\b", "TQ HPR50"),
+        (r"\bmahle\b", "Mahle"),
+        (r"\bspecialized\s+sl\b", "Specialized SL"),
+        (r"\bbrose\b", "Brose"),
+        (r"\byamaha\b", "Yamaha"),
+        (r"\bgiant\s+syncdrive\b", "Giant SyncDrive"),
     ]
-    for m in motores_conocidos:
-        if m in texto_lower:
-            return m.title()
+    for patron, nombre in patrones_motor:
+        if re.search(patron, texto_lower):
+            return nombre
     return None
 
 
 def _extraer_talla(texto: str) -> Optional[str]:
     match = re.search(r"\btalla\s*:\s*([A-Za-z]+)\b", texto, re.IGNORECASE)
     if match:
-        return match.group(1).upper()
-    # Buscar patrones como "Talla M" o "Talla: M"
-    match2 = re.search(r"\bTalla\s+([SMLXL]+)\b", texto, re.IGNORECASE)
+        t = match.group(1).upper()
+        if t in ("XS", "S", "M", "L", "XL", "XXL", "SM", "ML"):
+            return t
+    # Buscar patrones como "Talla M" o "T-M"
+    match2 = re.search(r"\b(?:Talla|T)[\s\-]+(XS|S|M|L|XL|SM|ML)\b", texto, re.IGNORECASE)
     if match2:
         return match2.group(1).upper()
     return None
@@ -341,9 +386,9 @@ def _detectar_suspension_trasera(texto: str) -> Optional[bool]:
 
 def _extraer_cuadro(texto: str) -> Optional[str]:
     texto_lower = texto.lower()
-    if any(m in texto_lower for m in ["carbono", "carbon", "fibra de carbono"]):
+    if re.search(r"\b(carbono|carbon|fibra de carbono)\b", texto_lower):
         return "Carbono"
-    if any(m in texto_lower for m in ["aluminio", "aluminium", "alu"]):
+    if re.search(r"\b(aluminio|aluminium|aluminum|alloy)\b", texto_lower):
         return "Aluminio"
     return None
 
@@ -351,9 +396,9 @@ def _extraer_cuadro(texto: str) -> Optional[str]:
 def _extraer_componentes(texto: str) -> Optional[str]:
     texto_lower = texto.lower()
     partes = []
-    if any(m in texto_lower for m in ["xt", "axs", "x0", "xtr"]):
+    if re.search(r"\b(xt|xtr|axs|x01|xx1|gx\s+eagle)\b", texto_lower):
         partes.append("XT/AXS")
-    if any(m in texto_lower for m in ["kashima", "ultimate", "factory"]):
+    if re.search(r"\b(kashima|ultimate|factory)\b", texto_lower):
         partes.append("Suspensión premium")
     if partes:
         return "; ".join(partes)
@@ -362,11 +407,17 @@ def _extraer_componentes(texto: str) -> Optional[str]:
 
 def _extraer_modalidad(texto: str) -> Optional[str]:
     texto_lower = texto.lower()
-    modalidades = ["xc", "cross country", "downcountry", "light e-mtb", "light emtb",
-                   "trail", "enduro", "all mountain"]
-    for m in modalidades:
-        if m in texto_lower:
-            return m.title()
+    patrones_modalidad = [
+        (r"\bdowncountry\b", "Downcountry"),
+        (r"\blight\s+e-?mtb\b", "Light e-MTB"),
+        (r"\bcross\s+country\b|\bxc\b", "XC"),
+        (r"\ball\s+mountain\b", "All Mountain"),
+        (r"\benduro\b", "Enduro"),
+        (r"\btrail\b", "Trail"),
+    ]
+    for patron, nombre in patrones_modalidad:
+        if re.search(patron, texto_lower):
+            return nombre
     return None
 
 

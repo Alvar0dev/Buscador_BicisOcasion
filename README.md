@@ -493,8 +493,8 @@ El scraping real ya funciona en Bike Ocasión, Buhobike y Upway. Los próximos p
 | Selectores Bike Ocasión | ✅ Verificados en HTML real |
 | Selectores Buhobike | ✅ Verificados en HTML real |
 | Selectores Upway | ✅ Verificados + scraping real probado |
-| Scraping real Upway | ✅ Funciona con Playwright/Scrapling |
-| Scraping real Buhobike | ✅ Funciona con Scrapling StealthyFetcher (32 bicis extraídas, 0 pasan filtros S1-S8 por precio) |
+| Scraping real Upway | ✅ 23 e-MTB doble suspensión extraídas en ~0.8s desde tarjeta (/collections/doble-suspension) |
+| Scraping real Buhobike | ✅ 34 bicis extraídas con usar_stealth_directo=True (/3230-electricas-trail-dobles?order=product.price.asc + /9448-segunda-mano-montana-electricas), 1 candidata estricta (< 21 kg) detectada |
 | Scraping real Bike Ocasión | ✅ Funciona con Scrapling Fetcher (153 bicis en 5 páginas, 0 pasan filtros S1-S8 hoy) |
 | Enriquecedor web (ficha del sitio + DuckDuckGo) | ✅ Implementado e integrado en main.py |
 | Caché de fichas de detalle | ✅ Implementado (cache/fichas_detalle.json) |
