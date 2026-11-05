@@ -53,6 +53,63 @@ def pasa_filtros_estrictos(bici: Bicicleta) -> Tuple[bool, str]:
     return True, "OK"
 
 
+def prioridad_modalidad(bici: Bicicleta) -> int:
+    """
+    Devuelve el nivel de prioridad de la modalidad para priorizar siempre XC frente a Trail:
+      3 -> XC / Cross Country / Downcountry (100-120 mm, ej. BH iLynx Race, Scott Lumen, KTM Scarp)
+      2 -> Light e-MTB / Trail ligero (130-140 mm, ej. Orbea Rise, Trek Fuel EXe, BH iLynx Trail sin '+')
+      1 -> Trail / All Mountain general (150-160 mm, ej. BH iLynx+ Trail)
+      0 -> Otras / sin clasificar
+    """
+    titulo = (bici.titulo or "").lower()
+    modalidad = (bici.modalidad or "").lower()
+    texto = f"{titulo} {modalidad}"
+
+    # Nivel 3: XC / Cross Country / Downcountry puro
+    if any(
+        k in texto
+        for k in (
+            "ilynx race",
+            "scott lumen",
+            "macina scarp",
+            "ams hybrid one44",
+            "e-caliber",
+            "downcountry",
+            "cross country",
+        )
+    ) or "xc" in modalidad.split():
+        return 3
+    if "xc" in modalidad:
+        return 3
+
+    # Nivel 2: Light e-MTB / Trail ligero (excluyendo iLynx+ de 160 mm)
+    if "ilynx+" not in titulo and "ilynx plus" not in titulo:
+        if any(
+            k in texto
+            for k in (
+                "orbea rise",
+                "fuel exe",
+                "levo sl",
+                "ilynx trail",
+                "e-zesty",
+                "ezesty",
+                "vam2 sl",
+                "jam2 sl",
+                "mondraker neat",
+                "moterra sl",
+                "light e-mtb",
+                "light emtb",
+            )
+        ):
+            return 2
+
+    # Nivel 1: Trail / All Mountain
+    if any(k in texto for k in ("trail", "all mountain")):
+        return 1
+
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # ALGORITMO DE NOTA DE OPORTUNIDAD (0-10) (S7)
 # ---------------------------------------------------------------------------

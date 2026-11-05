@@ -32,7 +32,7 @@ class BikeOcasionScraper(BaseScraper):
 
         return self.extraer_bicicletas_paginado(
             construir_url_pagina=construir_url_pagina,
-            max_paginas=5,
+            max_paginas=6,
         )
 
     def _extraer_de_sopa(self, soup: BeautifulSoup) -> List[Bicicleta]:
@@ -170,13 +170,24 @@ class BikeOcasionScraper(BaseScraper):
                 detalle["motor"] = marca_m.capitalize()
         else:
             motores_conocidos = [
-                "Bosch", "Shimano EP8", "Shimano EP6", "Yamaha", "Specialized",
+                "Bosch", "Shimano EP801", "Shimano EP8", "Shimano EP6", "Yamaha", "Specialized",
                 "Giant", "Brose", "Panasonic", "Fazua", "TQ", "Mahle", "BH 2EXMAG",
             ]
             for m in motores_conocidos:
                 if re.search(rf"\b{re.escape(m)}\b", texto, re.IGNORECASE):
                     detalle["motor"] = m
                     break
+
+        # Corrección técnica para modelos BH:
+        # - BH iLynx Race y BH iLynx Trail (sin '+') montan SIEMPRE motor BH 2EXMAG (en ocasiones la tienda
+        #   etiqueta "Shimano" por error al confundirlo con la transmisión Shimano XT/XTR).
+        # - BH iLynx+ (Plus) monta Shimano EP801 con batería/sistema propietario BH.
+        if re.search(r"\bbh\s+ilynx\b", texto_lower) and "ilynx+" not in texto_lower and "ilynx plus" not in texto_lower:
+            detalle["motor"] = "BH 2EXMAG"
+        elif "ilynx+" in texto_lower or "ilynx plus" in texto_lower:
+            detalle["motor"] = "Shimano EP801 (Sistema/Batería BH)"
+        elif "atomx" in texto_lower and detalle.get("motor", "").lower().startswith("shimano"):
+            detalle["motor"] = "Brose S Mag"
 
         # --- Suspensión trasera (doble suspensión) ---
         if any(k in texto_lower for k in ["doble suspensión", "doble suspension", "full suspension", "full-suspension", "amortiguador"]):

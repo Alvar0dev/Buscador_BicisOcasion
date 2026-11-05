@@ -20,7 +20,7 @@ from pathlib import Path
 import config as cfg
 from config import SITIOS, HORA_EJECUCION, NOTA_MIN_NOTIFICAR, NOTA_MIN_AGUARDAR, TOP_N_NOTIFICAR
 from db import BaseDatos
-from evaluator import evaluar, calcular_nota_oportunidad, pasa_filtros_estrictos
+from evaluator import evaluar, calcular_nota_oportunidad, pasa_filtros_estrictos, prioridad_modalidad
 from gemini_classifier import enriquecer_y_valorar_bici
 from notifier import enviar
 from scrapers.bike_ocasion import BikeOcasionScraper
@@ -216,13 +216,28 @@ def _recolectar_oportunidades(db: BaseDatos, forzar_envio: bool = False) -> list
                 else:
                     respaldo_conocidas.append((bici, nota, desglose))
 
-    # Ordenar las estrictas (< 21 kg) por nota descendente y menor peso
-    estrictas_nuevas.sort(key=lambda x: (x[1], -(x[0].peso_kg or 20.0)), reverse=True)
-    estrictas_conocidas.sort(key=lambda x: (x[1], -(x[0].peso_kg or 20.0)), reverse=True)
+    # Ordenar las estrictas (< 21 kg) priorizando:
+    #   1. Sin Línea Roja activa (km <= 6.000 y peso < 21.0 kg)
+    #   2. Modalidad: XC / Downcountry (3) > Light e-MTB (2) > Trail (1)
+    #   3. Mayor Nota de Oportunidad
+    #   4. Menor peso en kg
+    clave_orden_estrictas = lambda x: (
+        1 if ((x[0].km or 0) <= 6000 and (x[0].peso_kg or 20.0) < 21.0) else 0,
+        prioridad_modalidad(x[0]),
+        x[1],
+        -(x[0].peso_kg or 20.0),
+    )
+    estrictas_nuevas.sort(key=clave_orden_estrictas, reverse=True)
+    estrictas_conocidas.sort(key=clave_orden_estrictas, reverse=True)
 
-    # Ordenar respaldo por menor peso primero y mayor nota
-    respaldo_nuevas.sort(key=lambda x: (-(x[0].peso_kg or 25.0), x[1]), reverse=True)
-    respaldo_conocidas.sort(key=lambda x: (-(x[0].peso_kg or 25.0), x[1]), reverse=True)
+    # Ordenar respaldo priorizando XC, menor peso y mayor nota
+    clave_orden_respaldo = lambda x: (
+        prioridad_modalidad(x[0]),
+        -(x[0].peso_kg or 25.0),
+        x[1],
+    )
+    respaldo_nuevas.sort(key=clave_orden_respaldo, reverse=True)
+    respaldo_conocidas.sort(key=clave_orden_respaldo, reverse=True)
 
     seleccion = list(estrictas_nuevas)
     for pool in (estrictas_conocidas, respaldo_nuevas, respaldo_conocidas):

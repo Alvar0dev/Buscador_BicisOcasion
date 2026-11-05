@@ -55,22 +55,40 @@ CATALOGO_EMTB = [
         "modalidad": "XC / Downcountry",
     },
     {
-        "patrones": ["bh ilynx+ trail carbon", "ilynx+ trail carbon", "bh ilynx trail carbon", "ilynx trail carbon"],
+        "patrones": ["bh ilynx+ trail carbon", "ilynx+ trail carbon", "bh ilynx+ enduro", "ilynx+"],
+        "peso_kg": 20.4,
+        "bateria_wh_default": 540,
+        "motor": "Shimano EP801 (Sistema/Batería BH)",
+        "cuadro_material": "Carbono",
+        "suspension_trasera": "si",
+        "modalidad": "Trail",
+    },
+    {
+        "patrones": ["bh ilynx trail carbon", "ilynx trail carbon"],
         "peso_kg": 18.6,
         "bateria_wh_default": 540,
-        "motor": "Shimano EP801 / BH 2EXMAG",
+        "motor": "BH 2EXMAG",
         "cuadro_material": "Carbono",
         "suspension_trasera": "si",
         "modalidad": "Light e-MTB / Trail",
     },
     {
-        "patrones": ["bh ilynx trail", "bh ilynx race"],
+        "patrones": ["bh ilynx race"],
+        "peso_kg": 18.9,
+        "bateria_wh_default": 540,
+        "motor": "BH 2EXMAG",
+        "cuadro_material": "Aluminio",
+        "suspension_trasera": "si",
+        "modalidad": "XC / Downcountry",
+    },
+    {
+        "patrones": ["bh ilynx trail"],
         "peso_kg": 19.6,
         "bateria_wh_default": 540,
         "motor": "BH 2EXMAG",
         "cuadro_material": "Aluminio",
         "suspension_trasera": "si",
-        "modalidad": "Light e-MTB",
+        "modalidad": "Light e-MTB / Trail",
     },
     {
         "patrones": ["orbea rise m", "orbea rise m10", "orbea rise m20", "orbea rise m-team", "orbea rise m-ltd"],
@@ -446,6 +464,22 @@ def completar_con_catalogo(bici: Bicicleta, aplicar_heuristica_peso: bool = True
             if not bici.modalidad:
                 bici.modalidad = entrada["modalidad"]
             break
+
+    # Corrección de motor en bicicletas BH cuando la tienda confunde transmisión Shimano con el motor:
+    # - BH iLynx Race y BH iLynx Trail (sin '+') usan SIEMPRE motor propietario BH 2EXMAG.
+    # - BH iLynx+ (con '+') usa bloque Shimano EP801 integrado con batería/sistema propietario BH.
+    titulo_lower = bici.titulo.lower()
+    if ("bh " in titulo_lower or "ilynx" in titulo_lower) and "ilynx+" not in titulo_lower and "ilynx plus" not in titulo_lower:
+        if "ilynx" in titulo_lower and (not bici.motor or "shimano" in bici.motor.lower()):
+            bici.motor = "BH 2EXMAG"
+        elif "atomx" in titulo_lower and (not bici.motor or "shimano" in bici.motor.lower()):
+            bici.motor = "Brose S Mag"
+    elif "ilynx+" in titulo_lower or "ilynx plus" in titulo_lower:
+        bici.motor = "Shimano EP801 (Sistema/Batería BH)"
+        # Si tenía cacheado el peso de la iLynx normal (18.6 kg), corregir al peso real de la iLynx+ (20.4 kg, Fox 38 160mm)
+        if bici.peso_kg is not None and bici.peso_kg < 19.5:
+            bici.peso_kg = 20.4
+        bici.modalidad = "Trail (160mm)"
 
     # Inferencia adicional por heurística técnica si el modelo no está en la tabla exacta
     if not bici.cuadro_material:

@@ -303,6 +303,19 @@ def test_optimizacion_tarjetas_upway_y_buhobike():
     assert _extraer_cuadro("Salud de la batería evaluada en Cataluña") is None
     assert _extraer_peso("Peso estimado del producto + embalaje: 22,000 Kg. Peso máximo ciclista 120 kg. PESO 18,28Kg") == 18.28
 
+    # 4. Prioridad de modalidad (XC > Light e-MTB > Trail) y corrección de motor BH
+    from evaluator import prioridad_modalidad
+    b_xc = bici_prueba(titulo="BH iLynx Race Carbon Pro LT 7.8", modalidad="XC / Downcountry", motor="Shimano")
+    b_xc = completar_con_catalogo(b_xc)
+    assert b_xc.motor == "BH 2EXMAG", f"Motor BH iLynx Race mal corregido: {b_xc.motor}"
+
+    b_plus = bici_prueba(titulo="BH iLynx+ Trail Carbon 8.7 XT", modalidad="Trail", motor="Shimano")
+    b_plus = completar_con_catalogo(b_plus)
+    assert "Shimano EP801" in b_plus.motor and "BH" in b_plus.motor
+
+    b_light = bici_prueba(titulo="Orbea Rise H30", modalidad="Light e-MTB / Trail")
+    assert prioridad_modalidad(b_xc) > prioridad_modalidad(b_light) > prioridad_modalidad(b_plus)
+
 
 if __name__ == "__main__":
     test_pasa_filtros_valida()
