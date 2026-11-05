@@ -200,20 +200,20 @@ El proyecto está separado en módulos con responsabilidad única:
 
 | Archivo | Responsabilidad |
 |---------|-----------------|
-| `config.py` | Configuración central: URLs objetivo, filtros estrictos, credenciales Telegram, user-agents rotatorios, proxies (opcional), horario de ejecución. | Configuración central: URLs objetivo, filtros estrictos, credenciales Telegram, user-agents rotatorios, proxies (opcional), horario de ejecución. |
-| `models.py` | Dataclass `Bicicleta` con todos los campos necesarios para scoring y notificación. | Dataclass `Bicicleta` con todos los campos necesarios para scoring y notificación. |
-| `db.py` | Base de datos SQLite: registro de bicicletas ya enviadas, deduplicación por ID y detección de bajadas de precio para re-alerta. | Base de datos SQLite: registro de bicicletas ya enviadas, deduplicación por ID y detección de bajadas de precio para re-alerta. |
-| `evaluator.py` | Filtros estrictos (S1-S6) y algoritmo de Nota de Oportunidad 0-10 (S7, S8). | Filtros estrictos (S1-S6) y algoritmo de Nota de Oportunidad 0-10 (S7, S8). |
-| `notifier.py` | Notificador de Telegram vía `requests`, mensaje Markdown con todos los campos requeridos (S9). | Notificador de Telegram vía `requests`, mensaje Markdown con todos los campos requeridos (S9). |
-| `scraper_base.py` | Clase base con **motor Scrapling**: `Fetcher` (HTTP con impersonación TLS) → `StealthyFetcher` (navegador stealth con `solve_cloudflare`). Incluye reintentos, delays aleatorios, `ProxyRotator` opcional, health check y caché de fichas de detalle. | Clase base con **motor Scrapling**: `Fetcher` (HTTP con impersonación TLS) → `StealthyFetcher` (navegador stealth con `solve_cloudflare`). Incluye reintentos, delays aleatorios, `ProxyRotator` opcional, health check y caché de fichas de detalle. |
-| `scrapers/bike_ocasion.py` | Adaptador específico para Bike Ocasión (selectores reales inspeccionados con ego-browser, código listo). Extrae talla, batería, km, motor, suspensión, cuadro y componentes directamente de la tarjeta de listado. Paginación de 5 páginas. | Adaptador específico para Bike Ocasión (selectores reales inspeccionados con ego-browser, código listo). Extrae talla, batería, km, motor, suspensión, cuadro y componentes directamente de la tarjeta de listado. Paginación de 5 páginas. |
-
-| `scrapers/buhobike.py` | Adaptador específico para Buhobike (selectores reales inspeccionados con ego-browser, código listo). Cloudflare resuelto con `StealthyFetcher` (`solve_cloudflare=True`). | Adaptador específico para Buhobike (selectores reales inspeccionados con ego-browser, código listo). Cloudflare resuelto con `StealthyFetcher` (`solve_cloudflare=True`). |
-| `scrapers/upway.py` | Adaptador específico para Upway (selectores reales inspeccionados con ego-browser; scraping real probado y funcionando con Playwright/Scrapling). | Adaptador específico para Upway (selectores reales inspeccionados con ego-browser; scraping real probado y funcionando con Playwright/Scrapling). |
-| `scrapers/enriquecedor_web.py` | Enriquecedor web para completar campos faltantes (peso, año, suspensión, cuadro, componentes, modalidad) usando la ficha del producto del propio sitio (Scrapling) + DuckDuckGo como fallback. Incluye caché JSON en disco para no re-consultar URLs ya visitadas. | Enriquecedor web para completar campos faltantes (peso, año, suspensión, cuadro, componentes, modalidad) usando la ficha del producto del propio sitio (Scrapling) + DuckDuckGo como fallback. Incluye caché JSON en disco para no re-consultar URLs ya visitadas. |
-| `main.py` | Orquestador: scrape de los 4 sitios → **health check** → filtros → scoring → **enriquecimiento paralelo** → base de datos → Telegram. Logging a archivo `logs/buscador.log`. Bucle de programación diaria a las 12:00. | Orquestador: scrape de los 4 sitios → **health check** → filtros → scoring → **enriquecimiento paralelo** → base de datos → Telegram. Logging a archivo `logs/buscador.log`. Bucle de programación diaria a las 12:00. |
-| `test_buscador.py` | Pruebas RED/GREEN con datos simulados para validar scoring, filtros, dedup y formateo de mensaje. |
-| `CRON.md` | Instrucciones para ejecutar mediante cronjob en Linux/Mac. |
+| `config.py` | Configuración central: URLs objetivo optimizadas, filtros estrictos, credenciales Telegram/Gemini, user-agents rotatorios, proxies (opcional), horario de ejecución. |
+| `models.py` | Dataclass `Bicicleta` con todos los campos necesarios para scoring y notificación. |
+| `db.py` | Base de datos SQLite: registro de bicicletas ya enviadas, deduplicación por ID y detección de bajadas de precio para re-alerta. |
+| `evaluator.py` | Filtros estrictos (S1-S6), algoritmo de Nota de Oportunidad y ordenamiento por prioridad de modalidad (`prioridad_modalidad`: XC > Light e-MTB > Trail). |
+| `gemini_classifier.py` | Motor Perito Mecánico Senior (`auditar_perito_mecanico`), catálogo técnico de e-MTB, desambiguación de motores BH (BH 2EXMAG vs Shimano EP801) y clasificador híbrido con Gemini Flash + caché thread-safe. |
+| `notifier.py` | Notificador de Telegram vía `requests`, mensaje Markdown con todos los campos requeridos (S9). |
+| `scraper_base.py` | Clase base con **motor Scrapling**: `Fetcher` (HTTP con impersonación TLS) → `StealthyFetcher` (navegador stealth con `solve_cloudflare=True`), con `usar_stealth_directo` y salto inmediato ante bloqueos HTTP 403/503 de Cloudflare. |
+| `scrapers/bike_ocasion.py` | Adaptador específico para Bike Ocasión. Extrae título limpio (`h3.s_title_block a`), talla, batería, km, marca del motor (`Km / <Marca>`) y doble suspensión directamente de la tarjeta del listado. Paginación de hasta 6 páginas (180+ bicis). |
+| `scrapers/buhobike.py` | Adaptador específico para Buhobike con modo stealth directo (`usar_stealth_directo=True`), rastreo combinado de `/3230-electricas-trail-dobles?order=product.price.asc` y `/9448-segunda-mano-montana-electricas`, y extracción en tarjeta de título completo (`img.thumbnail-img[alt]`), talla (`#/...-talla-m`), año y km desde SKU (`KM5000`). |
+| `scrapers/upway.py` | Adaptador específico para Upway sobre `/collections/doble-suspension`. Extrae año, kilometraje (`\u202fkm` y `< 5 km`), talla (desde el rango de estatura `1mXX-1mYY`) y doble suspensión directamente de la tarjeta en `< 1s`. |
+| `scrapers/enriquecedor_web.py` | Enriquecedor web paralelo con caché JSON en disco (`cache/fichas_detalle.json`), extracción de pares `<dt>/<dd>`, limpieza de DOM y regex con bordes de palabra (`\b`) y filtrado de pesos con embalaje. |
+| `main.py` | Orquestador: scrape de los sitios → **health check** → pre-filtro → **enriquecimiento paralelo** → auditoría Perito Mecánico Senior → ordenamiento por Línea Roja y prioridad de modalidad → SQLite → Telegram (`--once` y `--forzar`). |
+| `test_buscador.py` | Suite de pruebas unitarias RED/GREEN con datos simulados para validar filtros, Perito Mecánico Senior, scrapers de tarjetas, prioridad de modalidades y dedup. |
+| `CRON.md` | Instrucciones para ejecutar mediante cronjob en Linux/Mac o Programador de tareas de Windows. |
 | `.env.example` | Plantilla de variables de entorno. |
 | `requirements.txt` | Dependencias de Python. |
 
@@ -489,19 +489,22 @@ El scraping real ya funciona en Bike Ocasión, Buhobike y Upway. Los próximos p
 
 | Componente | Estado |
 |------------|--------|
-| Lógica de filtros, scoring, dedup, Telegram | ✅ Verificado (tests GREEN) |
-| Selectores Bike Ocasión | ✅ Verificados en HTML real |
-| Selectores Buhobike | ✅ Verificados en HTML real |
-| Selectores Upway | ✅ Verificados + scraping real probado |
-| Scraping real Upway | ✅ 23 e-MTB doble suspensión extraídas en ~0.8s desde tarjeta (/collections/doble-suspension) |
-| Scraping real Buhobike | ✅ 34 bicis extraídas con usar_stealth_directo=True (/3230-electricas-trail-dobles?order=product.price.asc + /9448-segunda-mano-montana-electricas), 1 candidata estricta (< 21 kg) detectada |
-| Scraping real Bike Ocasión | ✅ Funciona con Scrapling Fetcher (153 bicis en 5 páginas, 0 pasan filtros S1-S8 hoy) |
-| Enriquecedor web (ficha del sitio + DuckDuckGo) | ✅ Implementado e integrado en main.py |
-| Caché de fichas de detalle | ✅ Implementado (cache/fichas_detalle.json) |
+| Lógica de filtros, Perito Mecánico Senior, dedup, Telegram | ✅ Verificado (tests GREEN) |
+| Prioridad de modalidad (XC > Light e-MTB > Trail) | ✅ Implementado (`prioridad_modalidad` en `evaluator.py` y `main.py`) |
+| Desambiguación de motores BH (BH 2EXMAG vs Shimano EP801) | ✅ Verificado (BH iLynx Race/Trail fijado a 2EXMAG, iLynx+ a EP801 + batería BH) |
+| Selectores Bike Ocasión | ✅ Verificados en HTML real (`h3.s_title_block a`, badge `Km / <Marca>`, 6 páginas, 180+ bicis) |
+| Selectores Buhobike | ✅ Verificados en HTML real (`usar_stealth_directo=True`, `#/...-talla-m`, SKU `KM5000`, `img.thumbnail-img[alt]`) |
+| Selectores Upway | ✅ Verificados en `/collections/doble-suspension` (extracción en tarjeta de año, km `\u202fkm` y talla desde `1mXX-1mYY` en ~0.8s) |
+| Scraping real Upway | ✅ 23 e-MTB doble suspensión extraídas en ~0.8s (sin fetch secuencial redundante) |
+| Scraping real Buhobike | ✅ 34 e-MTB extraídas en ~12s combinando trail-dobles y segunda mano, detectando candidatas < 21 kg |
+| Scraping real Bike Ocasión | ✅ 182 bicis en 6 páginas con Scrapling Fetcher |
+| Enriquecedor web (ficha del sitio + DuckDuckGo) | ✅ Paralelo (`ThreadPoolExecutor`), `<dt>/<dd>`, regex con `\b` y filtro anti-peso de embalaje |
+| Caché de fichas de detalle | ✅ Implementado (`cache/fichas_detalle.json`, thread-safe) |
 | Health check de scrapers | ✅ Implementado (alerta por log y Telegram) |
-| Logging a archivo | ✅ Implementado (logs/buscador.log) |
-| Proxies rotatorios (ProxyRotator) | ✅ Implementado (configurable vía PROXY_LIST) |
-| Paginación | ✅ Implementada (Bike Ocasión: 5 páginas, 153 bicis) |
+| Automatización diaria Windows 12:00 | ✅ Tarea programada `BuscadorBiciOcasion` (`main.py --once` con `StartWhenAvailable`) |
+| Logging a archivo | ✅ Implementado (`logs/buscador.log`) |
+| Proxies rotatorios (ProxyRotator) | ✅ Implementado (configurable vía `PROXY_LIST`) |
+| Paginación | ✅ Implementada (Bike Ocasión: 6 páginas, 180+ bicis) |
 
 ---
 
