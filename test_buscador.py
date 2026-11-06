@@ -165,7 +165,7 @@ def test_dedup_sqlite():
 
 
 def test_formateo_mensaje_telegram():
-    """S9: mensaje incluye todos los campos requeridos."""
+    """S9: mensaje incluye todos los campos requeridos y alerta de bajada de precio."""
     b = bici_prueba()
     mensaje = formatear_mensaje(b, 8.5, "Kilometraje: Km bajos | Calidad-precio: cuadro carbono")
     assert "e-MTB XC Carbono Shimano EP8" in mensaje
@@ -174,6 +174,14 @@ def test_formateo_mensaje_telegram():
     assert "540 Wh" in mensaje
     assert "Carbono" in mensaje
     assert "Enlace directo de compra" in mensaje
+
+    # Caso bajada de precio detectada
+    b_rebajada = bici_prueba(precio=2200.0)
+    msg_rebajada = formatear_mensaje(b_rebajada, 9.0, "Rebaja notable", precio_anterior=2500.0)
+    assert "BAJADA DE PRECIO" in msg_rebajada
+    assert "2200" in msg_rebajada
+    assert "2500" in msg_rebajada
+    assert "-300" in msg_rebajada
 
 
 def test_extraccion_titulo_sin_dto_y_suspension_rigidez():

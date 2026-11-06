@@ -271,7 +271,7 @@ def ejecutar_busqueda(forzar_envio: bool = False) -> None:
     total_notificadas = 0
     for bici, nota, desglose in a_notificar:
         precio_anterior = db.precio_previo(bici.bici_id)
-        if enviar(bici, nota, desglose):
+        if enviar(bici, nota, desglose, precio_anterior=precio_anterior):
             db.registrar(bici, nota, precio_anterior=precio_anterior)
             total_notificadas += 1
             logger.info(f"  NOTIFICADA: {bici.titulo} ({bici.peso_kg} kg) - Nota {nota}/10")

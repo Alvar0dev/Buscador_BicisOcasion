@@ -9,7 +9,7 @@ from typing import Optional
 
 @dataclass
 class Bicicleta:
-    sitio: str               # Nombre del sitio (ej. "Tuvalum")
+    sitio: str               # Nombre del sitio (ej. "Bike Ocasión")
     bici_id: str             # ID único de la bici en el sitio (para dedup)
     titulo: str              # Título / nombre comercial
     precio: float            # Precio en euros

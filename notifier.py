@@ -4,15 +4,18 @@ Notificador de Telegram vía requests (S9).
 Envía mensaje formateado en Markdown con la ficha de la bicicleta.
 """
 
+from typing import Optional
 import requests
 import config as cfg
 
 
-def formatear_mensaje(bici, nota: float, desglose: str) -> str:
+def formatear_mensaje(
+    bici, nota: float, desglose: str, precio_anterior: Optional[float] = None
+) -> str:
     """
     Construye el mensaje Markdown para Telegram (S9).
-    Incluye: título, precio, nota destacada 🔥, kilómetros, batería, cuadro,
-    desglose de la nota y enlace directo.
+    Incluye: título, precio (con alerta de bajada si aplica), nota destacada 🔥,
+    kilómetros, batería, cuadro, desglose de la nota y enlace directo.
     """
     km = bici.km if bici.km is not None else "no indicado"
     bateria = f"{bici.bateria_wh} Wh" if bici.bateria_wh else "no indicado"
@@ -34,11 +37,20 @@ def formatear_mensaje(bici, nota: float, desglose: str) -> str:
         .replace("`", "'")
     )
 
+    es_bajada = precio_anterior is not None and bici.precio < precio_anterior
+    if es_bajada:
+        ahorro = precio_anterior - bici.precio
+        linea_precio = f"💰 Precio: *{bici.precio:.0f} €* (Antes: ~{precio_anterior:.0f} €~ | 📉 Ahorro: *-{ahorro:.0f} €*)"
+        cabecera = "📉 *¡BAJADA DE PRECIO DETECTADA! Oportunidad e-MTB*"
+    else:
+        linea_precio = f"💰 Precio: *{bici.precio} €*"
+        cabecera = "🚵‍♂️ *Nueva oportunidad de e-MTB encontrada*"
+
     mensaje = (
-        f"🚵‍♂️ *Nueva oportunidad de e-MTB encontrada*\n\n"
+        f"{cabecera}\n\n"
         f"*{bici.titulo}*\n"
         f"🏪 Tienda: {bici.sitio}\n"
-        f"💰 Precio: *{bici.precio} €*\n"
+        f"{linea_precio}\n"
         f"🔥 Nota de Oportunidad: *{nota}/10*\n\n"
         f"📏 Talla: {talla}\n"
         f"⚙️ Modalidad: {modalidad}\n"
@@ -55,7 +67,7 @@ def formatear_mensaje(bici, nota: float, desglose: str) -> str:
     return mensaje
 
 
-def enviar(bici, nota: float, desglose: str) -> bool:
+def enviar(bici, nota: float, desglose: str, precio_anterior: Optional[float] = None) -> bool:
     """
     Envía el mensaje a Telegram. Devuelve True si tuvo éxito.
     Maneja excepciones de red para no caer la ejecución diaria (S13).
@@ -65,7 +77,7 @@ def enviar(bici, nota: float, desglose: str) -> bool:
         return False
 
     url = cfg.TELEGRAM_API_URL.format(token=cfg.TELEGRAM_BOT_TOKEN)
-    texto = formatear_mensaje(bici, nota, desglose)
+    texto = formatear_mensaje(bici, nota, desglose, precio_anterior=precio_anterior)
     payload = {
         "chat_id": cfg.TELEGRAM_CHAT_ID,
         "text": texto,

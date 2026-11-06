@@ -427,29 +427,26 @@ Scraping real probado exitosamente con Playwright (23 productos extraídos con t
 
 | Sitio | Estado | Bicis extraídas |
 |-------|--------|-----------------|
-| Bike Ocasión | ✅ Funciona con Scrapling Fetcher | 153 (5 páginas) |
-| Buhobike | ✅ Funciona con Scrapling StealthyFetcher | 32 |
-| Upway | ✅ Funciona con Scrapling Fetcher | 23 |
+| Bike Ocasión | ✅ Funciona con Scrapling Fetcher | 182 (6 páginas) |
+| Buhobike | ✅ Funciona con Scrapling StealthyFetcher (`usar_stealth_directo=True`) | 34 (dobles + segunda mano) |
+| Upway | ✅ Funciona con Scrapling Fetcher (en tarjeta ~0.8s) | 23 (/collections/doble-suspension) |
 
 ---
 
-## Por dónde vamos
+## Estado operativo actual
 
-El scraping real ya funciona en Bike Ocasión, Buhobike y Upway. Los próximos pasos inmediatos son:
+El sistema se encuentra en **producción activa y 100% automatizado**:
+- **Scrapers en producción**: Bike Ocasión (6 páginas, 180+ bicis), Buhobike (dobles ordenadas por precio + segunda mano) y Upway (`/collections/doble-suspension` en 0.8s).
+- **Notificaciones automáticas**: Integradas con Telegram en formato Markdown, informando la Nota Pericial en 5 ejes, desglose aritmético y alertas destacadas de bajada de precio.
+- **Automatización**: Tarea programada en Windows Task Scheduler (`BuscadorBiciOcasion`) a las 12:00 de cada día (`main.py --once` con `StartWhenAvailable`).
 
-1. **Configurar `.env`** con `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` para recibir notificaciones por Telegram.
-2. **Probar envío de Telegram** con una bici simulada.
-3. **Automatizar con `main.py` o cron** según `CRON.md`.
-4. **Configurar proxies rotatorios** (`PROXY_LIST` en `.env`) si algún sitio bloquea por IP.
+## Próximos pasos y Roadmap
 
-## Qué falta hacer
-
-| # | Tarea | Por qué falta |
-|---|-------|---------------|
-| 1 | **Configurar `.env`** con `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` | Necesario para recibir notificaciones por Telegram. |
-| 2 | **Probar envío de Telegram** con una bici simulada | Confirmar que el mensaje Markdown llega bien a tu chat. |
-| 3 | **Automatizar con `main.py` o cron** | Dejarlo corriendo todos los días a las 12:30. |
-| 4 | **Configurar proxies** (`PROXY_LIST`) si un sitio bloquea por IP | Para sitios con Cloudflare muy agresivo que no responden ni con Fetcher ni con StealthyFetcher. |
+| # | Tarea | Detalle |
+|---|-------|---------|
+| 1 | **Calibración continua de scoring** | Ajustar umbrales o penalizaciones de la auditoría pericial según los hallazgos en las ejecuciones diarias. |
+| 2 | **Alertas de bajada de precio con historial visual** | Notificación explícita con cálculo de ahorro cuando una bicicleta previamente enviada baja de precio. |
+| 3 | **Nuevos portales profesionales certificados** | Evaluación de nuevas plataformas de reacondicionado profesional con garantía mecánica oficial (excluyendo trato entre particulares). |
 
 ---
 
