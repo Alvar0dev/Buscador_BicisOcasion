@@ -123,6 +123,30 @@ def _enviar_alerta_telegram(texto: str) -> None:
         logger.error(f"[Alerta Telegram] Error enviando alerta: {e}")
 
 
+def clave_orden_estrictas(item: tuple) -> tuple:
+    """
+    Clave de ordenación para bicicletas que superan los filtros estrictos (< 21 kg):
+      1. Salud mecánica: nota >= 6.0 y km <= 4.000 (las bicis mecánicamente sanas
+         siempre van antes que bicis con desgaste severo de > 4.000 km).
+      2. Sin Línea Roja activa (km <= 6.000 y peso < 21.0 kg).
+      3. Prioridad de modalidad: XC / Downcountry (3) > Light e-MTB (2) > Trail (1).
+      4. Mayor Nota de Oportunidad del Perito Mecánico.
+      5. Menor peso en kg.
+    """
+    bici, nota = item[0], item[1]
+    km = bici.km or 0
+    peso = bici.peso_kg or 20.0
+    salud_mecanica = 1 if (nota >= 6.0 and km <= 4000) else 0
+    sin_linea_roja = 1 if (km <= 6000 and peso < 21.0) else 0
+    return (
+        salud_mecanica,
+        sin_linea_roja,
+        prioridad_modalidad(bici),
+        nota,
+        -peso,
+    )
+
+
 def _recolectar_oportunidades(db: BaseDatos, forzar_envio: bool = False) -> list:
     """
     Recorre los sitios objetivo en una sola pasada (con health check integrado),
@@ -217,16 +241,12 @@ def _recolectar_oportunidades(db: BaseDatos, forzar_envio: bool = False) -> list
                     respaldo_conocidas.append((bici, nota, desglose))
 
     # Ordenar las estrictas (< 21 kg) priorizando:
-    #   1. Sin Línea Roja activa (km <= 6.000 y peso < 21.0 kg)
-    #   2. Modalidad: XC / Downcountry (3) > Light e-MTB (2) > Trail (1)
-    #   3. Mayor Nota de Oportunidad
-    #   4. Menor peso en kg
-    clave_orden_estrictas = lambda x: (
-        1 if ((x[0].km or 0) <= 6000 and (x[0].peso_kg or 20.0) < 21.0) else 0,
-        prioridad_modalidad(x[0]),
-        x[1],
-        -(x[0].peso_kg or 20.0),
-    )
+    #   1. Salud mecánica: nota >= 6.0 y km <= 4.000 (evita que una XC muy castigada
+    #      con 5.000 km y nota 3.5/10 supere a bicis sanas de < 2.000 km con 6.5-7.5/10)
+    #   2. Sin Línea Roja activa (km <= 6.000 y peso < 21.0 kg)
+    #   3. Modalidad: XC / Downcountry (3) > Light e-MTB (2) > Trail (1)
+    #   4. Mayor Nota de Oportunidad
+    #   5. Menor peso en kg
     estrictas_nuevas.sort(key=clave_orden_estrictas, reverse=True)
     estrictas_conocidas.sort(key=clave_orden_estrictas, reverse=True)
 
@@ -263,9 +283,10 @@ def ejecutar_busqueda(forzar_envio: bool = False) -> None:
 
     # Seleccionar el Top N (por defecto las 3 más interesantes)
     a_notificar = oportunidades[:TOP_N_NOTIFICAR]
+    mejor_nota = max(x[1] for x in a_notificar)
     logger.info(
         f"[main] Seleccionadas las {len(a_notificar)} bicicletas más interesantes "
-        f"(mejor nota: {a_notificar[0][1]}/10)."
+        f"(mejor nota: {mejor_nota}/10)."
     )
 
     total_notificadas = 0

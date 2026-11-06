@@ -324,6 +324,45 @@ def test_optimizacion_tarjetas_upway_y_buhobike():
     b_light = bici_prueba(titulo="Orbea Rise H30", modalidad="Light e-MTB / Trail")
     assert prioridad_modalidad(b_xc) > prioridad_modalidad(b_light) > prioridad_modalidad(b_plus)
 
+    # 5. Ordenación en main.clave_orden_estrictas:
+    #    - Bicis sanas (nota >= 6.0 y km <= 4.000) siempre superan a una XC muy desgastada (5.000 km, 3.5/10).
+    #    - A igualdad de salud mecánica, XC supera a Light e-MTB y Trail.
+    from main import clave_orden_estrictas
+    item_xc_sana = (
+        bici_prueba(titulo="BH iLynx Race Carbon Pro LT 7.8", km=1200, peso_kg=16.8, modalidad="XC / Downcountry"),
+        7.0,
+        "Sana XC",
+    )
+    item_light_sana = (
+        bici_prueba(titulo="Orbea Rise H30", km=1242, peso_kg=20.3, modalidad="Light e-MTB / Trail"),
+        7.5,
+        "Sana Light",
+    )
+    item_trail_sana = (
+        bici_prueba(titulo="BH iLynx+ Trail Carbon 8.7 XT", km=1193, peso_kg=20.4, modalidad="Trail (160mm)"),
+        6.5,
+        "Sana Trail",
+    )
+    item_xc_gastada = (
+        bici_prueba(titulo="BH ILYNX RACE CARBON LT 7.6", km=5000, peso_kg=18.28, modalidad="XC / Downcountry"),
+        3.5,
+        "Gastada 5000 km",
+    )
+    item_xc_linea_roja = (
+        bici_prueba(titulo="BH iLynx Race Carbon 8.4 LT", km=8407, peso_kg=16.8, modalidad="XC / Downcountry"),
+        2.5,
+        "Línea Roja >6000 km",
+    )
+    lista_items = [item_xc_linea_roja, item_xc_gastada, item_trail_sana, item_light_sana, item_xc_sana]
+    lista_items.sort(key=clave_orden_estrictas, reverse=True)
+    assert [x[0].titulo for x in lista_items] == [
+        "BH iLynx Race Carbon Pro LT 7.8",
+        "Orbea Rise H30",
+        "BH iLynx+ Trail Carbon 8.7 XT",
+        "BH ILYNX RACE CARBON LT 7.6",
+        "BH iLynx Race Carbon 8.4 LT",
+    ]
+
 
 if __name__ == "__main__":
     test_pasa_filtros_valida()

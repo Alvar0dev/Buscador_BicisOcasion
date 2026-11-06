@@ -22,6 +22,7 @@ class BuhobikeScraper(BaseScraper):
 
     URLS_ADICIONALES: List[str] = [
         "https://www.buhobike.com/9448-segunda-mano-montana-electricas",
+        "https://www.buhobike.com/3225-segunda-mano-electricas",
     ]
 
     def extraer_bicicletas(self) -> List[Bicicleta]:
@@ -105,7 +106,15 @@ class BuhobikeScraper(BaseScraper):
                 sku = sku_el.get("content", "") if sku_el else ""
                 km = self._extraer_km_tarjeta(sku, url, url_listado)
 
-                es_doble = (
+                es_no_mtb_doble = any(
+                    k in url.lower() or k in titulo.lower()
+                    for k in [
+                        "carretera", "gravel", "gravelx", "urbana", "paseo",
+                        "trekking", "plegable", "rigida", "rígida", "montaa-rgidas",
+                        "gain", "e-sensium", "esensium", "keram", "marlin+",
+                    ]
+                )
+                es_doble = not es_no_mtb_doble and (
                     "trail-dobles" in url.lower()
                     or "trail-dobles" in url_listado.lower()
                     or "doble-suspension" in url.lower()
@@ -121,7 +130,7 @@ class BuhobikeScraper(BaseScraper):
                     talla=talla,
                     ano=ano,
                     km=km,
-                    suspension_trasera="si" if es_doble else None,
+                    suspension_trasera="no" if es_no_mtb_doble else ("si" if es_doble else None),
                     garantia_anos=self.sitio.garantia_anos,
                 ))
             except Exception as e:
