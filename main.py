@@ -26,6 +26,7 @@ from notifier import enviar
 from scrapers.bike_ocasion import BikeOcasionScraper
 from scrapers.buhobike import BuhobikeScraper
 from scrapers.upway import UpwayScraper
+from scrapers.mammoth import MammothScraper
 from scrapers.enriquecedor_web import enriquecer_bici
 
 # Mapa sitio -> clase scraper
@@ -33,6 +34,7 @@ SCRAPERS = {
     "Bike Ocasión": BikeOcasionScraper,
     "Buhobike": BuhobikeScraper,
     "Upway": UpwayScraper,
+    "Mammoth": MammothScraper,
 }
 
 # ---------------------------------------------------------------------------

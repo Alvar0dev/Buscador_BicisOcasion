@@ -26,11 +26,12 @@ Cuando encuentra una bicicleta con **Nota de Oportunidad ≥ 8.0/10**, la notifi
 
 ## ¿Qué hace este proyecto?
 
-Este script rastrea diariamente las secciones de e-MTB doble suspensión de tres tiendas profesionales de reacondicionado de bicicletas:
+Este script rastrea diariamente las secciones de e-MTB doble suspensión de cuatro tiendas profesionales de bicicletas con garantía oficial:
 
 - **Bike Ocasión** (bike-ocasion.com)
 - **Buhobike** (buhobike.com)
 - **Upway** (upway.es)
+- **Mammoth Bikes** (mammothbikes.com)
 
 Para cada bicicleta encontrada aplica una serie de filtros estrictos y, si pasa, le asigna una **Nota de Oportunidad del 0 al 10**. Solo las bicicletas con nota **≥ 8.0** se guardan en una base de datos local SQLite y se envían por Telegram para evitar alertas duplicadas (salvo que bajen de precio).
 
@@ -189,6 +190,7 @@ El scraper está limitado **únicamente** a tiendas profesionales de reacondicio
 - bike-ocasion.com
 - buhobike.com
 - upway.es
+- mammothbikes.com
 
 **Bajo ningún concepto se incluye código para rastrear plataformas de trato entre particulares** como Wallapop, Milanuncios o foros, ya que no ofrecen garantía mecánica certificada.
 
@@ -210,8 +212,9 @@ El proyecto está separado en módulos con responsabilidad única:
 | `scrapers/bike_ocasion.py` | Adaptador específico para Bike Ocasión. Extrae título limpio (`h3.s_title_block a`), talla, batería, km, marca del motor (`Km / <Marca>`) y doble suspensión directamente de la tarjeta del listado. Paginación de hasta 6 páginas (180+ bicis). |
 | `scrapers/buhobike.py` | Adaptador específico para Buhobike con modo stealth directo (`usar_stealth_directo=True`), rastreo combinado de `/3230-electricas-trail-dobles?order=product.price.asc` y `/9448-segunda-mano-montana-electricas`, y extracción en tarjeta de título completo (`img.thumbnail-img[alt]`), talla (`#/...-talla-m`), año y km desde SKU (`KM5000`). |
 | `scrapers/upway.py` | Adaptador específico para Upway sobre `/collections/doble-suspension`. Extrae año, kilometraje (`\u202fkm` y `< 5 km`), talla (desde el rango de estatura `1mXX-1mYY`) y doble suspensión directamente de la tarjeta en `< 1s`. |
+| `scrapers/mammoth.py` | Adaptador específico para Mammoth Bikes sobre `/bicicletas-electricas-mtb-dobles-rally-xc/c-3104` y `/bicicletas-electricas-mtb-trail-all-mountain-dobles/c-2139`. Extrae precio, tallas en stock (`M`), modalidad XC, año y filtro anti-rígidas directamente de `div.card-content` en `~2.5s`. |
 | `scrapers/enriquecedor_web.py` | Enriquecedor web paralelo con caché JSON en disco (`cache/fichas_detalle.json`), extracción de pares `<dt>/<dd>`, limpieza de DOM y regex con bordes de palabra (`\b`) y filtrado de pesos con embalaje. |
-| `main.py` | Orquestador: scrape de los sitios → **health check** → pre-filtro → **enriquecimiento paralelo** → auditoría Perito Mecánico Senior → ordenamiento por Línea Roja y prioridad de modalidad → SQLite → Telegram (`--once` y `--forzar`). |
+| `main.py` | Orquestador: scrape de los sitios → **health check** → pre-filtro → **enriquecimiento paralelo** → auditoría Perito Mecánico Senior → ordenamiento por salud mecánica (`nota >= 6.0` y `km <= 4.000`), Línea Roja y prioridad de modalidad (`XC > Light e-MTB > Trail`) → SQLite → Telegram (`--once` y `--forzar`). |
 | `test_buscador.py` | Suite de pruebas unitarias RED/GREEN con datos simulados para validar filtros, Perito Mecánico Senior, scrapers de tarjetas, prioridad de modalidades y dedup. |
 | `CRON.md` | Instrucciones para ejecutar mediante cronjob en Linux/Mac o Programador de tareas de Windows. |
 | `.env.example` | Plantilla de variables de entorno. |
@@ -428,25 +431,27 @@ Scraping real probado exitosamente con Playwright (23 productos extraídos con t
 | Sitio | Estado | Bicis extraídas |
 |-------|--------|-----------------|
 | Bike Ocasión | ✅ Funciona con Scrapling Fetcher | 182 (6 páginas) |
-| Buhobike | ✅ Funciona con Scrapling StealthyFetcher (`usar_stealth_directo=True`) | 34 (dobles + segunda mano) |
+| Buhobike | ✅ Funciona con Scrapling StealthyFetcher (`usar_stealth_directo=True`) | 48 (dobles + segunda mano) |
 | Upway | ✅ Funciona con Scrapling Fetcher (en tarjeta ~0.8s) | 23 (/collections/doble-suspension) |
+| Mammoth Bikes | ✅ Funciona con Scrapling Fetcher (en tarjeta ~2.6s) | 65 (Rally/XC dobles + Trail dobles) |
 
 ---
 
 ## Estado operativo actual
 
 El sistema se encuentra en **producción activa y 100% automatizado**:
-- **Scrapers en producción**: Bike Ocasión (6 páginas, 180+ bicis), Buhobike (dobles ordenadas por precio + segunda mano) y Upway (`/collections/doble-suspension` en 0.8s).
-- **Notificaciones automáticas**: Integradas con Telegram en formato Markdown, informando la Nota Pericial en 5 ejes, desglose aritmético y alertas destacadas de bajada de precio.
+- **Scrapers en producción**: Bike Ocasión (6 páginas, 180+ bicis), Buhobike (dobles ordenadas por precio + segunda mano), Upway (`/collections/doble-suspension` en 0.8s) y Mammoth Bikes (`c-3104` Rally/XC + `c-2139` Trail dobles en ~2.6s).
+- **Ordenamiento calibrado (`clave_orden_estrictas`)**: Prioriza primero la salud mecánica (`nota >= 6.0` y `km <= 4.000`), después ausencia de Línea Roja, luego modalidad (`XC / Downcountry` > `Light e-MTB` > `Trail`), mayor nota pericial y menor peso.
+- **Notificaciones automáticas**: Integradas con Telegram en formato Markdown, informando la Nota Pericial en 5 ejes, desglose aritmético y alertas destacadas de bajada de precio (`📉 ¡BAJADA DE PRECIO DETECTADA!`).
 - **Automatización**: Tarea programada en Windows Task Scheduler (`BuscadorBiciOcasion`) a las 12:00 de cada día (`main.py --once` con `StartWhenAvailable`).
 
 ## Próximos pasos y Roadmap
 
-| # | Tarea | Detalle |
-|---|-------|---------|
-| 1 | **Calibración continua de scoring** | Ajustar umbrales o penalizaciones de la auditoría pericial según los hallazgos en las ejecuciones diarias. |
-| 2 | **Alertas de bajada de precio con historial visual** | Notificación explícita con cálculo de ahorro cuando una bicicleta previamente enviada baja de precio. |
-| 3 | **Nuevos portales profesionales certificados** | Evaluación de nuevas plataformas de reacondicionado profesional con garantía mecánica oficial (excluyendo trato entre particulares). |
+| # | Tarea | Estado | Detalle |
+|---|-------|--------|---------|
+| 1 | **Calibración continua de scoring y ordenamiento** | ✅ Completado | Priorización de salud mecánica (`nota >= 6.0`, `km <= 4.000`) antes que modalidad XC para evitar que unidades muy castigadas (> 4.000 km) encabecen el Top 3. |
+| 2 | **Alertas de bajada de precio con historial visual** | ✅ Completado | Notificación explícita con cálculo de ahorro en euros cuando una bicicleta previamente registrada baja de precio. |
+| 3 | **Nuevos portales profesionales certificados** | ✅ Completado | Integrado `MammothScraper` (`mammothbikes.com`, categorías Rally/XC y Trail doble suspensión con 3 años de garantía oficial) tras descartar definitivamente Tuvalum. |
 
 ---
 

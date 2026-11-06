@@ -44,6 +44,12 @@ SITIOS: List[SitioObjetivo] = [
         base_url="https://upway.es",
         seccion_emtb="https://upway.es/collections/doble-suspension",
     ),
+    SitioObjetivo(
+        nombre="Mammoth",
+        base_url="https://www.mammothbikes.com",
+        seccion_emtb="https://www.mammothbikes.com/bicicletas-electricas-mtb-dobles-rally-xc/c-3104",
+        garantia_anos=3,
+    ),
 ]
 
 

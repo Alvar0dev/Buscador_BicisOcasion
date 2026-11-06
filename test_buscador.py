@@ -363,6 +363,45 @@ def test_optimizacion_tarjetas_upway_y_buhobike():
         "BH iLynx Race Carbon 8.4 LT",
     ]
 
+    # 6. Mammoth Bikes: extracción de tarjeta con tallas en stock, limpieza de título y filtro anti-rígidas
+    from scrapers.mammoth import MammothScraper
+    html_mammoth = """
+    <div>
+      <div class="card-content">
+        <a href="/bicicleta-scott-bike-lumen-910/p-592251">
+          <div class="card-product-name"><strong>scott bike</strong> bicicleta scott bike lumen 910</div>
+          <div class="card-product-price"><span class="price is__full">2.999,00 €</span></div>
+          <div class="card--product-sizes form-sizes-group">
+            <ul><li><label>M</label></li><li><label>L</label></li></ul>
+          </div>
+        </a>
+      </div>
+      <div class="card-content">
+        <a href="/ebike-trek-marlin-8/p-592715">
+          <div class="card-product-name"><strong>trek</strong> ebike trek marlin+ 8</div>
+          <div class="card-product-price"><span class="price is__discount">2.244,68 €</span></div>
+          <div class="card--product-sizes form-sizes-group">
+            <ul><li><label>S</label></li><li><label>L</label></li></ul>
+          </div>
+        </a>
+      </div>
+    </div>
+    """
+    mammoth_scraper = MammothScraper(cfg.SITIOS[3])
+    bicis_mammoth = mammoth_scraper._extraer_de_sopa(
+        BeautifulSoup(html_mammoth, "html.parser"),
+        url_listado="https://www.mammothbikes.com/bicicletas-electricas-mtb-dobles-rally-xc/c-3104",
+    )
+    assert len(bicis_mammoth) == 2
+    assert bicis_mammoth[0].titulo == "Scott Lumen 910"
+    assert bicis_mammoth[0].precio == 2999.0
+    assert bicis_mammoth[0].talla == "M"
+    assert bicis_mammoth[0].modalidad == "XC / Downcountry"
+    assert bicis_mammoth[0].suspension_trasera == "si"
+    assert bicis_mammoth[0].km == 0
+    assert bicis_mammoth[1].talla == "S"
+    assert bicis_mammoth[1].suspension_trasera == "no"
+
 
 if __name__ == "__main__":
     test_pasa_filtros_valida()

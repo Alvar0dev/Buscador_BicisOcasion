@@ -21,7 +21,7 @@ Guidelines and protocols for AI agents working on this workspace.
 - **Remote**: `https://github.com/Alvar0dev/Buscador_BicisOcasion.git`
 - **Tests**: `python test_buscador.py`
 - **Architecture**:
-  - Scrapers: `scraper_base.py`, `scrapers/bike_ocasion.py`, `scrapers/buhobike.py`, `scrapers/upway.py`
+  - Scrapers: `scraper_base.py`, `scrapers/bike_ocasion.py`, `scrapers/buhobike.py`, `scrapers/upway.py`, `scrapers/mammoth.py`
   - Scoring & Evaluation: `evaluator.py`, `gemini_classifier.py`
   - Orchestration: `main.py`
   - Notifications: `notifier.py` (Telegram bot credentials in `.env`)
