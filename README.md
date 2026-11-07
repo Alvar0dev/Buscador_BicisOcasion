@@ -442,6 +442,7 @@ Scraping real probado exitosamente con Playwright (23 productos extraídos con t
 El sistema se encuentra en **producción activa y 100% automatizado**:
 - **Scrapers en producción**: Bike Ocasión (6 páginas, 180+ bicis), Buhobike (dobles ordenadas por precio + segunda mano), Upway (`/collections/doble-suspension` en 0.8s) y Mammoth Bikes (`c-3104` Rally/XC + `c-2139` Trail dobles en ~2.6s).
 - **Ordenamiento calibrado (`clave_orden_estrictas`)**: Prioriza primero la salud mecánica (`nota >= 6.0` y `km <= 4.000`), después ausencia de Línea Roja, luego modalidad (`XC / Downcountry` > `Light e-MTB` > `Trail`), mayor nota pericial y menor peso.
+- **Extracción de odómetro híbrida (Regex + Visión IA)**: Filtro estricto de contexto negativo en texto (bloquea menciones de cadena, cera o garantía) + inspección visual de la galería con Gemini Vision para cuentakilómetros fotografiados.
 - **Notificaciones automáticas**: Integradas con Telegram en formato Markdown, informando la Nota Pericial en 5 ejes, desglose aritmético y alertas destacadas de bajada de precio (`📉 ¡BAJADA DE PRECIO DETECTADA!`).
 - **Automatización**: Tarea programada en Windows Task Scheduler (`BuscadorBiciOcasion`) a las 12:00 de cada día (`main.py --once` con `StartWhenAvailable`).
 
@@ -452,33 +453,37 @@ El sistema se encuentra en **producción activa y 100% automatizado**:
 | 1 | **Calibración continua de scoring y ordenamiento** | ✅ Completado | Priorización de salud mecánica (`nota >= 6.0`, `km <= 4.000`) antes que modalidad XC para evitar que unidades muy castigadas (> 4.000 km) encabecen el Top 3. |
 | 2 | **Alertas de bajada de precio con historial visual** | ✅ Completado | Notificación explícita con cálculo de ahorro en euros cuando una bicicleta previamente registrada baja de precio. |
 | 3 | **Nuevos portales profesionales certificados** | ✅ Completado | Integrado `MammothScraper` (`mammothbikes.com`, categorías Rally/XC y Trail doble suspensión con 3 años de garantía oficial) tras descartar definitivamente Tuvalum. |
+| 4 | **Detección multimodal de odómetros y filtro anti-falsos positivos** | ✅ Completado | Extracción con Gemini Vision de displays en fotos de segunda mano y bloqueo de texto de lubricación/cadena. |
+| 5 | **Despertar automático en Task Scheduler (`WakeToRun`)** | 🔲 Pendiente | Configurar `WakeToRun: True` en Windows Task Scheduler para evitar ejecuciones perdidas por suspensión del PC. |
+| 6 | **Detección de Range Extender en descripción** | 🔲 Pendiente | Bonificar en batería (+180 Wh / +252 Wh) y nota cuando la oferta incluya batería externa (ej. Orbea Rise o BH iLynx). |
 
 ---
 
 ## Proceso de desarrollo y dificultades encontradas
 
-### Qué se hizo en esta sesión (mejoras de scraping con Scrapling)
+### Qué se hizo en las últimas sesiones (Scrapling, Mammoth y Visión IA)
 
 1. **Integración de Scrapling** (`https://github.com/D4Vinci/Scrapling`) como motor principal de scraping, reemplazando las 3 capas separadas (`curl_cffi` → `requests` → `Playwright`).
    - Capa 1: `Fetcher` (HTTP con impersonación TLS de Chrome) — rápido.
    - Capa 2: `StealthyFetcher` con `solve_cloudflare=True` — para Cloudflare/JS pesado (resuelve Buhobike 503).
 2. **`scraper_base.py` reescrito**: usa Scrapling, incluye `_espera_cortesa()` (delays aleatorios), `ProxyRotator` opcional (vía `PROXY_LIST` en `.env`), paginación (`extraer_bicicletas_paginado`) y conversión segura de `TextHandler` a string para BeautifulSoup.
-3. **`bike_ocasion.py` optimizado**: extrae talla, batería, km, motor, suspensión, cuadro y componentes directamente de la tarjeta de listado (sin visitar ficha de detalle). Paginación de 5 páginas → 153 bicicletas en 28.2s.
-4. **`enriquecedor_web.py` reescrito**: usa ficha del producto del propio sitio (Scrapling) como fuente principal y DuckDuckGo como fallback. Incluye caché JSON en disco (`cache/fichas_detalle.json`) para no re-consultar URLs ya visitadas.
-5. **`main.py` mejorado**: agregó `_health_check_scrapers()` (alerta por log y Telegram si un scraper devuelve 0 productos), enriquecimiento paralelo con `ThreadPoolExecutor` (3 workers), logging a archivo `logs/buscador.log` + consola.
-6. **Tests**: `test_buscador.py` pasa GREEN con todos los cambios.
-7. **`config.py`**: agregó configuración de proxies (`PROXY_LIST`, `PROXY_ROTATION`).
+3. **`bike_ocasion.py` optimizado**: extrae talla, batería, km, motor, suspensión, cuadro y componentes directamente de la tarjeta de listado (sin visitar ficha de detalle). Paginación de 6 páginas → 180+ bicicletas.
+4. **`scrapers/mammoth.py` integrado**: 4º portal profesional certificado sobre categorías de Rally/XC y Trail doble suspensión en ~2.6s.
+5. **`enriquecedor_web.py` con Visión Multimodal**: usa ficha del producto del propio sitio como fuente principal, DuckDuckGo como fallback, caché JSON en disco (`cache/fichas_detalle.json`) y fallback de visión por IA (`_extraer_km_de_imagenes` con Gemini Flash Vision) para leer fotos del odómetro.
+6. **`main.py` mejorado**: agregó `_health_check_scrapers()` (alerta por log y Telegram si un scraper devuelve 0 productos), enriquecimiento paralelo con `ThreadPoolExecutor` (3 workers), ordenamiento por salud mecánica previa a modalidad, logging a archivo `logs/buscador.log` + consola.
+7. **Tests**: `test_buscador.py` pasa GREEN con todos los cambios y validaciones de kilometraje y falsos positivos.
 
-### Dificultades encontradas
+### Dificultades encontradas y decisiones arquitectónicas
 
-| Dificultad | Sitio afectado | Solución / Estado |
-|------------|---------------|-------------------|
-| **URL de categoría 404** | Bike Ocasión | La URL original (`bicicletas-electronicas/doble-suspension/`) devolvía 404. Se inspeccionó el menú y se encontró la URL correcta: `bicicletas-electricas-de-montana-doble-suspension-2020`. |
-| **Protección anti-baneo (503)** | Buhobike | `Fetcher` HTTP devuelve 503. `StealthyFetcher` con `solve_cloudflare=True` resuelve el desafío Cloudflare. |
-| **Incompatibilidad TextHandler vs BeautifulSoup** | Bike Ocasión | `page.html_content` de Scrapling es un `TextHandler` (subclase de `str`). Se arregla con `str(html)` en `scraper_base.py`. |
-| **Selectores placeholders** | Todos | Los scrapers originales usaban selectores genéricos (`.product-item`, `article.product`) que no coinciden con el HTML real de ningún sitio. Se inspeccionó y se reemplazaron por selectores reales. |
-| **Scraping secuencial lento** | Todos | Paginación + paralelización del enriquecedor con `ThreadPoolExecutor` (3 workers). |
-| **Archivos de configuración faltantes** | Proyecto general | `requirements.txt`, `.gitignore` y `.env.example` no existían en el repositorio inicial. Se crearon desde cero. |
+| Dificultad | Sitio afectado | Causa técnica | Solución arquitectónica / Estado |
+|------------|---------------|---------------|----------------------------------|
+| **Odómetro fotografiado vs texto de mantenimiento** | Buhobike | Buhobike no escribe el odómetro en el texto ni en el SKU en ciertas unidades usadas; solo sube una foto del display (ej. 4.237 km). Un regex simple `\d+ km` capturaba el texto de garantía: *"hacerle unos 700 km sin engrasar la cadena con cera al agua"*, asignando falsamente 700 km (10/10). | **Doble capa**: 1) Filtro de contexto negativo en `_extraer_km` que descarta menciones de cadena, cera, engrase, garantía y autonomía. 2) Fallback con Gemini Flash Vision (`_extraer_km_de_imagenes`) que analiza las fotos del display y extrae el odómetro exacto (`4237 km` -> nota 5.5/10). Si no hay dato confirmado, aplica -2.0 pts preventivos. |
+| **Bicis castigadas superando a bicis sanas por modalidad** | Todos / Orquestador | `clave_orden_estrictas` ordenaba por `(sin_linea_roja, prioridad_modalidad, nota)`. Una XC con 5.000 km y nota 3.5/10 quedaba #1 sobre bicis Trail/Light sanas de < 2.000 km (7.5/10). | **Escalón de salud mecánica**: se agregó `salud_mecanica = 1 if (nota >= 6.0 and km <= 4000) else 0` como criterio #1 de ordenación, preservando la prioridad XC estrictamente dentro de cada escalón de salud. |
+| **URL de categoría 404** | Bike Ocasión | La URL original (`bicicletas-electronicas/doble-suspension/`) devolvía 404. Se inspeccionó el menú y se encontró la URL correcta: `bicicletas-electricas-de-montana-doble-suspension-2020`. | Selectores y URLs actualizados tras inspección en vivo. |
+| **Protección anti-baneo (503)** | Buhobike | `Fetcher` HTTP devuelve 503. | `StealthyFetcher` con `solve_cloudflare=True` y `usar_stealth_directo=True`. |
+| **Incompatibilidad TextHandler vs BeautifulSoup** | Bike Ocasión | `page.html_content` de Scrapling es un `TextHandler` (subclase de `str`). | Se normaliza con `str(html)` en `scraper_base.py`. |
+| **Selectores placeholders** | Todos | Los scrapers originales usaban selectores genéricos (`.product-item`, `article.product`) que no coincidían. | Selectores específicos verificados con Scrapling en cada portal. |
+| **Pérdida de corrida por suspensión del PC** | Task Scheduler | A las 12:00 el PC estaba suspendido y Task Scheduler marcó `NumberOfMissedRuns: 1`. | Identificado para configurar `WakeToRun: True` en los ajustes de la tarea de Windows. |
 
 ### Dependencias instaladas
 
