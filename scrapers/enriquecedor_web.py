@@ -15,6 +15,8 @@ import re
 import json
 import logging
 import os
+import base64
+import requests
 from typing import Optional, Dict
 from pathlib import Path
 from bs4 import BeautifulSoup
@@ -192,6 +194,11 @@ def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str) -> dict:
         km = _extraer_km(texto_completo)
         if km is not None:
             detalle["km"] = km
+        else:
+            # Fallback a visión por IA si la tienda sólo fotografía el odómetro/display en la galería
+            km_foto = _extraer_km_de_imagenes(soup)
+            if km_foto is not None:
+                detalle["km"] = km_foto
 
     # --- Motor ---
     if "motor" not in detalle:
@@ -314,18 +321,124 @@ def _extraer_bateria(texto: str) -> Optional[int]:
     return None
 
 
+def _extraer_km_de_imagenes(soup: BeautifulSoup) -> Optional[int]:
+    """
+    Si la tienda no incluye el kilometraje en la ficha de texto ni en el SKU,
+    pero incluye fotografías del cuentakilómetros/odómetro del display en la galería
+    (caso habitual en Buhobike segunda mano), inspecciona las primeras imágenes
+    con Gemini Flash Vision para extraer el valor exacto de km.
+    """
+    if not cfg.GEMINI_API_KEY:
+        return None
+
+    img_urls = []
+    for img in soup.select("img.js-thumb, .product-images img, ul.product-images img"):
+        u = img.get("data-image-large-src") or img.get("src")
+        if u and u not in img_urls and ("default" in u or "large" in u):
+            img_urls.append(u)
+
+    if not img_urls:
+        for a in soup.select("ul.product-images a.thumb, .js-thumb, a[data-image]"):
+            u = a.get("data-image") or a.get("href")
+            if u and u not in img_urls:
+                img_urls.append(u)
+
+    if not img_urls:
+        return None
+
+    candidatas = img_urls[:5]
+    prompt = (
+        'Analiza esta imagen de una bicicleta o su display. '
+        'Si ves una pantalla, display o ciclocomputador con odómetro o kilometraje acumulado (ODO / km / dst), '
+        'indica el número entero de kilómetros en formato JSON: {"km": 1234}. '
+        'Si no hay pantalla, display o no se ve el kilometraje acumulado, devuelve estrictamente {"km": null}.'
+    )
+    url_api = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={cfg.GEMINI_API_KEY}"
+
+    for img_url in candidatas:
+        try:
+            r = requests.get(img_url, timeout=10)
+            if r.status_code != 200 or len(r.content) < 5000:
+                continue
+            b64 = base64.b64encode(r.content).decode("utf-8")
+            payload = {
+                "contents": [{
+                    "parts": [
+                        {"text": prompt},
+                        {"inline_data": {"mime_type": "image/jpeg", "data": b64}}
+                    ]
+                }],
+                "generationConfig": {"responseMimeType": "application/json"}
+            }
+            res = requests.post(url_api, json=payload, timeout=15)
+            if res.status_code == 200:
+                data = res.json()
+                parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                txt = "".join(p.get("text", "") for p in parts)
+                parsed = json.loads(txt.replace("```json", "").replace("```", "").strip())
+                km_val = parsed.get("km")
+                if km_val is not None and isinstance(km_val, (int, float)) and km_val > 0:
+                    log.info(f"[Visión IA] Odómetro detectado en imagen {img_url}: {int(km_val)} km")
+                    return int(km_val)
+        except Exception as e:
+            log.debug(f"[Visión IA] Excepción analizando imagen {img_url}: {e}")
+            continue
+
+    return None
+
+
 def _extraer_km(texto: str) -> Optional[int]:
     texto_norm = texto.replace("\u202f", " ")
+
+    # 1. Patrones con '< 5 km' o '< 10 km' (típicos de Upway o filtros de reestreno)
     match_menor = re.search(r"<\s*(\d+)\s*km\b", texto_norm, re.IGNORECASE)
     if match_menor:
         return int(match_menor.group(1))
-    match = re.search(r"(\d[\d.,]*)\s*km\b", texto_norm, re.IGNORECASE)
-    if match:
+
+    # 2. Patrones con etiqueta explícita de odómetro / kilometraje del vehículo
+    # Ej: "Kilometraje: 1.250 km", "Odómetro: 3400 km", "Kilómetros: 800", "Km: 1.500"
+    for match_etiqueta in re.finditer(
+        r"\b(?:kilometraje|kilómetros|kilometros|odómetro|odometro|recorrido|rodaje)\s*[:\-]?\s*(\d[\d.,]*)\s*(?:km\b)?",
+        texto_norm,
+        re.IGNORECASE,
+    ):
         try:
-            km_str = match.group(1).replace(".", "").replace(",", "")
-            return int(km_str)
+            km_str = match_etiqueta.group(1).replace(".", "").replace(",", "")
+            val = int(km_str)
+            if 0 <= val <= 99999:
+                return val
         except ValueError:
             pass
+
+    # 3. Fallback general: buscar 'XXXX km', descartando estrictamente falsos positivos de contexto:
+    # - Mantenimiento de cadena / engrase (ej. 'hacerle unos 700 km sin otra necesidad de engrasar la cadena')
+    # - Intervalos de cambio de componentes (ej. 'cambies la cadena (entre 700 y 1500 km después de la compra)')
+    # - Autonomía de la batería ('autonomía de hasta 100 km')
+    # - Radio / distancia geográfica ('a 50 km de Madrid')
+    for match in re.finditer(r"(\d[\d.,]*)\s*km\b", texto_norm, re.IGNORECASE):
+        inicio = max(0, match.start() - 65)
+        fin = min(len(texto_norm), match.end() + 65)
+        contexto_previo = texto_norm[inicio:match.start()].lower()
+        contexto_posterior = texto_norm[match.end():fin].lower()
+        contexto_total = f"{contexto_previo} {contexto_posterior}"
+
+        palabras_bloqueadas = (
+            "engrasar", "engrase", "cera", "cadena", "mantenimiento",
+            "cambies la cadena", "cambiar la cadena", "después de la compra",
+            "tras la compra", "autonomía", "autonomia", "alcance",
+            "radio", "distancia", "radio de", "a menos de", "garantía de",
+        )
+        if any(p in contexto_total for p in palabras_bloqueadas):
+            continue
+
+        try:
+            km_str = match.group(1).replace(".", "").replace(",", "")
+            val = int(km_str)
+            if 0 <= val <= 99999:
+                return val
+        except ValueError:
+            pass
+
     return None
 
 

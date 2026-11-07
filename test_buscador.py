@@ -310,6 +310,12 @@ def test_optimizacion_tarjetas_upway_y_buhobike():
     assert _extraer_componentes("Garantía extra en el exterior del cuadro") is None
     assert _extraer_cuadro("Salud de la batería evaluada en Cataluña") is None
     assert _extraer_peso("Peso estimado del producto + embalaje: 22,000 Kg. Peso máximo ciclista 120 kg. PESO 18,28Kg") == 18.28
+    from scrapers.enriquecedor_web import _extraer_km
+    assert _extraer_km("engrasado de la cadena con cera al agua, mínimo para que puedas hacerle unos 700 km sin otra necesidad de engrasar la cadena") is None
+    assert _extraer_km("la primera vez cambies la cadena (entre 700 y 1500 km después de la compra), no tengas que cambiar el cassette") is None
+    assert _extraer_km("autonomía de hasta 120 km con batería externa") is None
+    assert _extraer_km("Kilometraje: 1.250 km") == 1250
+    assert _extraer_km("Bicicleta en buen estado. 4237 km rodados.") == 4237
 
     # 4. Prioridad de modalidad (XC > Light e-MTB > Trail) y corrección de motor BH
     from evaluator import prioridad_modalidad
