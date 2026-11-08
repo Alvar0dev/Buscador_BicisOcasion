@@ -34,6 +34,36 @@ mkdir -p logs
 
 ## Notas
 
-- Con cron no hace falta el `while True` de `main.py`: el script se ejecuta una vez y termina.
-- Si usas el bucle `schedule`, no añadas la entrada de cron para evitar duplicados.
+- Con `main.py --once` el script ejecuta un único barrido completo y termina (ideal para `cron` o Programador de tareas de Windows).
+- Si usas el bucle `schedule`, no añadas la entrada programada del sistema para evitar duplicados.
 - Revisa periódicamente `logs/buscador.log` para detectar fallos de red o cambios en los selectores de las webs.
+
+---
+
+# Configuración en Windows Task Scheduler (PowerShell)
+
+Para programar la ejecución diaria a las **12:00** en Windows despertando el equipo de la suspensión (`WakeToRun`) y recuperando ejecuciones pendientes (`StartWhenAvailable`):
+
+```powershell
+$action = New-ScheduledTaskAction `
+    -Execute "python.exe" `
+    -Argument "main.py --once" `
+    -WorkingDirectory "G:\Proyectos OpenCode\Buscador BiciOcasion"
+
+$trigger = New-ScheduledTaskTrigger -Daily -At 12:00
+
+$settings = New-ScheduledTaskSettingsSet `
+    -WakeToRun `
+    -StartWhenAvailable `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -ExecutionTimeLimit (New-TimeSpan -Hours 1)
+
+Register-ScheduledTask `
+    -TaskName "BuscadorBiciOcasion" `
+    -Action $action `
+    -Trigger $trigger `
+    -Settings $settings `
+    -Description "Búsqueda diaria de e-MTB de ocasión y envío de Top 3 a Telegram" `
+    -Force
+```
