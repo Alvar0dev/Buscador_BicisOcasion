@@ -18,6 +18,7 @@ from typing import List, Optional
 from bs4 import BeautifulSoup
 from models import Bicicleta
 from scraper_base import BaseScraper
+from scrapers.enriquecedor_web import _extraer_range_extender
 import config as cfg
 import re
 
@@ -100,6 +101,7 @@ class BikeOcasionScraper(BaseScraper):
                     url=url,
                     talla=detalle.get("talla"),
                     bateria_wh=detalle.get("bateria_wh"),
+                    range_extender_wh=detalle.get("range_extender_wh"),
                     km=detalle.get("km"),
                     motor=detalle.get("motor"),
                     cuadro_material=detalle.get("cuadro_material"),
@@ -144,6 +146,13 @@ class BikeOcasionScraper(BaseScraper):
                 detalle["bateria_wh"] = int(match.group(1))
             except ValueError:
                 pass
+
+        # --- Range Extender ---
+        extender = _extraer_range_extender(texto)
+        if extender:
+            detalle["range_extender_wh"] = extender
+            if "bateria_wh" in detalle and detalle["bateria_wh"] <= 600:
+                detalle["bateria_wh"] += extender
 
         # --- Kilometraje: "332 Km", "1.500 Km" ---
         match = re.search(r"([\d.,]+)\s*Km\b", texto, re.IGNORECASE)

@@ -31,7 +31,11 @@ import requests
 
 import config as cfg
 from models import Bicicleta
-from scrapers.enriquecedor_web import enriquecer_bici, _buscar_en_cache
+from scrapers.enriquecedor_web import (
+    enriquecer_bici,
+    _buscar_en_cache,
+    _extraer_range_extender,
+)
 
 log = logging.getLogger("buscador.ia")
 
@@ -467,12 +471,24 @@ def completar_con_catalogo(bici: Bicicleta, aplicar_heuristica_peso: bool = True
     """
     texto = f"{bici.titulo} {bici.motor or ''} {bici.componentes or ''}".lower()
 
+    # Detección de Range Extender en título o componentes
+    if bici.range_extender_wh is None:
+        extender = _extraer_range_extender(texto)
+        if extender:
+            bici.range_extender_wh = extender
+            if bici.bateria_wh is not None and bici.bateria_wh <= 600:
+                bici.bateria_wh += extender
+
     for entrada in CATALOGO_EMTB:
         if any(p in texto for p in entrada["patrones"]):
             if bici.peso_kg is None:
                 bici.peso_kg = entrada["peso_kg"]
             if bici.bateria_wh is None:
-                bici.bateria_wh = entrada["bateria_wh_default"]
+                base_bat = entrada["bateria_wh_default"]
+                if bici.range_extender_wh is not None and base_bat <= 600:
+                    bici.bateria_wh = base_bat + bici.range_extender_wh
+                else:
+                    bici.bateria_wh = base_bat
             if not bici.motor:
                 bici.motor = entrada["motor"]
             if not bici.cuadro_material:
@@ -666,20 +682,22 @@ def auditar_perito_mecanico(bici: Bicicleta) -> dict:
 
     # 4. ESTADO DE BATERÍA (Análisis pericial vinculado a Wh y ciclos por km)
     bat = bici.bateria_wh or 540
+    extender = getattr(bici, "range_extender_wh", None)
+    extender_str = f" [incluye Range Extender oficial de {extender} Wh]" if extender else ""
     ciclos_aprox = max(1, int((km or 1500) / 45))
     if (km or 0) > 6000:
         txt_bateria = (
-            f"{bat} Wh (~{ciclos_aprox} ciclos estimados): Degradación severa acumulada; "
+            f"{bat} Wh{extender_str} (~{ciclos_aprox} ciclos estimados): Degradación severa acumulada; "
             f"alta probabilidad de caída de tensión bajo carga intensa (SoH estimado <80%)."
         )
     elif (km or 0) > 3000:
         txt_bateria = (
-            f"{bat} Wh (~{ciclos_aprox} ciclos estimados): Desgaste moderado de celdas "
+            f"{bat} Wh{extender_str} (~{ciclos_aprox} ciclos estimados): Desgaste moderado de celdas "
             f"(SoH estimado 84-89%); verificar equilibrio de celdas en diagnóstico."
         )
     else:
         txt_bateria = (
-            f"{bat} Wh (~{ciclos_aprox} ciclos estimados): Salud óptima de celdas "
+            f"{bat} Wh{extender_str} (~{ciclos_aprox} ciclos estimados): Salud óptima de celdas "
             f"(SoH estimado 93-99%) respaldada por 1 año de garantía profesional."
         )
 
@@ -696,6 +714,9 @@ def auditar_perito_mecanico(bici: Bicicleta) -> dict:
             f"{precio:.0f} € (-0.0 pts, rango 2.000-3.000 €): "
             f"Precio coherente para chasis {bici.cuadro_material or 'Carbono'} y montaje ({bici.componentes or 'serie'})."
         )
+
+    if extender:
+        txt_precio += f" Bonificación de compra: incluye Range Extender oficial (+{extender} Wh, valor nuevo ~450-550 €)."
 
     nota_aritmetica = base + delta_km + delta_peso + delta_motor + delta_precio
     nota_final = round(max(0.0, min(10.0, nota_aritmetica, techo)), 2)
@@ -820,7 +841,7 @@ def enriquecer_y_valorar_bici(bici: Bicicleta) -> Tuple[Bicicleta, float, str]:
     cache_ia = _cargar_cache_ia()
     if cache_key in cache_ia:
         entry = cache_ia[cache_key]
-        for campo in ("talla", "modalidad", "peso_kg", "bateria_wh", "cuadro_material",
+        for campo in ("talla", "modalidad", "peso_kg", "bateria_wh", "range_extender_wh", "cuadro_material",
                       "motor", "km", "ano", "componentes", "suspension_trasera"):
             if entry.get(campo) is not None and getattr(bici, campo, None) is None:
                 setattr(bici, campo, entry[campo])
@@ -864,6 +885,7 @@ Datos extraídos de la bicicleta ({bici.sitio}):
 - Talla: {bici.talla or 'M'}
 - Peso conocido (kg): {bici.peso_kg if bici.peso_kg is not None else 'inferir peso real de catálogo para este modelo exacto'}
 - Batería (Wh): {bici.bateria_wh if bici.bateria_wh is not None else 'desconocida'}
+- Range Extender: {f'{bici.range_extender_wh} Wh incluido' if bici.range_extender_wh else 'no incluido o no detectado'}
 - Motor: {bici.motor or 'inferir motor real del modelo'}
 - Cuadro: {bici.cuadro_material or 'inferir material'}
 - Kilómetros: {bici.km if bici.km is not None else 'no declarados'}
@@ -934,6 +956,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con esta estructura exacta:
                 "modalidad": bici.modalidad,
                 "peso_kg": bici.peso_kg,
                 "bateria_wh": bici.bateria_wh,
+                "range_extender_wh": bici.range_extender_wh,
                 "cuadro_material": bici.cuadro_material,
                 "motor": bici.motor,
                 "km": bici.km,

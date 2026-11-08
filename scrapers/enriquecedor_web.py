@@ -189,6 +189,15 @@ def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str) -> dict:
         if bateria is not None:
             detalle["bateria_wh"] = bateria
 
+    # --- Range Extender ---
+    if "range_extender_wh" not in detalle:
+        extender = _extraer_range_extender(texto_completo)
+        if extender is not None:
+            detalle["range_extender_wh"] = extender
+            if "bateria_wh" in detalle and detalle["bateria_wh"] is not None:
+                if detalle["bateria_wh"] <= 600:
+                    detalle["bateria_wh"] += extender
+
     # --- Kilometraje ---
     if "km" not in detalle:
         km = _extraer_km(texto_completo)
@@ -319,6 +328,101 @@ def _extraer_bateria(texto: str) -> Optional[int]:
         except ValueError:
             pass
     return None
+
+
+def _extraer_range_extender(texto: str) -> Optional[int]:
+    """
+    Detecta si una bicicleta incluye un Range Extender o segunda batería externa.
+    Distingue inclusión real ("+ extender", "incluye batería externa 252wh", "con range extender")
+    frente a mera compatibilidad de catálogo ("compatible con extender", "opcional", "no incluido").
+
+    Devuelve la capacidad en Wh del extender (int) o None si no incluye.
+    """
+    if not texto:
+        return None
+
+    texto_norm = texto.replace("\u202f", " ")
+    texto_lower = texto_norm.lower()
+
+    terminos_extender = (
+        "extender", "range extender", "batería externa", "bateria externa",
+        "batería adicional", "bateria adicional", "batería suplementaria", "bateria suplementaria",
+        "segunda batería", "segunda bateria", "2 baterías", "2 baterias",
+        "batería extra", "bateria extra", "xpro", "x-pro", "powermore",
+    )
+    if not any(t in texto_lower for t in terminos_extender):
+        return None
+
+    palabras_exclusion = (
+        "compatible con", "compatibilidad con", "opcional", "opción de", "opcion de",
+        "posibilidad de", "admite", "preparado para", "preparada para",
+        "no incluye", "no incluido", "no incluida", "se vende por separado",
+        "se adquiere por separado", "sin extender", "sin batería adicional",
+    )
+
+    termino_bateria = (
+        r"(?:range\s*extender|extender|"
+        r"bater[ií]a\s+(?:externa|adicional|extra|suplementaria|secundaria)|"
+        r"(?:segunda|2ª|2a)\s+bater[ií]a|"
+        r"x-?pro|powermore)"
+    )
+
+    # 1. Patrón con Wh explícito (ej. "+ Batería XPro 180Wh", "incluye range extender de 252Wh")
+    patron_con_wh = re.finditer(
+        rf"(?:(?:\+|con|incluye|incluido|incluida|regalo|segunda|extra|pack)\s+[^.]{{0,40}}?"
+        rf"{termino_bateria}"
+        rf"[^.]{{0,30}}?(\d{{3}})\s*wh\b)"
+        rf"|"
+        rf"(?:(\d{{3}})\s*wh\b[^.]{{0,30}}?"
+        rf"{termino_bateria}"
+        rf"[^.]{{0,40}}?(?:incluid[oa]|de\s+regalo|\+))",
+        texto_norm,
+        re.IGNORECASE,
+    )
+
+    for m in patron_con_wh:
+        fragmento = m.group(0).lower()
+        if any(exc in fragmento for exc in palabras_exclusion):
+            continue
+        match_wh = re.search(r"(\d{3})\s*wh", fragmento)
+        if match_wh:
+            val = int(match_wh.group(1))
+            if 140 <= val <= 380:
+                return val
+
+    # 2. Patrón de inclusión nominal sin Wh explícito -> inferir por marca/modelo
+    patrones_inclusion = (
+        r"\+\s*(?:range\s*extender|extender|bater[ií]a\s+externa|x-?pro|powermore)\b",
+        r"\bincluye\s+(?:range\s*extender|extender|bater[ií]a\s+externa|segunda\s+bater[ií]a|x-?pro|powermore)\b",
+        r"\bcon\s+(?:range\s*extender|extender|bater[ií]a\s+externa|bater[ií]a\s+adicional|x-?pro|powermore)\b",
+        r"\b(?:range\s*extender|extender|bater[ií]a\s+externa|x-?pro|powermore)\s+incluid[oa]\b",
+        r"\b(?:2|dos)\s+bater[ií]as\s+incluidas\b",
+    )
+
+    for patron in patrones_inclusion:
+        for m in re.finditer(patron, texto_norm, re.IGNORECASE):
+            inicio = max(0, m.start() - 50)
+            fin = min(len(texto_norm), m.end() + 50)
+            contexto = texto_norm[inicio:fin].lower()
+            if any(exc in contexto for exc in palabras_exclusion):
+                continue
+
+            if any(k in texto_lower for k in ("orbea", "rise")):
+                return 252
+            if any(k in texto_lower for k in ("bh", "ilynx", "atomx", "xpro", "x-pro")):
+                return 180
+            if any(k in texto_lower for k in ("specialized", "levo sl", "kenevo sl")):
+                return 160
+            if any(k in texto_lower for k in ("trek", "fuel exe", "scott lumen", "tq")):
+                return 160
+            if "powermore" in texto_lower:
+                return 250
+            if any(k in texto_lower for k in ("fazua", "ride 60")):
+                return 210
+            return 250
+
+    return None
+
 
 
 def _extraer_km_de_imagenes(soup: BeautifulSoup) -> Optional[int]:
@@ -624,8 +728,23 @@ def enriquecer_bici(bici: Bicicleta, url_ficha: Optional[str] = None) -> Bicicle
 
 
 def _aplicar_detalle(bici: Bicicleta, detalle: dict) -> Bicicleta:
-    """Aplica los campos del detalle a la bici solo si faltan."""
+    """Aplica los campos del detalle a la bici solo si faltan o actualiza el total con range extender."""
+    extender = detalle.get("range_extender_wh")
+    if extender is not None and bici.range_extender_wh is None:
+        bici.range_extender_wh = extender
+        if bici.bateria_wh is not None:
+            if "bateria_wh" in detalle and detalle["bateria_wh"] > bici.bateria_wh:
+                bici.bateria_wh = detalle["bateria_wh"]
+            elif bici.bateria_wh <= 600:
+                bici.bateria_wh += extender
+
     for campo, valor in detalle.items():
+        if campo in ("range_extender_wh", "bateria_wh"):
+            continue
         if valor is not None and getattr(bici, campo, None) is None:
             setattr(bici, campo, valor)
+
+    if "bateria_wh" in detalle and detalle["bateria_wh"] is not None and bici.bateria_wh is None:
+        bici.bateria_wh = detalle["bateria_wh"]
+
     return bici

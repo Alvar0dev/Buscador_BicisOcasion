@@ -147,6 +147,9 @@ def _puntuacion_calidad_precio(bici: Bicicleta) -> Tuple[float, str]:
     if any(m in texto for m in ["kashima", "ultimate", "factory"]):
         puntos += 1.0
         partes.append("suspensión premium (Kashima/Ultimate): +1.0")
+    if getattr(bici, "range_extender_wh", None):
+        puntos += 0.5
+        partes.append(f"Range Extender {bici.range_extender_wh}Wh incluido: +0.5")
 
     if bici.precio <= cfg.PRECIO_MAX_EUR:
         puntos += 0.5

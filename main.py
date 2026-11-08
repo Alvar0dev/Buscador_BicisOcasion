@@ -27,7 +27,7 @@ from scrapers.bike_ocasion import BikeOcasionScraper
 from scrapers.buhobike import BuhobikeScraper
 from scrapers.upway import UpwayScraper
 from scrapers.mammoth import MammothScraper
-from scrapers.enriquecedor_web import enriquecer_bici
+from scrapers.enriquecedor_web import enriquecer_bici, _extraer_range_extender
 
 # Mapa sitio -> clase scraper
 SCRAPERS = {
@@ -186,6 +186,12 @@ def _recolectar_oportunidades(db: BaseDatos, forzar_envio: bool = False) -> list
             continue
 
         for bici in bicis:
+            if bici.range_extender_wh is None:
+                ext = _extraer_range_extender(f"{bici.titulo} {bici.componentes or ''}")
+                if ext:
+                    bici.range_extender_wh = ext
+                    if bici.bateria_wh is not None and bici.bateria_wh <= 600:
+                        bici.bateria_wh += ext
             # Pre-filtro rápido con los campos ya conocidos de la tarjeta (precio, talla, batería...)
             apto_pre, motivo_pre = pasa_filtros_estrictos(bici)
             if not apto_pre:

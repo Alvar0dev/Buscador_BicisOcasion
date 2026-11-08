@@ -18,6 +18,7 @@ class Bicicleta:
     modalidad: Optional[str] = None
     peso_kg: Optional[float] = None
     bateria_wh: Optional[int] = None
+    range_extender_wh: Optional[int] = None
     cuadro_material: Optional[str] = None
     motor: Optional[str] = None
     km: Optional[int] = None

@@ -18,7 +18,17 @@ def formatear_mensaje(
     kilómetros, batería, cuadro, desglose de la nota y enlace directo.
     """
     km = bici.km if bici.km is not None else "no indicado"
-    bateria = f"{bici.bateria_wh} Wh" if bici.bateria_wh else "no indicado"
+    if getattr(bici, "range_extender_wh", None):
+        extender_val = bici.range_extender_wh
+        bat_interna = (bici.bateria_wh - extender_val) if bici.bateria_wh else None
+        if bat_interna and bat_interna > 0:
+            bateria = f"{bici.bateria_wh} Wh ({bat_interna} Wh + 🔋 {extender_val} Wh Range Extender)"
+        else:
+            bateria = f"{bici.bateria_wh} Wh (+ 🔋 {extender_val} Wh Range Extender)"
+    elif bici.bateria_wh:
+        bateria = f"{bici.bateria_wh} Wh"
+    else:
+        bateria = "no indicado"
     cuadro = bici.cuadro_material or "no indicado"
     motor = bici.motor or "no indicado"
     ano = bici.ano or "no indicado"

@@ -9,12 +9,14 @@ No depende de la web real ni de credenciales de Telegram.
 import os
 import tempfile
 from models import Bicicleta
-from evaluator import evaluar, calcular_nota_oportunidad, pasa_filtros_estrictos
+from evaluator import evaluar, calcular_nota_oportunidad, pasa_filtros_estrictos, _puntuacion_calidad_precio
 from gemini_classifier import (
     completar_con_catalogo,
     evaluar_documentacion_motor,
     valorar_autonomo,
+    auditar_perito_mecanico,
 )
+from scrapers.enriquecedor_web import _extraer_range_extender
 from db import BaseDatos
 from notifier import formatear_mensaje
 
@@ -409,6 +411,51 @@ def test_optimizacion_tarjetas_upway_y_buhobike():
     assert bicis_mammoth[1].suspension_trasera == "no"
 
 
+def test_range_extender_extraccion_y_filtros():
+    """Valida la detección, suma de capacidad en Wh y bonificación de Range Extenders."""
+    # 1. Extracción positiva vs exclusión de compatibilidad
+    assert _extraer_range_extender("Orbea Rise H30 2022. Incluye Range Extender de 252Wh de regalo.") == 252
+    assert _extraer_range_extender("BH iLynx Race Carbon 8.4 LT + Batería XPro 180Wh incluida") == 180
+    assert _extraer_range_extender("Specialized Turbo Levo SL Expert con range extender") == 160
+    assert _extraer_range_extender("Trek Fuel EXe 9.7 con segunda batería de 160Wh incluida") == 160
+    assert _extraer_range_extender("Bicicleta con Bosch PowerMore 250Wh incluido") == 250
+    # Descarte de compatibilidad / venta por separado
+    assert _extraer_range_extender("Cuadro de carbono preparado para Range Extender de 252Wh (no incluido en la venta).") is None
+    assert _extraer_range_extender("Compatible con range extender opcional de 252Wh") is None
+    assert _extraer_range_extender("Admite batería externa Bosch PowerMore de 250Wh (se vende por separado).") is None
+
+    # 2. Rescate de filtro S4: Orbea Rise 360 Wh descartada sin extender, pero admitida con extender
+    b_sin = bici_prueba(titulo="Orbea Rise M20 2021", bateria_wh=360)
+    apto_sin, motivo_sin = pasa_filtros_estrictos(b_sin)
+    assert apto_sin is False
+    assert "Batería <= 500 Wh: 360 Wh" in motivo_sin
+
+    # Con extender en título: enriquecedor / catálogo ajusta capacidad total
+    b_con = bici_prueba(
+        titulo="Orbea Rise M20 2021 + Range Extender 252Wh",
+        bateria_wh=360,
+    )
+    b_con = completar_con_catalogo(b_con)
+    assert b_con.range_extender_wh == 252
+    assert b_con.bateria_wh == 612  # 360 + 252 Wh
+    apto_con, _ = pasa_filtros_estrictos(b_con)
+    assert apto_con is True, "La bicicleta debe pasar el filtro estricto con 612 Wh"
+
+    # 3. Bonificación en puntuación calidad-precio (+0.5 pts)
+    p_sin, just_sin = _puntuacion_calidad_precio(b_sin)
+    p_con, just_con = _puntuacion_calidad_precio(b_con)
+    assert "Range Extender 252Wh incluido: +0.5" in just_con
+
+    # 4. Auditoría pericial (Perito Mecánico Senior)
+    audit = auditar_perito_mecanico(b_con)
+    assert "Range Extender oficial de 252 Wh" in audit["txt_bateria"]
+    assert "Range Extender oficial (+252 Wh" in audit["txt_precio"]
+
+    # 5. Formato de mensaje para Telegram
+    msg = formatear_mensaje(b_con, 8.5, "Desglose pericial")
+    assert "🔋 Batería: 612 Wh (360 Wh + 🔋 252 Wh Range Extender)" in msg
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -424,4 +471,5 @@ if __name__ == "__main__":
     test_extraccion_titulo_sin_dto_y_suspension_rigidez()
     test_perito_mecanico_senior_reglas_y_lineas_rojas()
     test_optimizacion_tarjetas_upway_y_buhobike()
+    test_range_extender_extraccion_y_filtros()
     print("Todas las pruebas pasaron (GREEN).")
