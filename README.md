@@ -19,7 +19,10 @@ Cuando encuentra una bicicleta con **Nota de Oportunidad ≥ 8.0/10**, la notifi
 - [Cómo usar](#cómo-usar)
 - [Pruebas](#pruebas)
 - [Advertencias importantes](#advertencias-importantes)
-- [Roadmap / próximos pasos](#roadmap---próximos-pasos)
+- [Próximos pasos y Roadmap](#próximos-pasos-y-roadmap)
+- [Por qué se ha construido así (Arquitectura e Ingeniería de Decisiones)](#por-qué-se-ha-construido-así-arquitectura-e-ingeniería-de-decisiones)
+- [Proceso de desarrollo y dificultades encontradas](#proceso-de-desarrollo-y-dificultades-encontradas)
+- [Estado actual y TODOs para mañana (Próxima Sesión)](#estado-actual-y-todos-para-mañana-próxima-sesión)
 - [Licencia](#licencia)
 
 ---
@@ -465,38 +468,94 @@ El sistema se encuentra en **producción activa y 100% automatizado**:
 | 6 | **Detección de Range Extender en descripción** | ✅ Completado | Detección de inclusión real (+180 Wh en BH / +252 Wh en Orbea / +160 Wh en TQ y Specialized / +250 Wh en Bosch PowerMore), rescate de filtro estricto S4 (Rise 360 Wh + 252 Wh = 612 Wh > 500 Wh), bonificación de +0.5 pts en calidad-precio, reflejo en desglose pericial y mensaje de Telegram. |
 | 7 | **Telemetría real de Salud de Batería (SoH % y ciclos)** | ✅ Completado | Extracción automática de `bateria_salud_pct` (`Estado de salud: 90 %`, `% batería: 95%`, `conserva el 89 % de su capacidad original`) y `bateria_ciclos` (`Número de ciclos de carga: 164`), preservando los Wh nominales en `bateria_wh` y ponderando el SoH real en el Perito Mecánico Senior y en Telegram (`[SoH: XX% | YY ciclos]`). |
 | 8 | **Filtro preventivo anti-Reservadas/Agotadas y Scraping Multi-Portal Paralelo** | ✅ Completado | Descarte inmediato de unidades reservadas/agotadas en los 4 scrapers (`es_tarjeta_no_disponible`), en la ficha de detalle (`_extraer_disponibilidad_ficha`) y en el filtro `S0`, más ejecución en paralelo de los 4 portales (`ThreadPoolExecutor`) reduciendo el tiempo de corrida a ~57s. |
+| 9 | **Historial de evolución de precios y "Tiempo en Stock" (`historial_precios`)** | ⏳ Pendiente (Mañana) | Registrar en SQLite el precio diario de todas las candidatas pre-filtradas (incluso las de 3.000–3.400 € o nota 6.5–7.9) para detectar cuántas rebajas acumula cada unidad y cuántos días lleva inmovilizada en tienda. |
+| 10 | **Clasificación objetiva de modalidad por recorrido de suspensión (mm)** | ⏳ Pendiente (Mañana) | Extraer milímetros de horquilla/amortiguador (`120-130 mm` XC/Downcountry vs `140 mm` Trail Ligera vs `150-170 mm` All Mountain/Enduro) en `enriquecedor_web.py` para blindar la prioridad de modalidad más allá del título comercial. |
+| 11 | **Modo radar de mercado CLI (`python main.py --stats`)** | ⏳ Pendiente (Mañana) | Comando de diagnóstico rápido que consulte la base local y caché para imprimir la radiografía del mercado (precio medio por modelo, unidades nuevas de la semana y mejores oportunidades cercanas al umbral de 3.000 €). |
+
+---
+
+## Por qué se ha construido así (Arquitectura e Ingeniería de Decisiones)
+
+El sistema no es un simple scraper de precios: está diseñado como un **embudo pericial determinista en dos fases** que combina velocidad de red, evasión selectiva anti-bot y auditoría mecánica estricta. Cada decisión arquitectónica responde a un problema real encontrado en producción:
+
+### 1. Embudo en 2 fases: Extracción densa en tarjeta → Enriquecimiento paralelo selectivo
+* **Por qué**: Rastrear las ~320 bicicletas de los 4 portales entrando una por una a su ficha de producto requeriría > 320 peticiones HTTP/Stealth por corrida (> 12 minutos) y provocaría bloqueos por *rate-limiting* en Cloudflare.
+* **Cómo se construyó**:
+  1. **Fase 1 (Listado en paralelo)**: Los 4 scrapers (`bike_ocasion`, `buhobike`, `upway`, `mammoth`) corren en paralelo mediante `ThreadPoolExecutor(max_workers=4)`. Cada adaptador extrae directamente del HTML de la tarjeta de listado la mayor cantidad de metadatos posible (talla, precio, doble suspensión, disponibilidad, y en Bike Ocasión/Upway también batería, km y motor).
+  2. **Pre-filtro en memoria (`_pasa_prefiltro`)**: Descarta en milisegundos el ~92% del catálogo (tallas S/L/XL, rígidas, precios > 3.300 €, agotadas/reservadas).
+  3. **Fase 2 (`EnriquecedorWeb` con 5 workers y caché en disco)**: Solo las ~10-25 candidatas viables visitan su ficha individual de detalle (y DuckDuckGo como respaldo de catálogo) para completar peso exacto, odómetro, SoH % de batería y componentes. Las fichas ya visitadas se persisten en `cache/fichas_detalle.json`.
+
+### 2. Motor dual anti-baneo (`Fetcher` TLS vs `StealthyFetcher` Cloudflare)
+* **Por qué**: Levantar un navegador headless Chromium para todas las tiendas consume mucha RAM y multiplica por 10x la latencia, pero usar `requests` estándar falla con HTTP 403/503 en tiendas protegidas por Cloudflare.
+* **Cómo se construyó**: `BaseScraper` utiliza **Scrapling** en dos niveles:
+  * **Nivel 1 (`Fetcher`)**: Peticiones HTTP ultrarrápidas con *TLS fingerprinting* de Chrome real. Extrae Upway en `0.8s`, Mammoth en `2.6s` y 6 páginas de Bike Ocasión en `~18s`.
+  * **Nivel 2 (`StealthyFetcher` con `solve_cloudflare=True`)**: Se activa automáticamente ante un HTTP 403/503 o de forma directa (`usar_stealth_directo=True` en Buhobike) para resolver el desafío JavaScript de Cloudflare sin intervención humana.
+
+### 3. Regla Maestra del Perito Mecánico Senior (Deducción irreversible vs Media ponderada)
+* **Por qué**: En un sistema de puntuación por suma o media ponderada tradicional, una bicicleta con cuadro de carbono, cambio Shimano XT y suspensión Fox Kashima pero con **6.200 km** de desgaste o **22.5 kg** de peso seguiría obteniendo ~7.5/10, engañando al comprador con una falsa ganga que requiere 900 € en taller.
+* **Cómo se construyó**:
+  * Toda bicicleta parte de **10.0 puntos** y solo puede **perder** puntos por desgaste mecánico (salvo bonificaciones acotadas por peso pluma `< 19 kg`, transmisión electrónica/XT, Range Extender incluido o batería con `SoH >= 92%`).
+  * **Líneas Rojas irreversibles**: Si `km > 6.000` (nota capada a máx `4.5/10`) o `peso > 21.0 kg` (nota capada a máx `4.0/10`), ningún componente tope de gama puede rescatarla.
+  * **Escalón de salud mecánica en el ranking (`clave_orden_estrictas`)**: Antes de ordenar por modalidad preferida (`XC / Downcountry` > `Light e-MTB` > `Trail`), el orquestador exige un escalón primario de salud (`nota >= 6.0` y `km <= 4.000`). Así, una XC muy castigada jamás supera en el Top 3 a una Light e-MTB mecánicamente impecable.
+
+### 4. Telemetría de Batería en 3 dimensiones: Capacidad Nominal, Range Extender y SoH %
+* **Por qué**: El análisis de las fichas reales reveló dos trampas opuestas en los portales de segunda mano:
+  1. **Trampa de descarte por batería interna pequeña en Light e-MTB**: Modelos ultraligeros de 18 kg (ej. *Orbea Rise 360 Wh* o *BH iLynx*) se descartaban en el filtro `S4 (<= 500 Wh)` aunque incluyeran en el precio el **Range Extender oficial** (+252 Wh / +180 Wh = 540–612 Wh reales).
+  2. **Trampa de descarte por capacidad efectiva degradada en Upway**: Upway publica frases de laboratorio como *"conserva el 89 % de su capacidad original de 750 Wh, es decir, 670 Wh"*. En una batería de 540 Wh al 90% de salud (~486 Wh efectivos), tomar el valor efectivo hacía que la bici cayera falsamente en el filtro `S4 (<= 500 Wh)`.
+* **Cómo se construyó**:
+  * `_extraer_bateria` prioriza siempre la `"capacidad original de XXX Wh"` para preservar la capacidad nominal de diseño en `bateria_wh`.
+  * `_detectar_range_extender` analiza el contexto semántico: suma los Wh externos (`+252 Wh`, `+180 Wh`, `+160 Wh`, `+250 Wh`) **solo** cuando hay inclusión explícita (`+`, `incluye`, `con`, `regalo`) e ignora menciones comerciales de compatibilidad (`compatible con`, `opcional`, `no incluido`).
+  * `_extraer_salud_bateria` captura por separado `bateria_salud_pct` (`% SoH`) y `bateria_ciclos` para premiar o castigar la degradación química real de las celdas en el Perito Mecánico Senior (`>= 92%: +0.5`, `80-84%: -1.0`, `< 80%: -2.5`).
+
+### 5. Auditoría de Odómetro en Doble Capa: Bloqueo Léxico + Visión Multimodal (Gemini Flash)
+* **Por qué**: Caso real detectado en producción con la *Orbea Rise H10 T-M* en Buhobike: la tienda no puso los kilómetros ni en el título, ni en el SKU, ni en la tabla técnica; solo subió una **foto del display Shimano marcando 4.237 km**. A la vez, el texto comercial del anuncio decía *"permite hacerle unos 700 km sin necesidad de engrasar la cadena con cera al agua"*, provocando que un regex numérico ingenuo le asignara `700 km` y nota `10/10`.
+* **Cómo se construyó**:
+  1. **Capa 1 (Filtro de contexto negativo en `_extraer_km`)**: Se analiza una ventana de ±70 caracteres alrededor de cada mención de `km` y se descarta si aparece vocabulario de taller/mantenimiento (`cadena`, `cera`, `engrasar`, `lubricar`, `autonomía`, `garantía`, `revisión`).
+  2. **Capa 2 (Inspección visual con `_extraer_km_de_imagenes`)**: Cuando una bici usada no declara su odómetro en texto, se descargan hasta 6 imágenes de la galería del producto y se envían en una sola llamada multimodal a **Gemini 2.5 Flash Vision** para leer pantallas de Bosch Kiox/Purion, Shimano Steps, Specialized MasterMind o Garmin. Si sigue sin existir dato confirmado en una bici usada, el Perito aplica `-2.0 pts` preventivos por incertidumbre.
+
+### 6. Filtro Transversal Anti-Reservadas / Agotadas (`S0`)
+* **Por qué**: Las tiendas de ocasión mantienen visibles durante semanas las bicicletas ya **Reservadas** o **Vendidas** para captar tráfico orgánico de Google. Sin un filtro dedicado, esas bicis consumían llamadas de enriquecimiento e IA y ocupaban huecos en el Top 3 de Telegram.
+* **Cómo se construyó**: `BaseScraper.es_tarjeta_no_disponible` inspecciona clases CSS (`.product-unavailable`, `.out-of-stock`, `.reserved`, `.sold-out`) y etiquetas cortas en los 4 scrapers antes siquiera de instanciar la `Bicicleta`. Luego, `_extraer_disponibilidad_ficha` verifica la ficha de producto completa ignorando frases trampa como *"¿Quieres reservarla?"* o *"Reserva tu cita"*.
 
 ---
 
 ## Proceso de desarrollo y dificultades encontradas
 
-### Qué se hizo en las últimas sesiones (Scrapling, Mammoth, Visión IA y Telemetría SoH)
-
-1. **Integración de Scrapling** (`https://github.com/D4Vinci/Scrapling`) como motor principal de scraping, reemplazando las 3 capas separadas (`curl_cffi` → `requests` → `Playwright`).
-   - Capa 1: `Fetcher` (HTTP con impersonación TLS de Chrome) — rápido.
-   - Capa 2: `StealthyFetcher` con `solve_cloudflare=True` — para Cloudflare/JS pesado (resuelve Buhobike 503).
-2. **`scraper_base.py` reescrito**: usa Scrapling, incluye `_espera_cortesa()` (delays aleatorios), `ProxyRotator` opcional (vía `PROXY_LIST` en `.env`), paginación (`extraer_bicicletas_paginado`), detector transversal `es_tarjeta_no_disponible()` y conversión segura de `TextHandler` a string para BeautifulSoup.
-3. **`bike_ocasion.py` optimizado**: extrae talla, batería, km, motor, suspensión, cuadro y componentes directamente de la tarjeta de listado (sin visitar ficha de detalle). Paginación de 6 páginas → 180+ bicicletas.
-4. **`scrapers/mammoth.py` integrado**: 4º portal profesional certificado sobre categorías de Rally/XC y Trail doble suspensión en ~2.6s.
-5. **`enriquecedor_web.py` con Visión Multimodal y Telemetría SoH**: usa ficha del producto del propio sitio como fuente principal, DuckDuckGo como fallback, caché JSON en disco (`cache/fichas_detalle.json`), fallback de visión por IA (`_extraer_km_de_imagenes` con Gemini Flash Vision), extractor de salud de batería (`_extraer_salud_bateria`) y detector de disponibilidad en ficha (`_extraer_disponibilidad_ficha`).
-6. **`main.py` mejorado**: scraping multi-portal en paralelo (`ThreadPoolExecutor`), `_health_check_scrapers()` (alerta por log y Telegram si un scraper devuelve 0 productos), enriquecimiento paralelo (5 workers), ordenamiento por salud mecánica previa a modalidad y logging persistente (`force=True`) en `logs/buscador.log` + consola.
-7. **Tests**: `test_buscador.py` pasa GREEN con todos los cambios, incluyendo validaciones de kilometraje, Range Extender, SoH %, filtro anti-reservadas y extractores de motor/año.
-
-### Dificultades encontradas y decisiones arquitectónicas
+### Dificultades encontradas y soluciones de ingeniería
 
 | Dificultad | Sitio afectado | Causa técnica | Solución arquitectónica / Estado |
 |------------|---------------|---------------|----------------------------------|
-| **Odómetro fotografiado vs texto de mantenimiento** | Buhobike | Buhobike no escribe el odómetro en el texto ni en el SKU en ciertas unidades usadas; solo sube una foto del display (ej. 4.237 km). Un regex simple `\d+ km` capturaba el texto de garantía: *"hacerle unos 700 km sin engrasar la cadena con cera al agua"*, asignando falsamente 700 km (10/10). | **Doble capa**: 1) Filtro de contexto negativo en `_extraer_km` que descarta menciones de cadena, cera, engrase, garantía y autonomía. 2) Fallback con Gemini Flash Vision (`_extraer_km_de_imagenes`) que analiza las fotos del display y extrae el odómetro exacto (`4237 km` -> nota 5.5/10). Si no hay dato confirmado, aplica -2.0 pts preventivos. |
+| **Odómetro fotografiado vs texto de mantenimiento ("700 km")** | Buhobike | Buhobike no escribe el odómetro en el texto ni en el SKU en ciertas unidades usadas; solo sube una foto del display (ej. 4.237 km). Un regex simple `\d+ km` capturaba el texto de garantía: *"hacerle unos 700 km sin engrasar la cadena con cera al agua"*, asignando falsamente 700 km (10/10). | **Doble capa**: 1) Filtro de contexto negativo en `_extraer_km` que descarta menciones de cadena, cera, engrase, garantía y autonomía. 2) Fallback con Gemini Flash Vision (`_extraer_km_de_imagenes`) que analiza las fotos del display y extrae el odómetro exacto (`4237 km` -> nota 5.5/10). Si no hay dato confirmado, aplica -2.0 pts preventivos. |
 | **Bicis castigadas superando a bicis sanas por modalidad** | Todos / Orquestador | `clave_orden_estrictas` ordenaba por `(sin_linea_roja, prioridad_modalidad, nota)`. Una XC con 5.000 km y nota 3.5/10 quedaba #1 sobre bicis Trail/Light sanas de < 2.000 km (7.5/10). | **Escalón de salud mecánica**: se agregó `salud_mecanica = 1 if (nota >= 6.0 and km <= 4000) else 0` como criterio #1 de ordenación, preservando la prioridad XC estrictamente dentro de cada escalón de salud. |
-| **Descarte prematuro de bicis ligeras con batería interna < 500 Wh** | Todos (especialmente Orbea Rise, BH iLynx, Specialized Levo SL) | e-MTBs superligeras con batería interna de 360 Wh o 480 Wh que incluían el Range Extender oficial eran descartadas por filtro S4 (<= 500 Wh) antes del enriquecimiento. O bien en descripciones se confundía la mera compatibilidad comercial ("compatible con extender opcional") con la inclusión real. | **Extractor robusto de Range Extender**: 1) Distingue inclusión real (+, incluye, con, regalo) de exclusión comercial (compatible con, opcional, no incluido, se vende por separado). 2) Suma la capacidad externa al total (`bateria_wh`) para rescatar oportunidades ligeras de 18 kg y > 600 Wh. 3) Se verifica antes del pre-filtro y en el enriquecedor. 4) Bonifica +0.5 pts en relación calidad-precio y se refleja en Telegram. |
+| **Descarte prematuro de bicis ligeras con batería interna < 500 Wh** | Todos (Orbea Rise, BH iLynx, Levo SL) | e-MTBs superligeras con batería interna de 360 Wh o 480 Wh que incluían el Range Extender oficial eran descartadas por filtro S4 (<= 500 Wh) antes del enriquecimiento, o se confundía la mera compatibilidad comercial ("compatible con extender opcional") con la inclusión real. | **Extractor robusto de Range Extender**: 1) Distingue inclusión real (`+`, `incluye`, `con`, `regalo`) de exclusión comercial (`compatible con`, `opcional`, `no incluido`, `por separado`). 2) Suma la capacidad externa al total (`bateria_wh`) para rescatar oportunidades ligeras de 18 kg y > 600 Wh. 3) Bonifica +0.5 pts en relación calidad-precio y lo refleja en Telegram. |
 | **Capacidad efectiva degradada vs capacidad nominal en Upway** | Upway | Upway publica frases como *"conserva el 89 % de su capacidad original de 750 Wh, es decir, 670 Wh"*. Si el extractor tomaba los Wh efectivos degradados en una batería de 540 Wh al 90% (~486 Wh), la bici caía falsamente en el filtro S4 (`<= 500 Wh`). | **Separación Nominal vs SoH**: `_extraer_bateria` prioriza `"capacidad original de XXX Wh"` para conservar la capacidad nominal en `bateria_wh`, mientras `_extraer_salud_bateria` guarda el `% SoH` y los ciclos de carga para evaluarlos en el Perito Mecánico Senior (`>=92%: +0.5`, `80-84%: -1.0`, `<80%: -2.5`). |
+| **Bicicletas "Reservadas" o "Agotadas" infiltradas en el Top 3** | Bike Ocasión / Buhobike / Upway / Mammoth | Las tiendas mantienen publicadas las fichas de unidades reservadas o recién vendidas por posicionamiento SEO. | **Filtro S0 en doble barrera**: `BaseScraper.es_tarjeta_no_disponible` descarta tarjetas con badges/clases de reserva o sin stock en los 4 scrapers, y `_extraer_disponibilidad_ficha` valida botones y etiquetas de ficha sin caer en falsos positivos (*"¿Quieres reservarla?"*). |
 | **Motor separado en etiquetas `Marca` y `Modelo` + Fechas de entrega como año** | Upway / Mammoth | Upway estructura el motor como `Marca: Shimano Modelo: EP800` (no adyacente), y Mammoth incluye `"Entrega estimada 12 nov. 2026"` que se interpretaba como año del modelo `2026`. | **Regex estructurados con contexto**: `_extraer_motor` soporta `Marca: X ... Modelo: Y` en Upway, y `_extraer_ano` prioriza etiquetas explícitas e ignora contextos de entrega/envío/garantía. |
-| **Archivo `logs/buscador.log` vacío (0 bytes)** | Orquestador / `scraper_base.py` | `scraper_base.py` ejecutaba `logging.basicConfig()` al importarse antes de `main.py`, haciendo que Python ignorara el `FileHandler` configurado posteriormente en `main.py`. | Se eliminó `logging.basicConfig()` de `scraper_base.py` y se añadió `force=True` en `main.py`. |
+| **Confusión de motores en gama BH (BH 2EXMAG vs Shimano EP801)** | Bike Ocasión / Buhobike | Los anuncios de `BH iLynx Race/Trail` e `iLynx+` a veces omiten el modelo exacto del motor. Ambos comparten chasis similar pero la serie `iLynx+` monta **Shimano EP801** (diagnóstico abierto, pero con batería/centralita BH) mientras que la serie `iLynx Race/Trail` monta el motor propietario **BH 2EXMAG**. | **Desambiguación en catálogo técnico (`gemini_classifier.py`)**: Se separaron las firmas de catálogo de `bh ilynx+` (Shimano EP801) y `bh ilynx race/trail` (BH 2EXMAG), manteniendo la penalización de -1.0 pt en BH por ecosistema de batería cerrado que impide extraer informe PDF oficial de salud de celdas. |
+| **Archivo `logs/buscador.log` vacío (0 bytes)** | Orquestador / `scraper_base.py` | `scraper_base.py` ejecutaba `logging.basicConfig()` al importarse antes de `main.py`, haciendo que Python ignorara silenciosamente el `FileHandler` configurado posteriormente en `main.py`. | Se eliminó `logging.basicConfig()` de `scraper_base.py` y se añadió `force=True` en `main.py`. |
 | **URL de categoría 404** | Bike Ocasión | La URL original (`bicicletas-electronicas/doble-suspension/`) devolvía 404. Se inspeccionó el menú y se encontró la URL correcta: `bicicletas-electricas-de-montana-doble-suspension-2020`. | Selectores y URLs actualizados tras inspección en vivo. |
-| **Protección anti-baneo (503)** | Buhobike | `Fetcher` HTTP devuelve 503. | `StealthyFetcher` con `solve_cloudflare=True` y `usar_stealth_directo=True`. |
+| **Protección anti-baneo (503)** | Buhobike | `Fetcher` HTTP devuelve 503 por desafío JS de Cloudflare. | `StealthyFetcher` con `solve_cloudflare=True` y `usar_stealth_directo=True`. |
 | **Incompatibilidad TextHandler vs BeautifulSoup** | Bike Ocasión | `page.html_content` de Scrapling es un `TextHandler` (subclase de `str`). | Se normaliza con `str(html)` en `scraper_base.py`. |
-| **Selectores placeholders** | Todos | Los scrapers originales usaban selectores genéricos (`.product-item`, `article.product`) que no coincidían. | Selectores específicos verificados con Scrapling en cada portal. |
 | **Pérdida de corrida por suspensión del PC** | Task Scheduler | A las 12:00 el PC estaba suspendido y Task Scheduler marcó `NumberOfMissedRuns: 1`. | Configurado `WakeToRun: True`, `StartWhenAvailable: True` y ejecución en batería en la tarea `BuscadorBiciOcasion` mediante PowerShell. |
+
+---
+
+## Estado actual y TODOs para mañana (Próxima Sesión)
+
+### Fotografía del estado actual (09/11/2026)
+- **Rendimiento de búsqueda**: Los 4 portales oficiales (**Bike Ocasión**, **Buhobike**, **Upway** y **Mammoth Bikes**) se rastrean en paralelo en **~57 segundos** totales (~319 e-MTBs inspeccionadas por corrida).
+- **Calidad de filtrado y telemetría**: Operativos los filtros estrictos `S0` (en stock, sin reservadas) a `S6`, detección de Range Extenders incluidos, lectura de odómetros en fotos con Gemini Vision y telemetría real de batería (`SoH %` y ciclos de carga).
+- **Suite de tests**: `python test_buscador.py` 100% en **GREEN** cubriendo casos de borde reales de los 4 portales.
+- **Automatización y logs**: Tarea `BuscadorBiciOcasion` activa a las 12:00 diarias con despertar automático (`WakeToRun: True`) y registro completo en `logs/buscador.log`.
+
+### Plan de trabajo propuesto para mañana (TODOs)
+
+- [ ] **TODO 1 — Historial de evolución de precios y "Tiempo en Stock" (`db.py` + `notifier.py`)**
+  - **Objetivo**: Ahora mismo `bicis_enviadas.db` solo registra las bicis que ya fueron notificadas en el Top 3. Si guardamos en una tabla `historial_catalogo` todas las candidatas vistas cada día (con `fecha_primera_vez`, `precio_inicial`, `precio_actual`, `num_rebajas`), podremos saber cuántos días lleva una bici sin venderse (margen de negociación) y detectar rebajas en bicis que antes costaban 3.400 € y acaban de entrar en 2.950 €.
+- [ ] **TODO 2 — Clasificación objetiva de modalidad por recorrido de suspensión en milímetros (`enriquecedor_web.py` + `evaluator.py`)**
+  - **Objetivo**: Extraer el recorrido delantero/trasero (`100-130 mm` vs `140 mm` vs `150-170 mm`) desde la tabla de especificaciones (ej. `Recorrido: 130 mm` o `Horquilla Fox 34 130mm`). Esto permitirá distinguir con precisión matemática una verdadera **XC / Downcountry (≤ 130 mm)** o **Light Trail (140 mm)** de una **Enduro / All Mountain (≥ 150 mm)** incluso cuando el título comercial es ambiguo.
+- [ ] **TODO 3 — Modo Radar de Mercado por CLI (`python main.py --stats`)**
+  - **Objetivo**: Añadir un flag `--stats` que imprima en segundos un resumen ejecutivo del catálogo cacheado/registrado: precio medio por modelo objetivo (*Orbea Rise*, *BH iLynx*, *Specialized Levo SL*, *Mondraker Neat*, *Scott Lumen*), bicis en "zona de vigilancia" (3.000 € – 3.350 € esperando rebaja) y mejores ratios `€/Wh` y `€/kg`.
 
 ### Dependencias instaladas
 
