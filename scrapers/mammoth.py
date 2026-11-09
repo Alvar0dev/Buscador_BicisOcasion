@@ -67,6 +67,9 @@ class MammothScraper(BaseScraper):
                 if not titulo or precio <= 0:
                     continue
 
+                if self.es_tarjeta_no_disponible(card):
+                    continue
+
                 talla = self._extraer_talla_disponible(card)
                 ano = self._extraer_ano_texto(titulo)
 

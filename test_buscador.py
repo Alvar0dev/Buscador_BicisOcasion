@@ -16,7 +16,14 @@ from gemini_classifier import (
     valorar_autonomo,
     auditar_perito_mecanico,
 )
-from scrapers.enriquecedor_web import _extraer_range_extender
+from scrapers.enriquecedor_web import (
+    _extraer_range_extender,
+    _extraer_salud_bateria,
+    _extraer_bateria,
+    _extraer_motor,
+    _extraer_ano,
+)
+from scraper_base import BaseScraper
 from db import BaseDatos
 from notifier import formatear_mensaje
 
@@ -456,6 +463,59 @@ def test_range_extender_extraccion_y_filtros():
     assert "🔋 Batería: 612 Wh (360 Wh + 🔋 252 Wh Range Extender)" in msg
 
 
+def test_salud_bateria_soh_disponibilidad_y_extractores():
+    """Valida extracción de SoH %, ciclos de batería, filtro anti-reservadas/agotadas y extractores."""
+    # 1. Extracción de SoH % y ciclos en Upway y Bike Ocasión
+    txt_upway = (
+        "Eléctrico Batería Estado de salud: 90\u00a0% Capacidad de la batería: 670 Wh "
+        "Número de ciclos de carga de la batería: 164 Ubicación de la batería: Cuadro "
+        "En esta bici, la batería se ha comprobado y conserva el 89 % de su capacidad original de 750 Wh, es decir, 670 Wh."
+    )
+    soh, ciclos = _extraer_salud_bateria(txt_upway)
+    assert soh == 90
+    assert ciclos == 164
+    assert _extraer_bateria(txt_upway) == 750  # Capacidad nominal original preservada
+
+    soh_bo, ciclos_bo = _extraer_salud_bateria("Potencia batería: 540Wh | % batería: 95% | Km: 1200")
+    assert soh_bo == 95
+    assert ciclos_bo is None
+
+    soh_vacio, _ = _extraer_salud_bateria("Potencia batería: 540Wh | % batería: - | Km: 1837")
+    assert soh_vacio is None
+
+    # 2. Motor en formato Upway ("Marca: X Modelo: Y") y EP800
+    assert _extraer_motor("Motor Marca: Shimano Modelo: EP800 Ubicación: Central") == "Shimano EP8"
+    assert _extraer_motor("Motor Marca: Bosch Modelo: Performance Line CX Par: 85 Nm") == "Bosch Performance Line CX"
+
+    # 3. Año ignorando fechas de entrega estimada o venta
+    assert _extraer_ano("Entrega estimada 12 nov. 2026. Envío gratuito.") is None
+    assert _extraer_ano("Entrega estimada 12 nov. 2026. Año del modelo: 2023") == 2023
+
+    # 4. Detección de bicicletas reservadas / agotadas y no falsos positivos ("¿Quieres reservarla?")
+    assert BaseScraper.es_tarjeta_no_disponible(texto_tarjeta="Orbea Rise H10 - RESERVADA - 2.499 €") is True
+    assert BaseScraper.es_tarjeta_no_disponible(texto_tarjeta="BH iLynx Race - Producto agotado") is True
+    assert BaseScraper.es_tarjeta_no_disponible(texto_tarjeta="¿Tienes dudas técnicas? ¿Quieres reservarla? Financiación") is False
+
+    b_reservada = bici_prueba(disponible=False)
+    apto_res, motivo_res = pasa_filtros_estrictos(b_reservada)
+    assert apto_res is False
+    assert "reservada o agotada" in motivo_res
+
+    # 5. Impacto de SoH % en Perito Mecánico Senior y formato de Telegram
+    b_soh_optimo = bici_prueba(bateria_wh=540, bateria_salud_pct=96, bateria_ciclos=38, km=1200, peso_kg=19.5)
+    audit_opt = auditar_perito_mecanico(b_soh_optimo)
+    assert audit_opt["delta_bateria"] == 0.5
+    assert "SoH medido: 96%" in audit_opt["txt_bateria"]
+    assert "38 ciclos diagnosticados" in audit_opt["txt_bateria"]
+
+    b_soh_malo = bici_prueba(bateria_wh=540, bateria_salud_pct=78, bateria_ciclos=240, km=1200, peso_kg=19.5)
+    audit_malo = auditar_perito_mecanico(b_soh_malo)
+    assert audit_malo["delta_bateria"] == -2.5
+
+    msg_soh = formatear_mensaje(b_soh_optimo, audit_opt["nota_final"], "Desglose")
+    assert "540 Wh [SoH: 96% | 38 ciclos]" in msg_soh
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -472,4 +532,5 @@ if __name__ == "__main__":
     test_perito_mecanico_senior_reglas_y_lineas_rojas()
     test_optimizacion_tarjetas_upway_y_buhobike()
     test_range_extender_extraccion_y_filtros()
+    test_salud_bateria_soh_disponibilidad_y_extractores()
     print("Todas las pruebas pasaron (GREEN).")

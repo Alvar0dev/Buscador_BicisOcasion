@@ -85,6 +85,8 @@ class BikeOcasionScraper(BaseScraper):
 
                 # --- Extraer campos de la tarjeta de listado ---
                 texto_tarjeta = p.get_text(" ", strip=True)
+                if self.es_tarjeta_no_disponible(p, texto_tarjeta):
+                    continue
                 detalle = self._extraer_de_tarjeta(texto_tarjeta)
                 if detalle.get("suspension_trasera") is None:
                     url_lower = f"{url} {self.sitio.seccion_emtb}".lower()

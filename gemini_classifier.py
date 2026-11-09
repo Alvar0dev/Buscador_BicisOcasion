@@ -680,24 +680,58 @@ def auditar_perito_mecanico(bici: Bicicleta) -> dict:
             f"{bici.motor or 'Motor de serie'} (-0.0 pts, km <=3.000): {doc_ref}."
         )
 
-    # 4. ESTADO DE BATERÍA (Análisis pericial vinculado a Wh y ciclos por km)
+    # 4. ESTADO DE BATERÍA (Análisis pericial vinculado a SoH empírico si existe o estimación por km)
     bat = bici.bateria_wh or 540
     extender = getattr(bici, "range_extender_wh", None)
     extender_str = f" [incluye Range Extender oficial de {extender} Wh]" if extender else ""
+    salud_pct = getattr(bici, "bateria_salud_pct", None)
+    ciclos_medidos = getattr(bici, "bateria_ciclos", None)
     ciclos_aprox = max(1, int((km or 1500) / 45))
-    if (km or 0) > 6000:
+    ciclos_txt = (
+        f"{ciclos_medidos} ciclos diagnosticados"
+        if ciclos_medidos is not None
+        else f"~{ciclos_aprox} ciclos estimados"
+    )
+
+    delta_bateria = 0.0
+    if salud_pct is not None:
+        if salud_pct >= 92:
+            delta_bateria = 0.5
+            txt_bateria = (
+                f"{bat} Wh{extender_str} (SoH medido: {salud_pct}%, {ciclos_txt}, +0.5 pts): "
+                f"Salud óptima certificada en banco de pruebas; mínima degradación química."
+            )
+        elif salud_pct >= 85:
+            delta_bateria = 0.0
+            txt_bateria = (
+                f"{bat} Wh{extender_str} (SoH medido: {salud_pct}%, {ciclos_txt}, -0.0 pts): "
+                f"Desgaste moderado y verificado por diagnóstico dentro de tolerancia."
+            )
+        elif salud_pct >= 80:
+            delta_bateria = -1.0
+            txt_bateria = (
+                f"{bat} Wh{extender_str} (SoH medido: {salud_pct}%, {ciclos_txt}, -1.0 pt): "
+                f"Degradación palpable verificada en test; autonomía real reducida."
+            )
+        else:
+            delta_bateria = -2.5
+            txt_bateria = (
+                f"{bat} Wh{extender_str} (SoH medido: {salud_pct}% <80%, {ciclos_txt}, -2.5 pts): "
+                f"Degradación severa certificada; riesgo de caída de tensión bajo carga."
+            )
+    elif (km or 0) > 6000:
         txt_bateria = (
-            f"{bat} Wh{extender_str} (~{ciclos_aprox} ciclos estimados): Degradación severa acumulada; "
+            f"{bat} Wh{extender_str} ({ciclos_txt}): Degradación severa acumulada; "
             f"alta probabilidad de caída de tensión bajo carga intensa (SoH estimado <80%)."
         )
     elif (km or 0) > 3000:
         txt_bateria = (
-            f"{bat} Wh{extender_str} (~{ciclos_aprox} ciclos estimados): Desgaste moderado de celdas "
+            f"{bat} Wh{extender_str} ({ciclos_txt}): Desgaste moderado de celdas "
             f"(SoH estimado 84-89%); verificar equilibrio de celdas en diagnóstico."
         )
     else:
         txt_bateria = (
-            f"{bat} Wh{extender_str} (~{ciclos_aprox} ciclos estimados): Salud óptima de celdas "
+            f"{bat} Wh{extender_str} ({ciclos_txt}): Salud óptima de celdas "
             f"(SoH estimado 93-99%) respaldada por 1 año de garantía profesional."
         )
 
@@ -718,13 +752,18 @@ def auditar_perito_mecanico(bici: Bicicleta) -> dict:
     if extender:
         txt_precio += f" Bonificación de compra: incluye Range Extender oficial (+{extender} Wh, valor nuevo ~450-550 €)."
 
-    nota_aritmetica = base + delta_km + delta_peso + delta_motor + delta_precio
+    nota_aritmetica = base + delta_km + delta_peso + delta_motor + delta_bateria + delta_precio
     nota_final = round(max(0.0, min(10.0, nota_aritmetica, techo)), 2)
 
     signo_peso = f"+{delta_peso:.1f}" if delta_peso > 0 else f"{delta_peso:.1f}"
+    bat_formula = ""
+    if delta_bateria != 0.0:
+        signo_bat = f"+{delta_bateria:.1f}" if delta_bateria > 0 else f"{delta_bateria:.1f}"
+        bat_formula = f"{signo_bat} (Batería) "
+
     formula_str = (
         f"Base 10.0 {delta_km:.1f} (Km) {signo_peso} (Peso) "
-        f"{delta_motor:.1f} (Motor) {delta_precio:.1f} (Precio) = {nota_aritmetica:.1f}"
+        f"{delta_motor:.1f} (Motor) {bat_formula}{delta_precio:.1f} (Precio) = {nota_aritmetica:.1f}"
     )
     if lineas_rojas:
         formula_str += f" -> Límite [{', '.join(lineas_rojas)}] => {nota_final}/10"
@@ -739,6 +778,7 @@ def auditar_perito_mecanico(bici: Bicicleta) -> dict:
         "delta_km": delta_km,
         "delta_peso": delta_peso,
         "delta_motor": delta_motor,
+        "delta_bateria": delta_bateria,
         "delta_precio": delta_precio,
         "formula_str": formula_str,
         "txt_km": txt_km,
@@ -841,7 +881,8 @@ def enriquecer_y_valorar_bici(bici: Bicicleta) -> Tuple[Bicicleta, float, str]:
     cache_ia = _cargar_cache_ia()
     if cache_key in cache_ia:
         entry = cache_ia[cache_key]
-        for campo in ("talla", "modalidad", "peso_kg", "bateria_wh", "range_extender_wh", "cuadro_material",
+        for campo in ("talla", "modalidad", "peso_kg", "bateria_wh", "range_extender_wh",
+                      "bateria_salud_pct", "bateria_ciclos", "cuadro_material",
                       "motor", "km", "ano", "componentes", "suspension_trasera"):
             if entry.get(campo) is not None and getattr(bici, campo, None) is None:
                 setattr(bici, campo, entry[campo])
@@ -885,6 +926,8 @@ Datos extraídos de la bicicleta ({bici.sitio}):
 - Talla: {bici.talla or 'M'}
 - Peso conocido (kg): {bici.peso_kg if bici.peso_kg is not None else 'inferir peso real de catálogo para este modelo exacto'}
 - Batería (Wh): {bici.bateria_wh if bici.bateria_wh is not None else 'desconocida'}
+- Salud batería medida (SoH %): {f'{bici.bateria_salud_pct}%' if bici.bateria_salud_pct is not None else 'no declarada'}
+- Ciclos batería medidos: {bici.bateria_ciclos if bici.bateria_ciclos is not None else 'no declarados'}
 - Range Extender: {f'{bici.range_extender_wh} Wh incluido' if bici.range_extender_wh else 'no incluido o no detectado'}
 - Motor: {bici.motor or 'inferir motor real del modelo'}
 - Cuadro: {bici.cuadro_material or 'inferir material'}
@@ -957,6 +1000,8 @@ Devuelve ÚNICAMENTE un objeto JSON válido con esta estructura exacta:
                 "peso_kg": bici.peso_kg,
                 "bateria_wh": bici.bateria_wh,
                 "range_extender_wh": bici.range_extender_wh,
+                "bateria_salud_pct": bici.bateria_salud_pct,
+                "bateria_ciclos": bici.bateria_ciclos,
                 "cuadro_material": bici.cuadro_material,
                 "motor": bici.motor,
                 "km": bici.km,

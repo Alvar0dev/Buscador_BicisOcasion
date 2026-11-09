@@ -55,6 +55,9 @@ class UpwayScraper(BaseScraper):
                 if not titulo or precio <= 0:
                     continue
 
+                if self.es_tarjeta_no_disponible(p, texto_completo):
+                    continue
+
                 # Extraer año, kilometraje y talla directamente del texto de la tarjeta
                 # sin lanzar peticiones secuenciales bloqueantes (main.py ya enriquece
                 # en paralelo con caché en disco solo las candidatas que pasan el pre-filtro).

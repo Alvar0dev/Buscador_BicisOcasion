@@ -98,6 +98,9 @@ class BuhobikeScraper(BaseScraper):
                 if not titulo or precio <= 0:
                     continue
 
+                if self.es_tarjeta_no_disponible(p):
+                    continue
+
                 # 4. Extraer especificaciones directamente desde la tarjeta (URL, SKU, título)
                 talla = self._extraer_talla_tarjeta(url, titulo)
                 ano = self._extraer_ano_texto(titulo)

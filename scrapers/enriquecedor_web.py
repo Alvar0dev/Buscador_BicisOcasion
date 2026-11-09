@@ -17,7 +17,7 @@ import logging
 import os
 import base64
 import requests
-from typing import Optional, Dict
+from typing import Optional, Dict, Tuple
 from pathlib import Path
 from bs4 import BeautifulSoup
 from models import Bicicleta
@@ -189,6 +189,17 @@ def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str) -> dict:
         if bateria is not None:
             detalle["bateria_wh"] = bateria
 
+    # --- Salud de Batería (SoH %) y Ciclos ---
+    salud_pct, ciclos_bat = _extraer_salud_bateria(texto_completo)
+    if salud_pct is not None:
+        detalle["bateria_salud_pct"] = salud_pct
+    if ciclos_bat is not None:
+        detalle["bateria_ciclos"] = ciclos_bat
+
+    # --- Disponibilidad (Reservada / Agotada) ---
+    if not _extraer_disponibilidad_ficha(soup, texto_completo):
+        detalle["disponible"] = False
+
     # --- Range Extender ---
     if "range_extender_wh" not in detalle:
         extender = _extraer_range_extender(texto_completo)
@@ -281,8 +292,32 @@ def _buscar_duckduckgo(consulta: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _extraer_ano(texto: str) -> Optional[int]:
-    match = re.search(r"\b(20\d{2})\b", texto)
-    if match:
+    texto_norm = texto.replace("\u202f", " ")
+    # 1. Priorizar etiquetas explícitas de año del modelo
+    for m in re.finditer(
+        r"\b(?:año(?:\s+del\s+modelo)?|ano|temporada)\s*[:\-]?\s*(20[12]\d)\b",
+        texto_norm,
+        re.IGNORECASE,
+    ):
+        ano = int(m.group(1))
+        if 2015 <= ano <= 2030:
+            return ano
+
+    # 2. Fallback general ignorando fechas de entrega, compra/venta o copyright
+    palabras_fecha = (
+        "entrega", "estimada", "envío", "envio", "recíbela", "recibela",
+        "vendida", "comprada", "copyright", "©",
+        "enero", "febrero", "marzo", "abril", "mayo", "junio",
+        "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+        "ene.", "feb.", "mar.", "abr.", "may.", "jun.",
+        "jul.", "ago.", "sep.", "oct.", "nov.", "dic.",
+    )
+    for match in re.finditer(r"\b(20[12]\d)\b", texto_norm):
+        inicio = max(0, match.start() - 45)
+        fin = min(len(texto_norm), match.end() + 25)
+        contexto = f"{texto_norm[inicio:match.start()]} {texto_norm[match.end():fin]}".lower()
+        if any(p in contexto for p in palabras_fecha):
+            continue
         ano = int(match.group(1))
         if 2015 <= ano <= 2030:
             return ano
@@ -320,7 +355,21 @@ def _extraer_peso(texto: str) -> Optional[float]:
 
 
 def _extraer_bateria(texto: str) -> Optional[int]:
-    for match in re.finditer(r"(\d+)\s*wh\b", texto.replace("\u202f", " "), re.IGNORECASE):
+    texto_norm = texto.replace("\u202f", " ").replace("\u00a0", " ")
+    # 1. Si menciona la capacidad nominal original (ej. Upway: "capacidad original de 750 Wh, es decir, 670 Wh"),
+    # usar la capacidad nominal del modelo y dejar la degradación en bateria_salud_pct.
+    match_orig = re.search(
+        r"capacidad\s+original\s+de\s+(\d{3,4})\s*wh\b",
+        texto_norm,
+        re.IGNORECASE,
+    )
+    if match_orig:
+        val_orig = int(match_orig.group(1))
+        if 250 <= val_orig <= 1200:
+            return val_orig
+
+    # 2. Búsqueda general de Wh
+    for match in re.finditer(r"(\d+)\s*wh\b", texto_norm, re.IGNORECASE):
         try:
             val = int(match.group(1))
             if 250 <= val <= 1200:
@@ -328,6 +377,83 @@ def _extraer_bateria(texto: str) -> Optional[int]:
         except ValueError:
             pass
     return None
+
+
+def _extraer_salud_bateria(texto: str) -> Tuple[Optional[int], Optional[int]]:
+    """
+    Extrae el estado de salud real de la batería (SoH en %, ej. 90% en Upway o Bike Ocasión)
+    y el número de ciclos de carga diagnosticados cuando están presentes en la ficha.
+    Devuelve (salud_pct, ciclos).
+    """
+    if not texto:
+        return None, None
+
+    texto_norm = texto.replace("\u202f", " ").replace("\u00a0", " ")
+    salud_pct: Optional[int] = None
+    ciclos: Optional[int] = None
+
+    patrones_salud = (
+        r"estado\s+de\s+salud\s*[:\-]?\s*(\d{2,3})\s*%",
+        r"conserva\s+el\s+(\d{2,3})\s*%\s+de\s+su\s+capacidad",
+        r"(?:salud|estado)\s+(?:de\s+(?:la\s+)?)?bater[ií]a\s*[:\-]?\s*(\d{2,3})\s*%",
+        r"%\s*bater[ií]a\s*[:\-]?\s*(\d{2,3})\s*%?",
+        r"\bsoh\s*[:\-]?\s*(\d{2,3})\s*%",
+    )
+    for patron in patrones_salud:
+        m = re.search(patron, texto_norm, re.IGNORECASE)
+        if m:
+            val = int(m.group(1))
+            if 40 <= val <= 100:
+                salud_pct = val
+                break
+
+    patrones_ciclos = (
+        r"(?:n[úu]mero\s+de\s+)?ciclos\s+de\s+carga(?:\s+de\s+la\s+bater[ií]a)?\s*[:\-]?\s*(\d{1,4})\b",
+        r"\b(\d{1,4})\s+ciclos\s+de\s+carga\b",
+    )
+    for patron in patrones_ciclos:
+        m = re.search(patron, texto_norm, re.IGNORECASE)
+        if m:
+            val_c = int(m.group(1))
+            if 0 <= val_c <= 3000:
+                ciclos = val_c
+                break
+
+    return salud_pct, ciclos
+
+
+def _extraer_disponibilidad_ficha(soup: BeautifulSoup, texto_completo: str) -> bool:
+    """
+    Verifica en la ficha de detalle si la bicicleta sigue disponible para compra
+    o si está marcada como Reservada, Agotada o Fuera de stock.
+    """
+    if soup is not None:
+        badge_no_disp = soup.select_one(
+            ".product-unavailable, .out-of-stock, .out_of_stock, .sold-out, "
+            ".agotado, .reservado, #product-availability .product-unavailable"
+        )
+        if badge_no_disp is not None:
+            return False
+
+        avail_el = soup.select_one("#product-availability, .product-availability, .availability-label")
+        if avail_el:
+            txt_avail = avail_el.get_text(" ", strip=True)
+            if re.search(
+                r"\b(?:reservad[oa]s?|agotad[oa]s?|vendid[oa]s?|sin\s+stock|no\s+disponible|fuera\s+de\s+stock)\b",
+                txt_avail,
+                re.IGNORECASE,
+            ):
+                return False
+
+    if texto_completo:
+        if re.search(
+            r"\b(?:bicicleta\s+reservada|producto\s+agotado|fuera\s+de\s+stock| temporalmente\s+sin\s+stock)\b",
+            texto_completo,
+            re.IGNORECASE,
+        ):
+            return False
+
+    return True
 
 
 def _extraer_range_extender(texto: str) -> Optional[int]:
@@ -549,21 +675,23 @@ def _extraer_km(texto: str) -> Optional[int]:
 def _extraer_motor(texto: str) -> Optional[str]:
     texto_lower = texto.lower()
     patrones_motor = [
-        (r"\bshimano\s+ep801\b", "Shimano EP801"),
-        (r"\bshimano\s+ep8[\-\s]*rs\b", "Shimano EP8 RS"),
-        (r"\bshimano\s+ep8\b", "Shimano EP8"),
-        (r"\bshimano\s+ep6\b", "Shimano EP6"),
-        (r"\bbosch\s+performance\s+line\s+sx\b|\bbosch\s+sx\b", "Bosch Performance Line SX"),
-        (r"\bbosch\s+performance\s+line\s+cx\b|\bbosch\s+cx\b", "Bosch Performance Line CX"),
-        (r"\bbosch\s+performance\s+line\b", "Bosch Performance Line"),
+        (r"\bshimano\b.{0,25}?\bep801\b", "Shimano EP801"),
+        (r"\bshimano\b.{0,25}?\bep8(?:00)?[\-\s]*rs\b", "Shimano EP8 RS"),
+        (r"\bshimano\b.{0,25}?\bep8(?:00)?\b", "Shimano EP8"),
+        (r"\bshimano\b.{0,25}?\bep6(?:00)?\b", "Shimano EP6"),
+        (r"\bbosch\b.{0,30}?\bperformance\s+line\s+sx\b|\bbosch\s+sx\b", "Bosch Performance Line SX"),
+        (r"\bbosch\b.{0,30}?\bperformance\s+line\s+cx\b|\bbosch\s+cx\b", "Bosch Performance Line CX"),
+        (r"\bbosch\b.{0,30}?\bperformance\s+line\b", "Bosch Performance Line"),
         (r"\bbh\s*2exmag\b|\b2exmag\b|\bbh\s*2e\b", "BH 2EXMAG"),
+        (r"\bfazua\b.{0,25}?\bride\s*60\b", "Fazua Ride 60"),
         (r"\bfazua\b", "Fazua"),
-        (r"\btq\s*hpr\d*\b|\bmotor\s+tq\b", "TQ HPR50"),
+        (r"\btq\b.{0,25}?\bhpr\s*\d*\b|\bmotor\s+tq\b", "TQ HPR50"),
         (r"\bmahle\b", "Mahle"),
-        (r"\bspecialized\s+sl\b", "Specialized SL"),
+        (r"\bspecialized\b.{0,20}?\bsl\b", "Specialized SL"),
         (r"\bbrose\b", "Brose"),
+        (r"\byamaha\b.{0,25}?\bpw[\-\s]*x3\b", "Yamaha PW-X3"),
         (r"\byamaha\b", "Yamaha"),
-        (r"\bgiant\s+syncdrive\b", "Giant SyncDrive"),
+        (r"\bgiant\b.{0,20}?\bsyncdrive\b|\bsyncdrive\b", "Giant SyncDrive"),
     ]
     for patron, nombre in patrones_motor:
         if re.search(patron, texto_lower):
@@ -615,8 +743,22 @@ def _extraer_componentes(texto: str) -> Optional[str]:
     partes = []
     if re.search(r"\b(xt|xtr|axs|x01|xx1|gx\s+eagle)\b", texto_lower):
         partes.append("XT/AXS")
+    elif re.search(r"\bshimano\s+slx\b|\bslx\b", texto_lower):
+        partes.append("Shimano SLX")
+    elif re.search(r"\bshimano\s+deore\b", texto_lower):
+        partes.append("Shimano Deore")
+    elif re.search(r"\bsram\s+gx\b", texto_lower):
+        partes.append("SRAM GX")
+
     if re.search(r"\b(kashima|ultimate|factory)\b", texto_lower):
         partes.append("Suspensión premium")
+    elif re.search(r"\bfox\s+(?:34|36|38|float)\b", texto_lower):
+        partes.append("Fox Float")
+    elif re.search(r"\bmarzocchi\s+bomber\b", texto_lower):
+        partes.append("Marzocchi Bomber")
+    elif re.search(r"\brock\s*shox\s+(?:sid|pike|lyrik|revelation|deluxe)\b", texto_lower):
+        partes.append("RockShox")
+
     if partes:
         return "; ".join(partes)
     return None
@@ -729,6 +871,9 @@ def enriquecer_bici(bici: Bicicleta, url_ficha: Optional[str] = None) -> Bicicle
 
 def _aplicar_detalle(bici: Bicicleta, detalle: dict) -> Bicicleta:
     """Aplica los campos del detalle a la bici solo si faltan o actualiza el total con range extender."""
+    if detalle.get("disponible") is False:
+        bici.disponible = False
+
     extender = detalle.get("range_extender_wh")
     if extender is not None and bici.range_extender_wh is None:
         bici.range_extender_wh = extender
@@ -739,7 +884,7 @@ def _aplicar_detalle(bici: Bicicleta, detalle: dict) -> Bicicleta:
                 bici.bateria_wh += extender
 
     for campo, valor in detalle.items():
-        if campo in ("range_extender_wh", "bateria_wh"):
+        if campo in ("range_extender_wh", "bateria_wh", "disponible"):
             continue
         if valor is not None and getattr(bici, campo, None) is None:
             setattr(bici, campo, valor)

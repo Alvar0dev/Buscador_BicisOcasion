@@ -50,6 +50,7 @@ logging.basicConfig(
         logging.FileHandler(LOG_DIR / "buscador.log", encoding="utf-8"),
         logging.StreamHandler(),
     ],
+    force=True,
 )
 logger = logging.getLogger("buscador")
 
@@ -149,9 +150,32 @@ def clave_orden_estrictas(item: tuple) -> tuple:
     )
 
 
+def _scrapear_sitio(sitio: cfg.SitioObjetivo) -> list:
+    """Ejecuta el scraper de un portal individual y devuelve sus bicicletas."""
+    clase = SCRAPERS.get(sitio.nombre)
+    if clase is None:
+        logger.warning(f"No hay scraper implementado para {sitio.nombre}. Saltando.")
+        return []
+    try:
+        scraper = clase(sitio)
+        bicis = scraper.extraer_bicicletas()
+        cantidad = len(bicis)
+        if cantidad == 0:
+            logger.critical(
+                f"[Health check] {sitio.nombre} devolvió 0 productos. "
+                f"POSIBLES SELECTORES ROTOS — revisar HTML de {sitio.seccion_emtb}"
+            )
+        else:
+            logger.info(f"[{sitio.nombre}] {cantidad} bicicletas extraídas OK.")
+        return bicis
+    except Exception as e:
+        logger.error(f"[{sitio.nombre}] Error durante el scraping: {e}")
+        return []
+
+
 def _recolectar_oportunidades(db: BaseDatos, forzar_envio: bool = False) -> list:
     """
-    Recorre los sitios objetivo en una sola pasada (con health check integrado),
+    Recorre los sitios objetivo en paralelo (con health check integrado),
     pre-filtra candidatas, enriquece y valora con el clasificador híbrido
     (ficha del sitio + catálogo + Gemini Flash / motor autónomo), y aplica
     los filtros estrictos S1-S6 post-enriquecimiento.
@@ -164,40 +188,32 @@ def _recolectar_oportunidades(db: BaseDatos, forzar_envio: bool = False) -> list
     """
     candidatas_pre = []
 
-    for sitio in SITIOS:
-        clase = SCRAPERS.get(sitio.nombre)
-        if clase is None:
-            logger.warning(f"No hay scraper implementado para {sitio.nombre}. Saltando.")
-            continue
-
-        try:
-            scraper = clase(sitio)
-            bicis = scraper.extraer_bicicletas()
-            cantidad = len(bicis)
-            if cantidad == 0:
-                logger.critical(
-                    f"[Health check] {sitio.nombre} devolvió 0 productos. "
-                    f"POSIBLES SELECTORES ROTOS — revisar HTML de {sitio.seccion_emtb}"
-                )
-            else:
-                logger.info(f"[{sitio.nombre}] {cantidad} bicicletas extraídas OK.")
-        except Exception as e:
-            logger.error(f"[{sitio.nombre}] Error durante el scraping: {e}")
-            continue
-
-        for bici in bicis:
-            if bici.range_extender_wh is None:
-                ext = _extraer_range_extender(f"{bici.titulo} {bici.componentes or ''}")
-                if ext:
-                    bici.range_extender_wh = ext
-                    if bici.bateria_wh is not None and bici.bateria_wh <= 600:
-                        bici.bateria_wh += ext
-            # Pre-filtro rápido con los campos ya conocidos de la tarjeta (precio, talla, batería...)
-            apto_pre, motivo_pre = pasa_filtros_estrictos(bici)
-            if not apto_pre:
-                logger.debug(f"  DESCARTADA PRE [{sitio.nombre}]: {bici.titulo} - {motivo_pre}")
+    with ThreadPoolExecutor(max_workers=len(SITIOS)) as pool_sitios:
+        futuros_sitios = {
+            pool_sitios.submit(_scrapear_sitio, sitio): sitio
+            for sitio in SITIOS
+        }
+        for futuro_s in as_completed(futuros_sitios):
+            sitio = futuros_sitios[futuro_s]
+            try:
+                bicis = futuro_s.result()
+            except Exception as e:
+                logger.error(f"[{sitio.nombre}] Excepción en worker de scraping: {e}")
                 continue
-            candidatas_pre.append(bici)
+
+            for bici in bicis:
+                if bici.range_extender_wh is None:
+                    ext = _extraer_range_extender(f"{bici.titulo} {bici.componentes or ''}")
+                    if ext:
+                        bici.range_extender_wh = ext
+                        if bici.bateria_wh is not None and bici.bateria_wh <= 600:
+                            bici.bateria_wh += ext
+                # Pre-filtro rápido con los campos ya conocidos de la tarjeta (precio, talla, batería, disponibilidad...)
+                apto_pre, motivo_pre = pasa_filtros_estrictos(bici)
+                if not apto_pre:
+                    logger.debug(f"  DESCARTADA PRE [{sitio.nombre}]: {bici.titulo} - {motivo_pre}")
+                    continue
+                candidatas_pre.append(bici)
 
     if not candidatas_pre:
         return []
@@ -209,7 +225,7 @@ def _recolectar_oportunidades(db: BaseDatos, forzar_envio: bool = False) -> list
     respaldo_nuevas = []
     respaldo_conocidas = []
 
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    with ThreadPoolExecutor(max_workers=5) as executor:
         futuros = {
             executor.submit(enriquecer_y_valorar_bici, bici): bici
             for bici in candidatas_pre
@@ -223,7 +239,9 @@ def _recolectar_oportunidades(db: BaseDatos, forzar_envio: bool = False) -> list
                 nota, desglose = calcular_nota_oportunidad(bici_orig)
                 bici = bici_orig
 
-            # Verificar Talla M, Doble Suspensión, Batería > 500 Wh y Precio 2.000-3.300 €
+            # Verificar disponibilidad, Talla M, Doble Suspensión, Batería > 500 Wh y Precio 2.000-3.300 €
+            if getattr(bici, "disponible", True) is False:
+                continue
             if bici.talla and bici.talla.strip().upper() != cfg.TALLA_OBJETIVO.upper():
                 continue
             if bici.bateria_wh is not None and bici.bateria_wh <= cfg.BATERIA_MIN_WH:

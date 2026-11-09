@@ -20,6 +20,10 @@ def pasa_filtros_estrictos(bici: Bicicleta) -> Tuple[bool, str]:
     Devuelve (apto, motivo) aplicando todos los filtros estrictos.
     Motivo explica por qué se descarta, si corresponde.
     """
+    # S0: Disponibilidad real (no reservada ni agotada)
+    if getattr(bici, "disponible", True) is False:
+        return False, "Bicicleta reservada o agotada"
+
     # S1: Talla exclusivamente M
     if bici.talla and bici.talla.strip().upper() != cfg.TALLA_OBJETIVO.upper():
         return False, f"Talla no es M: {bici.talla}"
@@ -174,6 +178,14 @@ def _puntuacion_motor(bici: Bicicleta) -> Tuple[float, str]:
     if bici.km is not None and bici.km < 1000:
         puntos += 1.0
         partes.append("pocos km en motor: +1.0")
+    salud_bat = getattr(bici, "bateria_salud_pct", None)
+    if salud_bat is not None:
+        if salud_bat >= 92:
+            puntos += 0.5
+            partes.append(f"salud batería certificada ({salud_bat}%): +0.5")
+        elif salud_bat < 85:
+            puntos = max(0.0, puntos - 1.0)
+            partes.append(f"salud batería degradada ({salud_bat}%): -1.0")
 
     return min(puntos, 2.5), "; ".join(partes) if partes else "Motor estándar o desconocido"
 

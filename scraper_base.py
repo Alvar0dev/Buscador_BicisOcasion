@@ -15,6 +15,7 @@ los scrapers existentes sigan funcionando sin cambios. Internamente ahora usa Sc
 import time
 import random
 import logging
+import re
 from abc import ABC, abstractmethod
 from typing import List, Optional
 from urllib.parse import urljoin
@@ -23,7 +24,6 @@ from bs4 import BeautifulSoup
 from models import Bicicleta
 import config as cfg
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("scraper")
 
 # Scrapling: Fetcher (HTTP stealth) y StealthyFetcher (navegador + Cloudflare solver)
@@ -284,3 +284,46 @@ class BaseScraper(ABC):
         if texto is None:
             return None
         return " ".join(texto.split()).strip()
+
+    @staticmethod
+    def es_tarjeta_no_disponible(elemento_tag=None, texto_tarjeta: str = "") -> bool:
+        """
+        Detecta si una tarjeta o producto figura como Reservada, Agotada, Vendida o Sin stock.
+        Verifica tanto clases CSS de PrestaShop/tiendas como etiquetas de texto con bordes de palabra.
+        """
+        if elemento_tag is not None and hasattr(elemento_tag, "get"):
+            clases_propias = " ".join(elemento_tag.get("class") or []).lower()
+            if any(
+                c in clases_propias
+                for c in (
+                    "product-unavailable",
+                    "out-of-stock",
+                    "out_of_stock",
+                    "sold-out",
+                    "agotado",
+                    "reservado",
+                    "sin-stock",
+                )
+            ):
+                return True
+
+            if hasattr(elemento_tag, "select_one"):
+                badge_no_disp = elemento_tag.select_one(
+                    ".product-unavailable, .out-of-stock, .out_of_stock, .sold-out, "
+                    ".agotado, .reservado, .sin-stock, .product-flag.out_of_stock"
+                )
+                if badge_no_disp is not None:
+                    return True
+
+            if not texto_tarjeta and hasattr(elemento_tag, "get_text"):
+                texto_tarjeta = elemento_tag.get_text(" ", strip=True)
+
+        if texto_tarjeta:
+            if re.search(
+                r"\b(?:reservad[oa]s?|agotad[oa]s?|vendid[oa]s?|sin\s+stock|out\s+of\s+stock|fuera\s+de\s+stock|no\s+disponible)\b",
+                texto_tarjeta,
+                re.IGNORECASE,
+            ):
+                return True
+
+        return False

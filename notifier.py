@@ -29,6 +29,16 @@ def formatear_mensaje(
         bateria = f"{bici.bateria_wh} Wh"
     else:
         bateria = "no indicado"
+
+    salud_pct = getattr(bici, "bateria_salud_pct", None)
+    ciclos_bat = getattr(bici, "bateria_ciclos", None)
+    if salud_pct is not None or ciclos_bat is not None:
+        partes_soh = []
+        if salud_pct is not None:
+            partes_soh.append(f"SoH: {salud_pct}%")
+        if ciclos_bat is not None:
+            partes_soh.append(f"{ciclos_bat} ciclos")
+        bateria = f"{bateria} [{' | '.join(partes_soh)}]"
     cuadro = bici.cuadro_material or "no indicado"
     motor = bici.motor or "no indicado"
     ano = bici.ano or "no indicado"

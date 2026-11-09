@@ -19,6 +19,8 @@ class Bicicleta:
     peso_kg: Optional[float] = None
     bateria_wh: Optional[int] = None
     range_extender_wh: Optional[int] = None
+    bateria_salud_pct: Optional[int] = None  # SoH real de la batería en % (ej. 95 en Upway/Bike Ocasión)
+    bateria_ciclos: Optional[int] = None     # Ciclos de carga diagnosticados
     cuadro_material: Optional[str] = None
     motor: Optional[str] = None
     km: Optional[int] = None
@@ -26,6 +28,7 @@ class Bicicleta:
     componentes: Optional[str] = None
     suspension_trasera: Optional[str] = None  # Amortiguador trasero -> doble suspensión
     garantia_anos: Optional[int] = None
+    disponible: bool = True                  # False si figura reservada, agotada o sin stock
 
     def to_dict(self) -> dict:
         return asdict(self)
