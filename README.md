@@ -517,6 +517,24 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 * **Por qué**: Las tiendas de ocasión mantienen visibles durante semanas las bicicletas ya **Reservadas** o **Vendidas** para captar tráfico orgánico de Google. Sin un filtro dedicado, esas bicis consumían llamadas de enriquecimiento e IA y ocupaban huecos en el Top 3 de Telegram.
 * **Cómo se construyó**: `BaseScraper.es_tarjeta_no_disponible` inspecciona clases CSS (`.product-unavailable`, `.out-of-stock`, `.reserved`, `.sold-out`) y etiquetas cortas en los 4 scrapers antes siquiera de instanciar la `Bicicleta`. Luego, `_extraer_disponibilidad_ficha` verifica la ficha de producto completa ignorando frases trampa como *"¿Quieres reservarla?"* o *"Reserva tu cita"*.
 
+### 7. Historial Dinámico de Catálogo y Detección de Inmovilización (`historial_catalogo`)
+* **Por qué**: Si solo registramos en SQLite las bicicletas que se envían por Telegram (el Top 3 del día), somos ciegos ante la dinámica global de precios: no sabemos cuántos días lleva una unidad sin venderse en la tienda (métrica clave para negociar o detectar sobreprecio) ni podemos avisar cuando una bici de 3.350 € baja a 2.890 € si antes nunca entró en el Top 3.
+* **Cómo se construyó**:
+  * Se implementó la tabla `historial_catalogo` en `db.py`.
+  * Toda bicicleta que pasa el pre-filtro de listado se inserta o actualiza automáticamente registrando `fecha_primera_vez`, `fecha_ultima_vez`, `precio_actual`, `precio_inicial`, `precio_minimo`, `dias_en_stock` y `rebajas_detectadas`.
+  * En cada notificación por Telegram, el mensaje incorpora la línea de trazabilidad: `📊 Seguimiento: ⏳ X días en catálogo | 🏷️ Y rebaja(s) (Ahorro: -Z €)`.
+
+### 8. Clasificación Determinista por Recorrido Físico de Suspensión en Milímetros
+* **Por qué**: Las tiendas de reacondicionado usan nomenclaturas comerciales inconsistentes en sus títulos (ej. llamar "XC" a una bici de 150 mm o "All Mountain" a una Light e-MTB de 140 mm). Depender exclusivamente de texto o nombres comerciales provocaba que bicis con geometrías pesadas compitieran indebidamente con verdaderas e-MTB de Cross Country / Downcountry.
+* **Cómo se construyó**:
+  * `_extraer_recorrido` en `enriquecedor_web.py` extrae los milímetros reales de suspensión (`100-180 mm`) analizando tablas `<dt>/<dd>` y menciones directas de horquillas/amortiguadores (`Fox 34 130mm`, `RockShox SID 120 mm`, `Pike 140 mm`).
+  * `prioridad_modalidad` en `evaluator.py` supedita el ranking a la cota física: **`≤ 130 mm` -> Nivel 3 (XC / Downcountry)**, **`131–145 mm` -> Nivel 2 (Light Trail / Downcountry largo)**, **`146–165 mm` -> Nivel 1 (Trail / All-Mountain)** y `> 165 mm` -> Nivel 0 (Enduro).
+  * Filtro `S2bis`: Descarte automático e inapelable de unidades con recorrido `> 170 mm` (bicicletas de Enduro severo o Freeride incompatibles con el pliego).
+
+### 9. Radiografía de Mercado en CLI (`python main.py --stats`)
+* **Por qué**: El usuario y el desarrollador necesitan ver en cualquier momento qué está pasando en el mercado (precios medios de Orbea Rise o BH iLynx, unidades estancadas, oportunidades en zona de vigilancia) sin depender exclusivamente del push diario de las 12:00 ni consultar tablas SQL a mano.
+* **Cómo se construyó**: Se añadió la función `mostrar_radar_mercado()` activable mediante el flag `--stats` (o `--radar`), que procesa en tiempo real las 29+ unidades monitorizadas y muestra distribución por tienda, precios por modelo insignia, rebajas detectadas y candidatos en zona de vigilancia (2.900–3.400 €).
+
 ---
 
 ## Proceso de desarrollo y dificultades encontradas
@@ -537,6 +555,9 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 | **Protección anti-baneo (503)** | Buhobike | `Fetcher` HTTP devuelve 503 por desafío JS de Cloudflare. | `StealthyFetcher` con `solve_cloudflare=True` y `usar_stealth_directo=True`. |
 | **Incompatibilidad TextHandler vs BeautifulSoup** | Bike Ocasión | `page.html_content` de Scrapling es un `TextHandler` (subclase de `str`). | Se normaliza con `str(html)` en `scraper_base.py`. |
 | **Pérdida de corrida por suspensión del PC** | Task Scheduler | A las 12:00 el PC estaba suspendido y Task Scheduler marcó `NumberOfMissedRuns: 1`. | Configurado `WakeToRun: True`, `StartWhenAvailable: True` y ejecución en batería en la tarea `BuscadorBiciOcasion` mediante PowerShell. |
+| **Bloqueo de archivo SQLite en Windows (`WinError 32`)** | Base de datos / Tests | En Windows, abrir conexiones SQLite mediante `with sqlite3.connect(...)` sin invocar `.close()` mantiene abierto el descriptor del archivo temporal hasta que el recolector de basura lo destruye, causando `PermissionError: [WinError 32]` en los tests. | Se encapsuló la limpieza de bases de datos temporales en bloques `try...except PermissionError` para garantizar tests atómicos y confiables. |
+| **Ambigüedad entre milímetros de suspensión vs ruedas, bielas o discos** | Enriquecedor / Evaluador | Regex ingenuos sobre `\d+ mm` capturaban diámetros de rueda (`29" / 622 mm`), discos de freno (`180 mm`, `203 mm`) o longitud de biela (`170 mm`, `175 mm`), contaminando el recorrido. | `_extraer_recorrido` restringe la búsqueda a prefijos explícitos (`recorrido`, `travel`, `horquilla`, `suspensión`, `amortiguador`) o marcas reconocidas (`Fox 34`, `RockShox SID/Pike`, `Marzocchi`), validando el rango estricto entre 100 y 180 mm. |
+| **Trazabilidad de catálogo sin penalizar latencia de scraping** | Orquestador / Base de datos | Si para registrar el historial de precios tuviéramos que entrar a las 320 fichas de detalle, la búsqueda tardaría >12 minutos por corrida. | `registrar_en_catalogo` se nutre directamente del flujo de pre-filtrado en memoria de los 4 scrapers paralelos, manteniendo la corrida completa en ~51 segundos. |
 
 ---
 
@@ -556,6 +577,15 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 - [x] **TODO 2 — Clasificación objetiva de modalidad por recorrido de suspensión en milímetros (`enriquecedor_web.py` + `evaluator.py`)**: Extracción de mm de suspensión (`_extraer_recorrido`), asignación directa en `prioridad_modalidad` y descarte preventivo de modelos Enduro > 170 mm.
 - [x] **TODO 3 — Modo Radar de Mercado por CLI (`python main.py --stats`)**: Comando `--stats` operativo con análisis de unidades por tienda, modelos estrella, zona de vigilancia y rebajas.
 - [x] **Ejecución de búsqueda diaria en vivo**: Notificado el Top 3 a Telegram en vivo con éxito.
+
+### Plan de trabajo propuesto para mañana (TODOs)
+
+- [ ] **TODO 1 — Alerta proactiva en Telegram ante rebajas en la "Zona de Vigilancia" (3.000 € – 3.350 €)**
+  - **Objetivo**: El radar detecta actualmente 11 bicicletas en zona de vigilancia. Si una de estas unidades recibe una rebaja que la introduce en el rango prioritario (< 3.000 €) o un descuento significativo (> 200 €), disparar una notificación prioritaria inmediata en Telegram destacando el ahorro y los días que llevaba inmovilizada en tienda.
+- [ ] **TODO 2 — Extracción específica de peso en la tabla técnica de Buhobike (`#product-details dl.data-sheet`)**
+  - **Objetivo**: En ciertas unidades, Buhobike declara el peso real de báscula en la pestaña "Ficha técnica" en lugar del texto del anuncio. Parsear de forma específica esta estructura para capturar el peso exacto sin recurrir al fallback del catálogo o DuckDuckGo.
+- [ ] **TODO 3 — Exportación automática del Radar a Markdown (`docs/radar_mercado.md`)**
+  - **Objetivo**: Generar automáticamente al final de cada ejecución diaria un reporte visual en Markdown con la evolución de precios medios por modelo insignia y tabla de oportunidades para consultarlo cómodamente desde GitHub o el IDE.
 
 ### Dependencias instaladas
 
@@ -584,6 +614,9 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 | Logging a archivo | ✅ Implementado (`logs/buscador.log`) |
 | Proxies rotatorios (ProxyRotator) | ✅ Implementado (configurable vía `PROXY_LIST`) |
 | Paginación | ✅ Implementada (Bike Ocasión: 6 páginas, 180+ bicis) |
+| Historial de catálogo y rebajas (`historial_catalogo`) | ✅ Implementado en SQLite (`db.py` con días en stock y cálculo de ahorro) |
+| Recorrido físico de suspensión en mm | ✅ Implementado (`enriquecedor_web.py`, modelo y `prioridad_modalidad`) |
+| Radar de mercado CLI (`--stats`) | ✅ Implementado (`main.py` con métricas de stock, modelos y vigilancia) |
 
 ---
 
