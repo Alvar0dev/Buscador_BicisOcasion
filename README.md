@@ -468,9 +468,9 @@ El sistema se encuentra en **producción activa y 100% automatizado**:
 | 6 | **Detección de Range Extender en descripción** | ✅ Completado | Detección de inclusión real (+180 Wh en BH / +252 Wh en Orbea / +160 Wh en TQ y Specialized / +250 Wh en Bosch PowerMore), rescate de filtro estricto S4 (Rise 360 Wh + 252 Wh = 612 Wh > 500 Wh), bonificación de +0.5 pts en calidad-precio, reflejo en desglose pericial y mensaje de Telegram. |
 | 7 | **Telemetría real de Salud de Batería (SoH % y ciclos)** | ✅ Completado | Extracción automática de `bateria_salud_pct` (`Estado de salud: 90 %`, `% batería: 95%`, `conserva el 89 % de su capacidad original`) y `bateria_ciclos` (`Número de ciclos de carga: 164`), preservando los Wh nominales en `bateria_wh` y ponderando el SoH real en el Perito Mecánico Senior y en Telegram (`[SoH: XX% | YY ciclos]`). |
 | 8 | **Filtro preventivo anti-Reservadas/Agotadas y Scraping Multi-Portal Paralelo** | ✅ Completado | Descarte inmediato de unidades reservadas/agotadas en los 4 scrapers (`es_tarjeta_no_disponible`), en la ficha de detalle (`_extraer_disponibilidad_ficha`) y en el filtro `S0`, más ejecución en paralelo de los 4 portales (`ThreadPoolExecutor`) reduciendo el tiempo de corrida a ~57s. |
-| 9 | **Historial de evolución de precios y "Tiempo en Stock" (`historial_precios`)** | ⏳ Pendiente (Mañana) | Registrar en SQLite el precio diario de todas las candidatas pre-filtradas (incluso las de 3.000–3.400 € o nota 6.5–7.9) para detectar cuántas rebajas acumula cada unidad y cuántos días lleva inmovilizada en tienda. |
-| 10 | **Clasificación objetiva de modalidad por recorrido de suspensión (mm)** | ⏳ Pendiente (Mañana) | Extraer milímetros de horquilla/amortiguador (`120-130 mm` XC/Downcountry vs `140 mm` Trail Ligera vs `150-170 mm` All Mountain/Enduro) en `enriquecedor_web.py` para blindar la prioridad de modalidad más allá del título comercial. |
-| 11 | **Modo radar de mercado CLI (`python main.py --stats`)** | ⏳ Pendiente (Mañana) | Comando de diagnóstico rápido que consulte la base local y caché para imprimir la radiografía del mercado (precio medio por modelo, unidades nuevas de la semana y mejores oportunidades cercanas al umbral de 3.000 €). |
+| 9 | **Historial de evolución de precios y "Tiempo en Stock" (`historial_catalogo`)** | ✅ Completado | Registro persistente en SQLite de todas las candidatas pre-filtradas con cálculo de días en catálogo, detección de rebajas acumuladas y ahorro total, visible en Telegram (`⏳ X días en catálogo | 🏷️ Y rebaja(s)`). |
+| 10 | **Clasificación objetiva de modalidad por recorrido de suspensión (mm)** | ✅ Completado | Extracción en `enriquecedor_web.py` de milímetros físicos de horquilla/amortiguador (`_extraer_recorrido`), ponderación directa en `prioridad_modalidad` (`≤130 mm` XC > `140 mm` Light Trail > `150-160 mm` All-Mountain) y descarte por S2bis de modelos `> 170 mm` (Enduro/DH). |
+| 11 | **Modo radar de mercado CLI (`python main.py --stats`)** | ✅ Completado | Comando de consola (`--stats` o `--radar`) que resume el catálogo en seguimiento activo: unidades por tienda, precios medios/mínimos de modelos estrella (*Orbea Rise*, *BH iLynx*, etc.), unidades en vigilancia (2.900–3.400 €) y rebajas activas. |
 
 ---
 
@@ -540,22 +540,22 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 
 ---
 
-## Estado actual y TODOs para mañana (Próxima Sesión)
+## Estado actual y próximos pasos
 
-### Fotografía del estado actual (09/11/2026)
-- **Rendimiento de búsqueda**: Los 4 portales oficiales (**Bike Ocasión**, **Buhobike**, **Upway** y **Mammoth Bikes**) se rastrean en paralelo en **~57 segundos** totales (~319 e-MTBs inspeccionadas por corrida).
-- **Calidad de filtrado y telemetría**: Operativos los filtros estrictos `S0` (en stock, sin reservadas) a `S6`, detección de Range Extenders incluidos, lectura de odómetros en fotos con Gemini Vision y telemetría real de batería (`SoH %` y ciclos de carga).
-- **Suite de tests**: `python test_buscador.py` 100% en **GREEN** cubriendo casos de borde reales de los 4 portales.
+### Fotografía del estado actual (10/11/2026)
+- **Rendimiento de búsqueda**: Los 4 portales oficiales (**Bike Ocasión**, **Buhobike**, **Upway** y **Mammoth Bikes**) se rastrean en paralelo en **~51 segundos** totales (~319 e-MTBs inspeccionadas por corrida).
+- **Calidad de filtrado y telemetría**: Operativos los filtros estrictos `S0` (en stock, sin reservadas) a `S6`, detección de Range Extenders incluidos, lectura de odómetros en fotos con Gemini Vision, telemetría real de batería (`SoH %` y ciclos de carga) y clasificación matemática por milímetros de recorrido de suspensión (`≤130 mm` XC > `140 mm` Trail Ligero > `150-160 mm` All-Mountain).
+- **Historial de catálogo y tiempo en stock**: Tabla SQLite `historial_catalogo` registrando automáticamente la evolución diaria de precios, días en stock y rebajas acumuladas.
+- **Radar de mercado CLI**: Disponible `python main.py --stats` (o `--radar`) para emitir en segundos la radiografía completa del mercado.
+- **Suite de tests**: `python test_buscador.py` 100% en **GREEN**.
 - **Automatización y logs**: Tarea `BuscadorBiciOcasion` activa a las 12:00 diarias con despertar automático (`WakeToRun: True`) y registro completo en `logs/buscador.log`.
 
-### Plan de trabajo propuesto para mañana (TODOs)
+### Tareas completadas en esta sesión
 
-- [ ] **TODO 1 — Historial de evolución de precios y "Tiempo en Stock" (`db.py` + `notifier.py`)**
-  - **Objetivo**: Ahora mismo `bicis_enviadas.db` solo registra las bicis que ya fueron notificadas en el Top 3. Si guardamos en una tabla `historial_catalogo` todas las candidatas vistas cada día (con `fecha_primera_vez`, `precio_inicial`, `precio_actual`, `num_rebajas`), podremos saber cuántos días lleva una bici sin venderse (margen de negociación) y detectar rebajas en bicis que antes costaban 3.400 € y acaban de entrar en 2.950 €.
-- [ ] **TODO 2 — Clasificación objetiva de modalidad por recorrido de suspensión en milímetros (`enriquecedor_web.py` + `evaluator.py`)**
-  - **Objetivo**: Extraer el recorrido delantero/trasero (`100-130 mm` vs `140 mm` vs `150-170 mm`) desde la tabla de especificaciones (ej. `Recorrido: 130 mm` o `Horquilla Fox 34 130mm`). Esto permitirá distinguir con precisión matemática una verdadera **XC / Downcountry (≤ 130 mm)** o **Light Trail (140 mm)** de una **Enduro / All Mountain (≥ 150 mm)** incluso cuando el título comercial es ambiguo.
-- [ ] **TODO 3 — Modo Radar de Mercado por CLI (`python main.py --stats`)**
-  - **Objetivo**: Añadir un flag `--stats` que imprima en segundos un resumen ejecutivo del catálogo cacheado/registrado: precio medio por modelo objetivo (*Orbea Rise*, *BH iLynx*, *Specialized Levo SL*, *Mondraker Neat*, *Scott Lumen*), bicis en "zona de vigilancia" (3.000 € – 3.350 € esperando rebaja) y mejores ratios `€/Wh` y `€/kg`.
+- [x] **TODO 1 — Historial de evolución de precios y "Tiempo en Stock" (`db.py` + `notifier.py`)**: Implementado en `historial_catalogo`, registrando cada candidata pre-filtrada con días en stock y rebajas acumuladas, formateado en las alertas de Telegram.
+- [x] **TODO 2 — Clasificación objetiva de modalidad por recorrido de suspensión en milímetros (`enriquecedor_web.py` + `evaluator.py`)**: Extracción de mm de suspensión (`_extraer_recorrido`), asignación directa en `prioridad_modalidad` y descarte preventivo de modelos Enduro > 170 mm.
+- [x] **TODO 3 — Modo Radar de Mercado por CLI (`python main.py --stats`)**: Comando `--stats` operativo con análisis de unidades por tienda, modelos estrella, zona de vigilancia y rebajas.
+- [x] **Ejecución de búsqueda diaria en vivo**: Notificado el Top 3 a Telegram en vivo con éxito.
 
 ### Dependencias instaladas
 

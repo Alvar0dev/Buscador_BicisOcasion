@@ -149,6 +149,10 @@ def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str) -> dict:
             cuadro_dt = _extraer_cuadro(val)
             if cuadro_dt:
                 detalle["cuadro_material"] = cuadro_dt
+        elif any(k in label for k in ("recorrido", "travel")) and "recorrido_mm" not in detalle:
+            rec_dt = _extraer_recorrido(val)
+            if rec_dt:
+                detalle["recorrido_mm"] = rec_dt
         elif ("suspensión" in label or "suspension" in label or "amortiguador" in label):
             if "semi" in val.lower() or "rígida" in val.lower() or "hardtail" in val.lower():
                 detalle["suspension_trasera"] = "no"
@@ -258,6 +262,12 @@ def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str) -> dict:
         modalidad = _extraer_modalidad(texto_completo)
         if modalidad:
             detalle["modalidad"] = modalidad
+
+    # --- Recorrido de suspensión (mm) ---
+    if "recorrido_mm" not in detalle:
+        recorrido = _extraer_recorrido(texto_completo)
+        if recorrido:
+            detalle["recorrido_mm"] = recorrido
 
     # --- Guardar en caché para futuras consultas ---
     if detalle:
@@ -764,6 +774,47 @@ def _extraer_componentes(texto: str) -> Optional[str]:
     return None
 
 
+def _extraer_recorrido(texto: str) -> Optional[int]:
+    """
+    Extrae el recorrido de suspensión en mm (ej. 100, 120, 130, 140, 150, 160 mm).
+    Prioriza etiquetas explícitas de recorrido/travel o suspensiones reconocidas.
+    Rango válido e-MTB: 100 <= mm <= 180.
+    """
+    texto_norm = texto.replace("\u202f", " ")
+
+    # 1. Patrones explícitos con etiqueta de recorrido / travel
+    patrones_etiqueta = [
+        r"\b(?:recorrido(?:\s+(?:de\s+)?suspensi[oó]n|\s+horquilla|\s+delantero|\s+trasero)?|travel)\s*[:\-]?\s*(\d{2,3})\s*mm\b",
+        r"\b(\d{2,3})\s*mm\s*(?:de\s+)?(?:recorrido|travel)\b",
+        r"\b(\d{2,3})\s*/\s*\d{2,3}\s*mm\b",
+    ]
+    for p in patrones_etiqueta:
+        m = re.search(p, texto_norm, re.IGNORECASE)
+        if m:
+            try:
+                val = int(m.group(1))
+                if 100 <= val <= 180:
+                    return val
+            except ValueError:
+                pass
+
+    # 2. Patrones con marcas/modelos de suspensión y recorrido
+    m_susp = re.search(
+        r"\b(?:fox\s*(?:32|34|36|38|float)?|rock\s*shox\s*(?:sid|pike|lyrik|revelation|yari|deluxe)?|marzocchi|ohlins)\b.{0,25}?\b(\d{2,3})\s*mm\b",
+        texto_norm,
+        re.IGNORECASE,
+    )
+    if m_susp:
+        try:
+            val = int(m_susp.group(1))
+            if 100 <= val <= 180:
+                return val
+        except ValueError:
+            pass
+
+    return None
+
+
 def _extraer_modalidad(texto: str) -> Optional[str]:
     texto_lower = texto.lower()
     patrones_modalidad = [
@@ -802,6 +853,7 @@ def enriquecer_bici(bici: Bicicleta, url_ficha: Optional[str] = None) -> Bicicle
         or bici.km is None or bici.talla is None or bici.bateria_wh is None
         or bici.motor is None or bici.cuadro_material is None
         or bici.componentes is None or bici.modalidad is None
+        or bici.recorrido_mm is None
     )
 
     if not faltan:

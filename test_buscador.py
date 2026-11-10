@@ -9,7 +9,7 @@ No depende de la web real ni de credenciales de Telegram.
 import os
 import tempfile
 from models import Bicicleta
-from evaluator import evaluar, calcular_nota_oportunidad, pasa_filtros_estrictos, _puntuacion_calidad_precio
+from evaluator import evaluar, calcular_nota_oportunidad, pasa_filtros_estrictos, _puntuacion_calidad_precio, prioridad_modalidad
 from gemini_classifier import (
     completar_con_catalogo,
     evaluar_documentacion_motor,
@@ -22,6 +22,7 @@ from scrapers.enriquecedor_web import (
     _extraer_bateria,
     _extraer_motor,
     _extraer_ano,
+    _extraer_recorrido,
 )
 from scraper_base import BaseScraper
 from db import BaseDatos
@@ -516,6 +517,81 @@ def test_salud_bateria_soh_disponibilidad_y_extractores():
     assert "540 Wh [SoH: 96% | 38 ciclos]" in msg_soh
 
 
+def test_todos_historial_catalogo_recorrido_y_stats():
+    """Valida los TODOs: extracción de recorrido (mm), prioridad objetiva y tracking de catálogo."""
+    # 1. Extractor de recorrido en mm
+    assert _extraer_recorrido("Horquilla Fox 34 Float con 130 mm de recorrido") == 130
+    assert _extraer_recorrido("Recorrido horquilla: 120mm. Amortiguador Fox DPS.") == 120
+    assert _extraer_recorrido("RockShox Pike 140 mm") == 140
+    assert _extraer_recorrido("Bicicleta de paseo sin suspension") is None
+
+    # 2. Prioridad objetiva por recorrido de suspensión
+    b_xc = bici_prueba(recorrido_mm=120)
+    b_trail_ligero = bici_prueba(recorrido_mm=140)
+    b_all_mtn = bici_prueba(recorrido_mm=150)
+    b_enduro = bici_prueba(recorrido_mm=170)
+
+    assert prioridad_modalidad(b_xc) == 3
+    assert prioridad_modalidad(b_trail_ligero) == 2
+    assert prioridad_modalidad(b_all_mtn) == 1
+    assert prioridad_modalidad(b_enduro) == 0
+
+    # 3. Filtro S2bis: descarte por recorrido excesivo (> 170 mm)
+    b_dh = bici_prueba(recorrido_mm=180)
+    apto_dh, motivo_dh = pasa_filtros_estrictos(b_dh)
+    assert apto_dh is False
+    assert "excesivo" in motivo_dh
+
+    # 4. Historial de catálogo y tiempo en stock en SQLite
+    fd, path_tmp = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    try:
+        db = BaseDatos(ruta=path_tmp)
+        bici_track = bici_prueba(bici_id="track-001", precio=2999.0)
+        
+        # Primer registro: días 0, rebajas 0
+        res1 = db.registrar_en_catalogo(bici_track)
+        assert res1["dias_en_stock"] == 0
+        assert res1["rebajas_detectadas"] == 0
+        assert res1["precio_actual"] == 2999.0
+
+        # Segundo registro con bajada de precio a 2.750 €
+        bici_track.precio = 2750.0
+        res2 = db.registrar_en_catalogo(bici_track)
+        assert res2["rebajas_detectadas"] == 1
+        assert res2["ahorro_eur"] == 249.0
+        assert res2["precio_minimo"] == 2750.0
+
+        # Consulta de seguimiento
+        seg = db.obtener_seguimiento("track-001")
+        assert seg is not None
+        assert seg["rebajas_detectadas"] == 1
+        assert seg["ahorro_eur"] == 249.0
+
+        # Radar de mercado / estadísticas
+        stats = db.obtener_estadisticas_mercado()
+        assert stats["total"] == 1
+        assert "Bike Ocasión" in stats["por_sitio"]
+        assert len(stats["con_rebajas"]) == 1
+        assert stats["con_rebajas"][0]["ahorro"] == 249.0
+
+        # Formateo de Telegram con recorrido y seguimiento
+        msg = formatear_mensaje(
+            bici_track,
+            nota=8.5,
+            desglose="Desglose test",
+            seguimiento={"dias_en_stock": 7, "rebajas_detectadas": 1},
+        )
+        assert "7 días en catálogo" in msg
+        assert "1 rebaja(s)" in msg
+    finally:
+        try:
+            if os.path.exists(path_tmp):
+                os.remove(path_tmp)
+        except PermissionError:
+            pass
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -533,4 +609,5 @@ if __name__ == "__main__":
     test_optimizacion_tarjetas_upway_y_buhobike()
     test_range_extender_extraccion_y_filtros()
     test_salud_bateria_soh_disponibilidad_y_extractores()
+    test_todos_historial_catalogo_recorrido_y_stats()
     print("Todas las pruebas pasaron (GREEN).")

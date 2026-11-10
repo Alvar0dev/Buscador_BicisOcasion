@@ -48,6 +48,10 @@ def pasa_filtros_estrictos(bici: Bicicleta) -> Tuple[bool, str]:
     if bici.suspension_trasera is not None and str(bici.suspension_trasera).lower() in ("false", "no", "0"):
         return False, "No tiene suspensión trasera (no es doble suspensión)"
 
+    # S2bis: Si el recorrido de suspensión supera 170 mm, se descarta por Enduro/Freeride
+    if bici.recorrido_mm is not None and bici.recorrido_mm > 170:
+        return False, f"Recorrido de suspensión excesivo para Light e-MTB / XC: {bici.recorrido_mm} mm"
+
     # S5/S6: Precio entre 2.000 € y 3.300 € (excepcional hasta 3.300 €)
     if bici.precio < cfg.PRECIO_MIN_EUR:
         return False, f"Precio < 2.000 €: {bici.precio} €"
@@ -60,11 +64,24 @@ def pasa_filtros_estrictos(bici: Bicicleta) -> Tuple[bool, str]:
 def prioridad_modalidad(bici: Bicicleta) -> int:
     """
     Devuelve el nivel de prioridad de la modalidad para priorizar siempre XC frente a Trail:
-      3 -> XC / Cross Country / Downcountry (100-120 mm, ej. BH iLynx Race, Scott Lumen, KTM Scarp)
-      2 -> Light e-MTB / Trail ligero (130-140 mm, ej. Orbea Rise, Trek Fuel EXe, BH iLynx Trail sin '+')
-      1 -> Trail / All Mountain general (150-160 mm, ej. BH iLynx+ Trail)
-      0 -> Otras / sin clasificar
+      3 -> XC / Cross Country / Downcountry (<= 130 mm, ej. BH iLynx Race, Scott Lumen, KTM Scarp)
+      2 -> Light e-MTB / Trail ligero (131-145 mm, ej. Orbea Rise, Trek Fuel EXe, BH iLynx Trail sin '+')
+      1 -> Trail / All Mountain general (146-165 mm, ej. BH iLynx+ Trail)
+      0 -> Otras / sin clasificar (> 165 mm / Enduro)
     """
+    # 1. Prioridad objetiva por recorrido físico de suspensión si se conoce (TODO 2)
+    if bici.recorrido_mm is not None:
+        rec = bici.recorrido_mm
+        if rec <= 130:
+            return 3
+        elif rec <= 145:
+            return 2
+        elif rec <= 165:
+            return 1
+        else:
+            return 0
+
+    # 2. Heurística semántica por título / modelo / modalidad cuando no hay recorrido explícito
     titulo = (bici.titulo or "").lower()
     modalidad = (bici.modalidad or "").lower()
     texto = f"{titulo} {modalidad}"

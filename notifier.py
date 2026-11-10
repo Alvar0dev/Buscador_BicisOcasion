@@ -10,12 +10,17 @@ import config as cfg
 
 
 def formatear_mensaje(
-    bici, nota: float, desglose: str, precio_anterior: Optional[float] = None
+    bici,
+    nota: float,
+    desglose: str,
+    precio_anterior: Optional[float] = None,
+    seguimiento: Optional[dict] = None,
 ) -> str:
     """
     Construye el mensaje Markdown para Telegram (S9).
     Incluye: título, precio (con alerta de bajada si aplica), nota destacada 🔥,
-    kilómetros, batería, cuadro, desglose de la nota y enlace directo.
+    kilómetros, batería, cuadro, recorrido de suspensión, seguimiento en stock,
+    desglose de la nota y enlace directo.
     """
     km = bici.km if bici.km is not None else "no indicado"
     if getattr(bici, "range_extender_wh", None):
@@ -44,6 +49,8 @@ def formatear_mensaje(
     ano = bici.ano or "no indicado"
     talla = bici.talla or "no indicada"
     modalidad = bici.modalidad or "no indicada"
+    if getattr(bici, "recorrido_mm", None):
+        modalidad = f"{modalidad} ({bici.recorrido_mm} mm)"
     garantia = (
         bici.garantia_anos
         if bici.garantia_anos is not None
@@ -66,6 +73,18 @@ def formatear_mensaje(
         linea_precio = f"💰 Precio: *{bici.precio} €*"
         cabecera = "🚵‍♂️ *Nueva oportunidad de e-MTB encontrada*"
 
+    linea_seguimiento = ""
+    if seguimiento:
+        dias = seguimiento.get("dias_en_stock", 0)
+        rebajas = seguimiento.get("rebajas_detectadas", 0)
+        partes_seg = []
+        if dias > 0:
+            partes_seg.append(f"⏳ {dias} días en catálogo")
+        if rebajas > 0:
+            partes_seg.append(f"🏷️ {rebajas} rebaja(s)")
+        if partes_seg:
+            linea_seguimiento = f"📊 Seguimiento: {' | '.join(partes_seg)}\n"
+
     mensaje = (
         f"{cabecera}\n\n"
         f"*{bici.titulo}*\n"
@@ -80,14 +99,21 @@ def formatear_mensaje(
         f"⚡ Motor: {motor}\n"
         f"📅 Año: {ano}\n"
         f"🛣️ Kilómetros: {km}\n"
-        f"🛡️ Garantía: {garantia} año(s)\n\n"
+        f"🛡️ Garantía: {garantia} año(s)\n"
+        f"{linea_seguimiento}\n"
         f"_Valoración técnica (IA / 5 ejes):_\n{desglose_seguro}\n\n"
         f"🔗 [Enlace directo de compra]({bici.url})"
     )
     return mensaje
 
 
-def enviar(bici, nota: float, desglose: str, precio_anterior: Optional[float] = None) -> bool:
+def enviar(
+    bici,
+    nota: float,
+    desglose: str,
+    precio_anterior: Optional[float] = None,
+    seguimiento: Optional[dict] = None,
+) -> bool:
     """
     Envía el mensaje a Telegram. Devuelve True si tuvo éxito.
     Maneja excepciones de red para no caer la ejecución diaria (S13).
@@ -97,7 +123,13 @@ def enviar(bici, nota: float, desglose: str, precio_anterior: Optional[float] = 
         return False
 
     url = cfg.TELEGRAM_API_URL.format(token=cfg.TELEGRAM_BOT_TOKEN)
-    texto = formatear_mensaje(bici, nota, desglose, precio_anterior=precio_anterior)
+    texto = formatear_mensaje(
+        bici,
+        nota,
+        desglose,
+        precio_anterior=precio_anterior,
+        seguimiento=seguimiento,
+    )
     payload = {
         "chat_id": cfg.TELEGRAM_CHAT_ID,
         "text": texto,

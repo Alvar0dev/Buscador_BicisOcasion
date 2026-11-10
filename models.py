@@ -27,6 +27,7 @@ class Bicicleta:
     ano: Optional[int] = None
     componentes: Optional[str] = None
     suspension_trasera: Optional[str] = None  # Amortiguador trasero -> doble suspensión
+    recorrido_mm: Optional[int] = None        # Recorrido de suspensión en mm (ej. 120, 140, 150)
     garantia_anos: Optional[int] = None
     disponible: bool = True                  # False si figura reservada, agotada o sin stock
 

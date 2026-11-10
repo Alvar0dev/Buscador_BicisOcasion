@@ -213,6 +213,7 @@ def _recolectar_oportunidades(db: BaseDatos, forzar_envio: bool = False) -> list
                 if not apto_pre:
                     logger.debug(f"  DESCARTADA PRE [{sitio.nombre}]: {bici.titulo} - {motivo_pre}")
                     continue
+                db.registrar_en_catalogo(bici)
                 candidatas_pre.append(bici)
 
     if not candidatas_pre:
@@ -318,7 +319,8 @@ def ejecutar_busqueda(forzar_envio: bool = False) -> None:
     total_notificadas = 0
     for bici, nota, desglose in a_notificar:
         precio_anterior = db.precio_previo(bici.bici_id)
-        if enviar(bici, nota, desglose, precio_anterior=precio_anterior):
+        seguimiento = db.obtener_seguimiento(bici.bici_id)
+        if enviar(bici, nota, desglose, precio_anterior=precio_anterior, seguimiento=seguimiento):
             db.registrar(bici, nota, precio_anterior=precio_anterior)
             total_notificadas += 1
             logger.info(f"  NOTIFICADA: {bici.titulo} ({bici.peso_kg} kg) - Nota {nota}/10")
@@ -327,8 +329,44 @@ def ejecutar_busqueda(forzar_envio: bool = False) -> None:
                 f"{len(oportunidades)} candidatas aptas, {total_notificadas} notificadas.\n")
 
 
+def mostrar_radar_mercado() -> None:
+    """Imprime la radiografía del mercado de e-MTB basada en el catálogo rastreado (TODO 3)."""
+    db = BaseDatos()
+    stats = db.obtener_estadisticas_mercado()
+    print("\n" + "=" * 65)
+    print(" 📡 RADAR DE MERCADO e-MTB DE OCASIÓN (ESTADÍSTICAS)")
+    print("=" * 65)
+    print(f"Total bicicletas en seguimiento activo: {stats['total']}")
+    if stats["por_sitio"]:
+        print("\n🏪 Distribución por portal:")
+        for sitio, cant in sorted(stats["por_sitio"].items(), key=lambda x: x[1], reverse=True):
+            print(f"  • {sitio:15}: {cant} unidades")
+
+    if stats["modelos_clave"]:
+        print("\n🎯 Modelos Clave de e-MTB Ligera:")
+        print(f"  {'Modelo':22} | {'Uds':4} | {'Mínimo':9} | {'Precio Medio':12}")
+        print("  " + "-" * 55)
+        for modelo, info in stats["modelos_clave"].items():
+            p_min = f"{info['precio_min']:.0f} €" if info['precio_min'] else "-"
+            p_med = f"{info['precio_medio']:.0f} €" if info['precio_medio'] else "-"
+            print(f"  {modelo:22} | {info['unidades']:4} | {p_min:>9} | {p_med:>12}")
+
+    if stats["con_rebajas"]:
+        print(f"\n📉 Oportunidades con Bajada de Precio ({len(stats['con_rebajas'])} detectadas):")
+        for r in stats["con_rebajas"][:5]:
+            print(f"  • {r['titulo']} ({r['sitio']})")
+            print(f"    Precio: {r['precio_actual']:.0f} € (Antes: {r['precio_inicial']:.0f} € | Ahorro: -{r['ahorro']:.0f} € | {r['dias']} días en stock)")
+
+    if stats["en_vigilancia"]:
+        print(f"\n👀 Zona de Vigilancia (2.900 € - 3.400 € esperando rebaja, {len(stats['en_vigilancia'])} unidades):")
+        for v in stats["en_vigilancia"][:5]:
+            print(f"  • {v['titulo']} — {v['precio']:.0f} € ({v['sitio']}) [{v['dias']} días en stock]")
+
+    print("=" * 65 + "\n")
+
+
 def main() -> None:
-    """Punto de entrada CLI: soporta ejecución única (--once) o bucle diario a las 12:00 (S10)."""
+    """Punto de entrada CLI: soporta ejecución única (--once), radar (--stats) o bucle diario a las 12:00 (S10)."""
     parser = argparse.ArgumentParser(description="Buscador de e-MTB de Ocasión")
     parser.add_argument(
         "--once",
@@ -340,7 +378,18 @@ def main() -> None:
         action="store_true",
         help="Fuerza el envío del Top 3 aunque ya figuren en bicis_enviadas.db.",
     )
+    parser.add_argument(
+        "--stats",
+        "--radar",
+        action="store_true",
+        dest="stats",
+        help="Muestra informe de radar de mercado a partir del historial de catálogo.",
+    )
     args = parser.parse_args()
+
+    if args.stats:
+        mostrar_radar_mercado()
+        return
 
     if args.once:
         ejecutar_busqueda(forzar_envio=args.forzar)
