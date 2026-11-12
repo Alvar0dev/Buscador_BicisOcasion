@@ -153,6 +153,7 @@ class BaseDatos:
                     "precio_minimo": bici.precio,
                     "precio_actual": bici.precio,
                     "ahorro_eur": 0.0,
+                    "entrada_desde_vigilancia": False,
                 }
             else:
                 precio_inicial = float(fila["precio_inicial"])
@@ -189,13 +190,23 @@ class BaseDatos:
                     ),
                 )
                 conn.commit()
+                ahorro = max(0.0, precio_inicial - bici.precio)
+                entrada_vigilancia = bool(
+                    rebajas > 0
+                    and (
+                        (precio_inicial > cfg.PRECIO_MAX_EUR and bici.precio <= cfg.PRECIO_MAX_EUR)
+                        or (precio_inicial > cfg.PRECIO_MAX_EXCEPCIONAL_EUR and bici.precio <= cfg.PRECIO_MAX_EXCEPCIONAL_EUR)
+                        or ahorro >= 200.0
+                    )
+                )
                 return {
                     "dias_en_stock": dias_stock,
                     "rebajas_detectadas": rebajas,
                     "precio_inicial": precio_inicial,
                     "precio_minimo": precio_minimo,
                     "precio_actual": bici.precio,
-                    "ahorro_eur": max(0.0, precio_inicial - bici.precio),
+                    "ahorro_eur": ahorro,
+                    "entrada_desde_vigilancia": entrada_vigilancia,
                 }
 
     def obtener_seguimiento(self, bici_id: str) -> Optional[Dict[str, Any]]:
@@ -208,13 +219,24 @@ class BaseDatos:
                 return None
             precio_inicial = float(fila["precio_inicial"])
             precio_actual = float(fila["precio_actual"])
+            rebajas = int(fila["rebajas_detectadas"])
+            ahorro = max(0.0, precio_inicial - precio_actual)
+            entrada_vigilancia = bool(
+                rebajas > 0
+                and (
+                    (precio_inicial > cfg.PRECIO_MAX_EUR and precio_actual <= cfg.PRECIO_MAX_EUR)
+                    or (precio_inicial > cfg.PRECIO_MAX_EXCEPCIONAL_EUR and precio_actual <= cfg.PRECIO_MAX_EXCEPCIONAL_EUR)
+                    or ahorro >= 200.0
+                )
+            )
             return {
                 "dias_en_stock": int(fila["dias_en_stock"]),
-                "rebajas_detectadas": int(fila["rebajas_detectadas"]),
+                "rebajas_detectadas": rebajas,
                 "precio_inicial": precio_inicial,
                 "precio_minimo": float(fila["precio_minimo"]),
                 "precio_actual": precio_actual,
-                "ahorro_eur": max(0.0, precio_inicial - precio_actual),
+                "ahorro_eur": ahorro,
+                "entrada_desde_vigilancia": entrada_vigilancia,
                 "fecha_primera_vez": fila["fecha_primera_vez"],
                 "fecha_ultima_vez": fila["fecha_ultima_vez"],
             }
@@ -254,17 +276,19 @@ class BaseDatos:
             titulo = f["titulo"].lower()
 
             if int(f["rebajas_detectadas"]) > 0:
+                p_ini = float(f["precio_inicial"])
                 con_rebajas.append({
                     "titulo": f["titulo"],
                     "sitio": f["sitio"],
                     "precio_actual": precio,
-                    "precio_inicial": float(f["precio_inicial"]),
-                    "ahorro": float(f["precio_inicial"]) - precio,
+                    "precio_inicial": p_ini,
+                    "ahorro": p_ini - precio,
                     "dias": int(f["dias_en_stock"]),
+                    "entrada_vigilancia": bool(p_ini > cfg.PRECIO_MAX_EUR and precio <= cfg.PRECIO_MAX_EUR),
                     "url": f["url"],
                 })
 
-            if 2900.0 <= precio <= 3400.0:
+            if 2900.0 <= precio <= 3500.0:
                 en_vigilancia.append({
                     "titulo": f["titulo"],
                     "sitio": f["sitio"],

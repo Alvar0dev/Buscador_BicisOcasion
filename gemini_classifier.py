@@ -881,14 +881,20 @@ def enriquecer_y_valorar_bici(bici: Bicicleta) -> Tuple[Bicicleta, float, str]:
     cache_ia = _cargar_cache_ia()
     if cache_key in cache_ia:
         entry = cache_ia[cache_key]
-        for campo in ("talla", "modalidad", "peso_kg", "bateria_wh", "range_extender_wh",
-                      "bateria_salud_pct", "bateria_ciclos", "cuadro_material",
-                      "motor", "km", "ano", "componentes", "suspension_trasera"):
-            if entry.get(campo) is not None and getattr(bici, campo, None) is None:
-                setattr(bici, campo, entry[campo])
-        bici = completar_con_catalogo(bici, aplicar_heuristica_peso=True)
-        audit_cached = auditar_perito_mecanico(bici)
-        return bici, audit_cached["nota_final"], str(entry["desglose"])
+        km_nuevo_descubierto = (bici.km is not None and entry.get("km") != bici.km)
+        if not km_nuevo_descubierto:
+            for campo in ("talla", "modalidad", "peso_kg", "bateria_wh", "range_extender_wh",
+                          "bateria_salud_pct", "bateria_ciclos", "cuadro_material",
+                          "motor", "km", "ano", "componentes", "suspension_trasera", "recorrido_mm"):
+                if entry.get(campo) is not None and getattr(bici, campo, None) is None:
+                    setattr(bici, campo, entry[campo])
+            bici = completar_con_catalogo(bici, aplicar_heuristica_peso=True)
+            audit_cached = auditar_perito_mecanico(bici)
+            return bici, audit_cached["nota_final"], str(entry["desglose"])
+        log.info(
+            f"[Caché IA] Invalidando entrada de {bici.titulo} por actualización de km "
+            f"({entry.get('km')} -> {bici.km})"
+        )
 
     # Pre-auditoría con los datos conocidos hasta ahora
     audit_pre = auditar_perito_mecanico(bici)
@@ -1008,6 +1014,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con esta estructura exacta:
                 "ano": bici.ano,
                 "componentes": bici.componentes,
                 "suspension_trasera": bici.suspension_trasera,
+                "recorrido_mm": bici.recorrido_mm,
                 "nota": nota_final,
                 "desglose": desglose_ia,
             }

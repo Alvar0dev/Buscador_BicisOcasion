@@ -470,7 +470,9 @@ El sistema se encuentra en **producción activa y 100% automatizado**:
 | 8 | **Filtro preventivo anti-Reservadas/Agotadas y Scraping Multi-Portal Paralelo** | ✅ Completado | Descarte inmediato de unidades reservadas/agotadas en los 4 scrapers (`es_tarjeta_no_disponible`), en la ficha de detalle (`_extraer_disponibilidad_ficha`) y en el filtro `S0`, más ejecución en paralelo de los 4 portales (`ThreadPoolExecutor`) reduciendo el tiempo de corrida a ~57s. |
 | 9 | **Historial de evolución de precios y "Tiempo en Stock" (`historial_catalogo`)** | ✅ Completado | Registro persistente en SQLite de todas las candidatas pre-filtradas con cálculo de días en catálogo, detección de rebajas acumuladas y ahorro total, visible en Telegram (`⏳ X días en catálogo | 🏷️ Y rebaja(s)`). |
 | 10 | **Clasificación objetiva de modalidad por recorrido de suspensión (mm)** | ✅ Completado | Extracción en `enriquecedor_web.py` de milímetros físicos de horquilla/amortiguador (`_extraer_recorrido`), ponderación directa en `prioridad_modalidad` (`≤130 mm` XC > `140 mm` Light Trail > `150-160 mm` All-Mountain) y descarte por S2bis de modelos `> 170 mm` (Enduro/DH). |
-| 11 | **Modo radar de mercado CLI (`python main.py --stats`)** | ✅ Completado | Comando de consola (`--stats` o `--radar`) que resume el catálogo en seguimiento activo: unidades por tienda, precios medios/mínimos de modelos estrella (*Orbea Rise*, *BH iLynx*, etc.), unidades en vigilancia (2.900–3.400 €) y rebajas activas. |
+| 11 | **Modo radar de mercado CLI (`python main.py --stats`) y exportación Markdown (`docs/radar_mercado.md`)** | ✅ Completado | Comando de consola (`--stats` o `--radar`) y generación automática de `docs/radar_mercado.md` en cada corrida con unidades por tienda, precios medios/mínimos de modelos estrella (*Orbea Rise*, *BH iLynx*), unidades en vigilancia (2.900–3.500 €) y rebajas activas. |
+| 12 | **Extracción multimodal en lote de odómetros en imágenes (`gemini-3.5-flash-lite`) y tabla técnica Buhobike** | ✅ Completado | Cuando `km` no aparece en string ni int en los datos/ficha, inspecciona hasta 6 fotos de galería en una única llamada multimodal a Gemini Vision (`4238 km` detectados en foto #3 de Orbea Rise H10) y extrae peso de báscula (`19,57Kg`) de `table.caracteristicas-tecnicas-2-tablas` y `#product-details`. |
+| 13 | **Alertas proactivas de Entrada desde Zona de Vigilancia** | ✅ Completado | Seguimiento activo de bicicletas hasta 3.500 € en `historial_catalogo` y disparo de cabecera prioritaria `🚨 ¡ENTRADA DESDE ZONA DE VIGILANCIA! BAJADA DE PRECIO DETECTADA` cuando bajan a `<= 3.000 €` o acumulan `>= 200 €` de descuento. |
 
 ---
 
@@ -576,16 +578,11 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 - [x] **TODO 1 — Historial de evolución de precios y "Tiempo en Stock" (`db.py` + `notifier.py`)**: Implementado en `historial_catalogo`, registrando cada candidata pre-filtrada con días en stock y rebajas acumuladas, formateado en las alertas de Telegram.
 - [x] **TODO 2 — Clasificación objetiva de modalidad por recorrido de suspensión en milímetros (`enriquecedor_web.py` + `evaluator.py`)**: Extracción de mm de suspensión (`_extraer_recorrido`), asignación directa en `prioridad_modalidad` y descarte preventivo de modelos Enduro > 170 mm.
 - [x] **TODO 3 — Modo Radar de Mercado por CLI (`python main.py --stats`)**: Comando `--stats` operativo con análisis de unidades por tienda, modelos estrella, zona de vigilancia y rebajas.
-- [x] **Ejecución de búsqueda diaria en vivo**: Notificado el Top 3 a Telegram en vivo con éxito.
-
-### Plan de trabajo propuesto para mañana (TODOs)
-
-- [ ] **TODO 1 — Alerta proactiva en Telegram ante rebajas en la "Zona de Vigilancia" (3.000 € – 3.350 €)**
-  - **Objetivo**: El radar detecta actualmente 11 bicicletas en zona de vigilancia. Si una de estas unidades recibe una rebaja que la introduce en el rango prioritario (< 3.000 €) o un descuento significativo (> 200 €), disparar una notificación prioritaria inmediata en Telegram destacando el ahorro y los días que llevaba inmovilizada en tienda.
-- [ ] **TODO 2 — Extracción específica de peso en la tabla técnica de Buhobike (`#product-details dl.data-sheet`)**
-  - **Objetivo**: En ciertas unidades, Buhobike declara el peso real de báscula en la pestaña "Ficha técnica" en lugar del texto del anuncio. Parsear de forma específica esta estructura para capturar el peso exacto sin recurrir al fallback del catálogo o DuckDuckGo.
-- [ ] **TODO 3 — Exportación automática del Radar a Markdown (`docs/radar_mercado.md`)**
-  - **Objetivo**: Generar automáticamente al final de cada ejecución diaria un reporte visual en Markdown con la evolución de precios medios por modelo insignia y tabla de oportunidades para consultarlo cómodamente desde GitHub o el IDE.
+- [x] **TODO 4 — Alerta proactiva en Telegram ante rebajas en la "Zona de Vigilancia" (3.000 € – 3.500 €)**: Detección automática de `entrada_desde_vigilancia` en `db.py` y formato prioritario `🚨 ¡ENTRADA DESDE ZONA DE VIGILANCIA! BAJADA DE PRECIO DETECTADA` en `notifier.py`.
+- [x] **TODO 5 — Extracción estructurada de tabla técnica de Buhobike (`table.caracteristicas-tecnicas-2-tablas` y `#product-details`)**: Parseo de filas `<tr><th>/<td>` y JSON `data-product` para extraer peso real de báscula (`19,57Kg`) y recorrido de suspensión (`140 mm`) antes de descomponer el DOM.
+- [x] **TODO 6 — Extracción multimodal en lote de kilómetros desde imágenes (`_extraer_km_de_imagenes`)**: Cuando los kilómetros no aparecen en string ni int en los datos/ficha, inspecciona hasta 6 imágenes de la galería en una única petición multimodal con `gemini-3.5-flash-lite` / `gemini-3.5-flash`, invalidando cachés sin `km` verificado (`4238 km` detectados en foto #3 de la Orbea Rise H10 2022 de Buhobike).
+- [x] **TODO 7 — Exportación automática del Radar a Markdown (`docs/radar_mercado.md`)**: Generación automática de `docs/radar_mercado.md` en cada corrida y en `--stats`.
+- [x] **Ejecución de búsqueda diaria en vivo**: Notificado el Top 3 actualizado a Telegram en vivo con éxito.
 
 ### Dependencias instaladas
 

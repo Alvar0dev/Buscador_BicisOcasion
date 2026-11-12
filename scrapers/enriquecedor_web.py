@@ -16,8 +16,9 @@ import json
 import logging
 import os
 import base64
+from urllib.parse import urljoin
 import requests
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, List, Any
 from pathlib import Path
 from bs4 import BeautifulSoup
 from models import Bicicleta
@@ -32,11 +33,14 @@ except ImportError:
     SCRAPLING_AVAILABLE = False
 
 
+import threading
+
 # ---------------------------------------------------------------------------
 # Caché de fichas de detalle (tarea 12, Fase D)
 # ---------------------------------------------------------------------------
 CACHE_DIR = cfg.BASE_DIR / "cache"
 CACHE_FILE = CACHE_DIR / "fichas_detalle.json"
+_CACHE_LOCK = threading.Lock()
 
 
 def _cargar_cache() -> Dict[str, dict]:
@@ -62,27 +66,130 @@ def _guardar_cache(cache: Dict[str, dict]) -> None:
 
 
 def _buscar_en_cache(url: str) -> Optional[dict]:
-    """Busca los datos extraídos de una ficha en el caché."""
-    cache = _cargar_cache()
-    return cache.get(url)
+    """Busca los datos extraídos de una ficha en el caché (thread-safe)."""
+    with _CACHE_LOCK:
+        cache = _cargar_cache()
+        return cache.get(url)
 
 
 def _guardar_en_cache(url: str, datos: dict) -> None:
-    """Guarda los datos extraídos de una ficha en el caché."""
-    cache = _cargar_cache()
-    cache[url] = datos
-    _guardar_cache(cache)
+    """Guarda los datos extraídos de una ficha en el caché (thread-safe)."""
+    with _CACHE_LOCK:
+        cache = _cargar_cache()
+        cache[url] = datos
+        _guardar_cache(cache)
 
 
 # ---------------------------------------------------------------------------
 # 1. Enriquecimiento desde la ficha del propio sitio (Scrapling)
 # ---------------------------------------------------------------------------
 
-def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str) -> dict:
+def _extraer_pares_ficha_estructurada(soup: BeautifulSoup) -> List[Tuple[str, str]]:
+    """
+    Extrae pares (etiqueta, valor) de la ficha técnica estructurada:
+      1. Listas de definición <dt>/<dd> (Upway, PrestaShop dl.data-sheet).
+      2. Tablas técnicas <tr><th>/<td> o <tr><td>/<td> (Buhobike table.caracteristicas-tecnicas-2-tablas,
+         #description table, .product-features table, .data-sheet table).
+      3. Atributo JSON #product-details[data-product] de PrestaShop (features).
+    """
+    pares: List[Tuple[str, str]] = []
+
+    # 1. Pares <dt>/<dd>
+    for dt in soup.find_all("dt"):
+        dd = dt.find_next_sibling("dd")
+        if not dd:
+            continue
+        label = dt.get_text(" ", strip=True).lower()
+        val = dd.get_text(" ", strip=True)
+        if label and val:
+            pares.append((label, val))
+
+    # 2. Filas de tablas técnicas (Buhobike / PrestaShop)
+    tablas = soup.select(
+        "table.caracteristicas-tecnicas-2-tablas, #description table, "
+        "#product-details table, .product-features table, .data-sheet table, "
+        ".product-description table"
+    )
+    for tabla in tablas:
+        for tr in tabla.find_all("tr"):
+            celdas = tr.find_all(["th", "td"])
+            if len(celdas) >= 2:
+                label = celdas[0].get_text(" ", strip=True).lower().rstrip(":")
+                val = celdas[1].get_text(" ", strip=True)
+                if label and val:
+                    pares.append((label, val))
+
+    # 3. Atributo JSON data-product en #product-details (PrestaShop)
+    pd = soup.select_one("#product-details[data-product]")
+    if pd and pd.get("data-product"):
+        try:
+            dp = json.loads(pd["data-product"])
+            for feat in dp.get("features", []) or []:
+                if isinstance(feat, dict):
+                    label = str(feat.get("name", "")).strip().lower()
+                    val = str(feat.get("value", "")).strip()
+                    if label and val:
+                        pares.append((label, val))
+        except Exception:
+            pass
+
+    return pares
+
+
+def _recolectar_urls_imagenes_ficha(soup: BeautifulSoup, url_ficha: str = "") -> List[str]:
+    """
+    Extrae las URLs de las fotografías de la galería de producto antes de descomponer el DOM.
+    Soporta Buhobike, Bike Ocasión, Upway y Mammoth Bikes.
+    """
+    if soup is None:
+        return []
+
+    img_urls: List[str] = []
+    palabras_excluidas = ("sello-", "logo", "icon", "avatar", "banner", "badge", ".svg", ".gif")
+
+    def _agregar_url(raw_url: Optional[str], exigir_patron_galeria: bool = False) -> None:
+        if not raw_url:
+            return
+        u = raw_url.strip()
+        if not u or u.startswith("data:"):
+            return
+        if url_ficha:
+            u = urljoin(url_ficha, u)
+        u_low = u.lower()
+        if any(p in u_low for p in palabras_excluidas):
+            return
+        if exigir_patron_galeria and not any(
+            k in u_low for k in ("default", "large", "product", "uploads", "cdn", "shopify", "upway", "mammoth", ".jpg", ".jpeg", ".webp", ".png")
+        ):
+            return
+        if u not in img_urls:
+            img_urls.append(u)
+
+    for img in soup.select(
+        "img.js-thumb, .product-images img, ul.product-images img, "
+        ".images-container img, .product-gallery img, [data-image-large-src], [data-full-size-image-url]"
+    ):
+        u = (
+            img.get("data-image-large-src")
+            or img.get("data-full-size-image-url")
+            or img.get("data-src")
+            or img.get("src")
+        )
+        _agregar_url(u, exigir_patron_galeria=True)
+
+    if not img_urls:
+        for a in soup.select("ul.product-images a.thumb, .js-thumb, a[data-image], a.js-thumb-mask"):
+            u = a.get("data-image") or a.get("href")
+            _agregar_url(u, exigir_patron_galeria=False)
+
+    return img_urls[:8]
+
+
+def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str, km_ya_conocido: bool = False) -> dict:
     """
     Entra a la ficha de producto del sitio y extrae los campos que pueda:
     talla, bateria_wh, km, motor, cuadro_material, ano, peso_kg,
-    suspension_trasera, componentes, modalidad.
+    suspension_trasera, componentes, modalidad, recorrido_mm.
     Devuelve un dict con los campos encontrados (puede estar parcialmente vacio).
     """
     detalle: dict = {}
@@ -90,10 +197,16 @@ def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str) -> dict:
         return detalle
 
     # --- Caché: verificar si ya consultamos esta ficha antes ---
+    # Si la bicicleta no tiene km (ni en tarjeta ni en caché) y nunca se verificaron
+    # sus imágenes con Visión IA, no cortocircuitar para poder inspeccionar la galería.
     cache_hit = _buscar_en_cache(url)
     if cache_hit:
-        log.info(f"[Caché] Ficha ya consultada: {url} -> {list(cache_hit.keys())}")
-        return dict(cache_hit)
+        tiene_km_cache = _normalizar_km_existente(cache_hit.get("km")) is not None
+        vision_ya_verificada = bool(cache_hit.get("km_vision_checked"))
+        if km_ya_conocido or tiene_km_cache or vision_ya_verificada or not cfg.GEMINI_API_KEY:
+            log.info(f"[Caché] Ficha ya consultada: {url} -> {list(cache_hit.keys())}")
+            return dict(cache_hit)
+        log.info(f"[Caché] Re-analizando ficha para extraer km desde imágenes: {url}")
 
     try:
         es_buhobike = "buhobike.com" in url.lower() or sitio_nombre.lower() == "buhobike"
@@ -110,29 +223,25 @@ def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str) -> dict:
                 )
         if page.status != 200:
             log.warning(f"[Enriquecedor] No se pudo abrir ficha {url} (status {page.status})")
-            return detalle
+            return dict(cache_hit) if cache_hit else detalle
     except Exception as e:
         log.warning(f"[Enriquecedor] Error abriendo ficha {url}: {e}")
-        return detalle
+        return dict(cache_hit) if cache_hit else detalle
 
     html = str(page.html_content)
     soup = BeautifulSoup(html, "html.parser")
 
-    # 1. Extraer pares <dt>/<dd> estructurados si existen (Upway / PrestaShop data-sheet)
-    for dt in soup.find_all("dt"):
-        dd = dt.find_next_sibling("dd")
-        if not dd:
-            continue
-        label = dt.get_text(" ", strip=True).lower()
-        val = dd.get_text(" ", strip=True)
-        if not val:
-            continue
-        if label in ("año", "ano", "año del modelo") and "ano" not in detalle:
+    # 0. Recolectar URLs de imágenes de la galería antes de descomponer nodos del DOM
+    img_urls_galeria = _recolectar_urls_imagenes_ficha(soup, url_ficha=url)
+
+    # 1. Extraer pares estructurados (<dt>/<dd>, tablas técnicas de Buhobike y data-product)
+    for label, val in _extraer_pares_ficha_estructurada(soup):
+        if label in ("año", "ano", "año del modelo", "temporada") and "ano" not in detalle:
             ano_dt = _extraer_ano(val)
             if ano_dt:
                 detalle["ano"] = ano_dt
-        elif "peso" in label and "peso_kg" not in detalle:
-            peso_dt = _extraer_peso(val)
+        elif "peso" in label and not any(x in label for x in ("embalaje", "máximo", "maximo", "ciclista")) and "peso_kg" not in detalle:
+            peso_dt = _extraer_peso(f"Peso: {val}") or _extraer_peso(val)
             if peso_dt is not None:
                 detalle["peso_kg"] = peso_dt
         elif ("batería" in label or "bateria" in label) and "bateria_wh" not in detalle:
@@ -144,26 +253,30 @@ def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str) -> dict:
             if talla_limpia in ("XS", "S", "M", "L", "XL", "XXL"):
                 detalle["talla"] = talla_limpia
         elif "motor" in label and "motor" not in detalle:
-            detalle["motor"] = val
+            detalle["motor"] = _extraer_motor(val) or val
         elif ("cuadro" in label or "material" in label) and "cuadro_material" not in detalle:
             cuadro_dt = _extraer_cuadro(val)
             if cuadro_dt:
                 detalle["cuadro_material"] = cuadro_dt
-        elif any(k in label for k in ("recorrido", "travel")) and "recorrido_mm" not in detalle:
+        elif any(k in label for k in ("recorrido", "travel", "horquilla", "amortiguador")) and "recorrido_mm" not in detalle:
             rec_dt = _extraer_recorrido(val)
             if rec_dt:
                 detalle["recorrido_mm"] = rec_dt
-        elif ("suspensión" in label or "suspension" in label or "amortiguador" in label):
+        elif any(k in label for k in ("kilometraje", "kilómetros", "kilometros", "odómetro", "odometro", "km", "kms")) and "km" not in detalle:
+            km_dt = _extraer_km(f"Km: {val}") or _normalizar_km_existente(val)
+            if km_dt is not None:
+                detalle["km"] = km_dt
+        if ("suspensión" in label or "suspension" in label or "amortiguador" in label) and "suspension_trasera" not in detalle:
             if "semi" in val.lower() or "rígida" in val.lower() or "hardtail" in val.lower():
                 detalle["suspension_trasera"] = "no"
             elif any(k in val.lower() for k in ["doble", "total", "completa", "full", "mm", "fox", "rockshox"]):
                 detalle["suspension_trasera"] = "si"
 
-    # 2. Eliminar menús, cabeceras, pies de página y carruseles de productos relacionados
-    # para que el texto de la ficha no se contamine con otras bicicletas o el menú del sitio.
+    # 2. Eliminar menús, cabeceras, pies de página, pestañas genéricas de taller (#extra-0)
+    # y carruseles de productos relacionados para no contaminar el texto de la ficha.
     for tag in soup.select(
         "header, nav, footer, aside, script, style, noscript, "
-        ".header, .footer, .menu, .megamenu, #header, #footer, "
+        ".header, .footer, .menu, .megamenu, #header, #footer, #extra-0, "
         ".related-products, .product-accessories, .crossselling, .featured-products, "
         ".products-section, .block-categories"
     ):
@@ -218,9 +331,10 @@ def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str) -> dict:
         km = _extraer_km(texto_completo)
         if km is not None:
             detalle["km"] = km
-        else:
-            # Fallback a visión por IA si la tienda sólo fotografía el odómetro/display en la galería
-            km_foto = _extraer_km_de_imagenes(soup)
+        elif not km_ya_conocido:
+            # Fallback a visión por IA si los kilómetros no aparecen en string ni int en los datos
+            km_foto = _extraer_km_de_imagenes(soup, url_ficha=url, img_urls=img_urls_galeria)
+            detalle["km_vision_checked"] = True
             if km_foto is not None:
                 detalle["km"] = km_foto
 
@@ -561,67 +675,159 @@ def _extraer_range_extender(texto: str) -> Optional[int]:
 
 
 
-def _extraer_km_de_imagenes(soup: BeautifulSoup) -> Optional[int]:
+def _normalizar_km_existente(valor: Any) -> Optional[int]:
+    """
+    Normaliza un valor de kilómetros si ya viene como int, float o string numérico/etiquetado.
+    Devuelve int si es válido (0 <= km <= 99999) o None si no existe/no es válido.
+    """
+    if valor is None or isinstance(valor, bool):
+        return None
+    if isinstance(valor, (int, float)):
+        val_int = int(round(float(valor)))
+        return val_int if 0 <= val_int <= 99999 else None
+    if isinstance(valor, str):
+        limpio = valor.strip()
+        if not limpio or limpio in ("-", "null", "none", "n/a"):
+            return None
+        if re.fullmatch(r"\d[\d.,]*", limpio):
+            try:
+                val_int = int(limpio.replace(".", "").replace(",", ""))
+                return val_int if 0 <= val_int <= 99999 else None
+            except ValueError:
+                pass
+        return _extraer_km(limpio)
+    return None
+
+
+def _descargar_bytes_imagen(img_url: str) -> Optional[bytes]:
+    """Descarga los bytes de una imagen de galería usando cabeceras de navegador real."""
+    headers = {
+        "User-Agent": cfg.USER_AGENTS[0] if getattr(cfg, "USER_AGENTS", None) else "Mozilla/5.0",
+        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+    }
+    try:
+        r = requests.get(img_url, headers=headers, timeout=10)
+        if r.status_code == 200 and len(r.content) >= 2500:
+            return r.content
+    except Exception:
+        pass
+
+    if SCRAPLING_AVAILABLE:
+        try:
+            page = Fetcher.get(img_url, impersonate="chrome120", timeout=12)
+            body = getattr(page, "body", None)
+            if page.status == 200 and body and len(body) >= 2500:
+                return bytes(body)
+        except Exception:
+            pass
+    return None
+
+
+def _parsear_respuesta_km_vision(texto_json: str) -> Optional[int]:
+    """Extrae el entero de kilómetros del JSON devuelto por Gemini Vision."""
+    if not texto_json:
+        return None
+    limpio = texto_json.replace("```json", "").replace("```", "").strip()
+    match = re.search(r"\{.*\}", limpio, re.DOTALL)
+    if match:
+        limpio = match.group(0)
+    try:
+        parsed = json.loads(limpio)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+
+    for key in ("km", "odometer_total_km", "total_km", "kilometros", "odometro"):
+        km_val = parsed.get(key)
+        if km_val is not None and not isinstance(km_val, bool):
+            if isinstance(km_val, (int, float)) and 0 < km_val <= 99999:
+                return int(round(float(km_val)))
+            if isinstance(km_val, str):
+                norm = _normalizar_km_existente(km_val)
+                if norm is not None and norm > 0:
+                    return norm
+    return None
+
+
+def _extraer_km_de_imagenes(
+    soup: Optional[BeautifulSoup] = None,
+    url_ficha: str = "",
+    img_urls: Optional[List[str]] = None,
+) -> Optional[int]:
     """
     Si la tienda no incluye el kilometraje en la ficha de texto ni en el SKU,
     pero incluye fotografías del cuentakilómetros/odómetro del display en la galería
-    (caso habitual en Buhobike segunda mano), inspecciona las primeras imágenes
+    (caso habitual en Buhobike segunda mano), inspecciona las imágenes de la galería
     con Gemini Flash Vision para extraer el valor exacto de km.
     """
     if not cfg.GEMINI_API_KEY:
         return None
 
-    img_urls = []
-    for img in soup.select("img.js-thumb, .product-images img, ul.product-images img"):
-        u = img.get("data-image-large-src") or img.get("src")
-        if u and u not in img_urls and ("default" in u or "large" in u):
-            img_urls.append(u)
-
-    if not img_urls:
-        for a in soup.select("ul.product-images a.thumb, .js-thumb, a[data-image]"):
-            u = a.get("data-image") or a.get("href")
-            if u and u not in img_urls:
-                img_urls.append(u)
-
-    if not img_urls:
+    candidatas = list(img_urls) if img_urls else _recolectar_urls_imagenes_ficha(soup, url_ficha=url_ficha)
+    if not candidatas:
         return None
 
-    candidatas = img_urls[:5]
-    prompt = (
-        'Analiza esta imagen de una bicicleta o su display. '
-        'Si ves una pantalla, display o ciclocomputador con odómetro o kilometraje acumulado (ODO / km / dst), '
-        'indica el número entero de kilómetros en formato JSON: {"km": 1234}. '
-        'Si no hay pantalla, display o no se ve el kilometraje acumulado, devuelve estrictamente {"km": null}.'
-    )
-    url_api = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={cfg.GEMINI_API_KEY}"
-
+    candidatas = candidatas[:6]
+    imagenes_b64: List[Tuple[str, str]] = []
     for img_url in candidatas:
+        raw_bytes = _descargar_bytes_imagen(img_url)
+        if raw_bytes:
+            b64 = base64.b64encode(raw_bytes).decode("utf-8")
+            mime = "image/webp" if img_url.lower().endswith(".webp") else (
+                "image/png" if img_url.lower().endswith(".png") else "image/jpeg"
+            )
+            imagenes_b64.append((img_url, mime, b64))
+
+    if not imagenes_b64:
+        return None
+
+    prompt = (
+        'Analiza estas imágenes de la galería de una bicicleta eléctrica o su display. '
+        'Si en alguna imagen ves una pantalla, display o ciclocomputador mostrando el odómetro '
+        'o kilometraje total acumulado (ODO / km / dst), devuelve el número entero de kilómetros '
+        'en formato JSON: {"km": 1234}. '
+        'Si en ninguna imagen se ve el kilometraje acumulado en pantalla, devuelve estrictamente {"km": null}.'
+    )
+
+    modelos_vision = ["gemini-3.5-flash-lite"]
+    for m in getattr(cfg, "GEMINI_MODELS", []):
+        if m not in modelos_vision:
+            modelos_vision.append(m)
+
+    parts: List[dict] = [{"text": prompt}]
+    for _, mime, b64 in imagenes_b64:
+        parts.append({"inline_data": {"mime_type": mime, "data": b64}})
+
+    payload = {
+        "contents": [{"parts": parts}],
+        "generationConfig": {
+            "temperature": 0.0,
+            "responseMimeType": "application/json",
+        },
+    }
+
+    for model in modelos_vision:
+        url_api = f"{cfg.GEMINI_API_URL.format(model=model)}?key={cfg.GEMINI_API_KEY}"
         try:
-            r = requests.get(img_url, timeout=10)
-            if r.status_code != 200 or len(r.content) < 5000:
+            res = requests.post(url_api, json=payload, timeout=20)
+            if res.status_code != 200:
+                log.debug(f"[Visión IA {model}] HTTP {res.status_code}: {res.text[:160]}")
                 continue
-            b64 = base64.b64encode(r.content).decode("utf-8")
-            payload = {
-                "contents": [{
-                    "parts": [
-                        {"text": prompt},
-                        {"inline_data": {"mime_type": "image/jpeg", "data": b64}}
-                    ]
-                }],
-                "generationConfig": {"responseMimeType": "application/json"}
-            }
-            res = requests.post(url_api, json=payload, timeout=15)
-            if res.status_code == 200:
-                data = res.json()
-                parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
-                txt = "".join(p.get("text", "") for p in parts)
-                parsed = json.loads(txt.replace("```json", "").replace("```", "").strip())
-                km_val = parsed.get("km")
-                if km_val is not None and isinstance(km_val, (int, float)) and km_val > 0:
-                    log.info(f"[Visión IA] Odómetro detectado en imagen {img_url}: {int(km_val)} km")
-                    return int(km_val)
+            data = res.json()
+            res_parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+            txt = "".join(p.get("text", "") for p in res_parts if "text" in p)
+            km_detectado = _parsear_respuesta_km_vision(txt)
+            if km_detectado is not None:
+                log.info(
+                    f"[Visión IA {model}] Odómetro detectado en galería ({len(imagenes_b64)} fotos): {km_detectado} km"
+                )
+                return km_detectado
+            # Si el modelo respondió válidamente {"km": null}, no hay odómetro en las fotos
+            if '"km": null' in txt.lower() or '"km":null' in txt.lower():
+                return None
         except Exception as e:
-            log.debug(f"[Visión IA] Excepción analizando imagen {img_url}: {e}")
+            log.debug(f"[Visión IA {model}] Excepción analizando galería: {e}")
             continue
 
     return None
@@ -636,14 +842,15 @@ def _extraer_km(texto: str) -> Optional[int]:
         return int(match_menor.group(1))
 
     # 2. Patrones con etiqueta explícita de odómetro / kilometraje del vehículo
-    # Ej: "Kilometraje: 1.250 km", "Odómetro: 3400 km", "Kilómetros: 800", "Km: 1.500"
+    # Ej: "Kilometraje: 1.250 km", "Odómetro: 3400 km", "Kilómetros: 800", "Km: 1.837"
     for match_etiqueta in re.finditer(
-        r"\b(?:kilometraje|kilómetros|kilometros|odómetro|odometro|recorrido|rodaje)\s*[:\-]?\s*(\d[\d.,]*)\s*(?:km\b)?",
+        r"\b(?:(?:kilometraje|kilómetros|kilometros|odómetro|odometro|recorrido|rodaje)\s*[:\-]?\s*(\d[\d.,]*)|kms?\s*[:\-]\s*(\d[\d.,]*))\s*(?:km\b)?",
         texto_norm,
         re.IGNORECASE,
     ):
         try:
-            km_str = match_etiqueta.group(1).replace(".", "").replace(",", "")
+            raw_num = match_etiqueta.group(1) or match_etiqueta.group(2)
+            km_str = raw_num.replace(".", "").replace(",", "")
             val = int(km_str)
             if 0 <= val <= 99999:
                 return val
@@ -844,10 +1051,12 @@ def enriquecer_bici(bici: Bicicleta, url_ficha: Optional[str] = None) -> Bicicle
       2. DuckDuckGo HTML - fallback general.
 
     Solo busca los campos que faltan: peso_kg, suspension_trasera, ano, km,
-    talla, bateria_wh, motor, cuadro_material, componentes, modalidad.
+    talla, bateria_wh, motor, cuadro_material, componentes, modalidad, recorrido_mm.
 
     Devuelve la bici con los campos que se lograron completar.
     """
+    bici.km = _normalizar_km_existente(bici.km)
+
     faltan = (
         bici.peso_kg is None or bici.suspension_trasera is None or bici.ano is None
         or bici.km is None or bici.talla is None or bici.bateria_wh is None
@@ -862,7 +1071,11 @@ def enriquecer_bici(bici: Bicicleta, url_ficha: Optional[str] = None) -> Bicicle
     # Paso 1: ficha del propio sitio (mas fiable)
     if url_ficha and SCRAPLING_AVAILABLE:
         try:
-            detalle = _extraer_desde_ficha_sitio(url_ficha, bici.sitio)
+            detalle = _extraer_desde_ficha_sitio(
+                url_ficha,
+                bici.sitio,
+                km_ya_conocido=(bici.km is not None),
+            )
             if detalle:
                 bici = _aplicar_detalle(bici, detalle)
                 log.info(
@@ -936,7 +1149,7 @@ def _aplicar_detalle(bici: Bicicleta, detalle: dict) -> Bicicleta:
                 bici.bateria_wh += extender
 
     for campo, valor in detalle.items():
-        if campo in ("range_extender_wh", "bateria_wh", "disponible"):
+        if campo in ("range_extender_wh", "bateria_wh", "disponible", "km_vision_checked"):
             continue
         if valor is not None and getattr(bici, campo, None) is None:
             setattr(bici, campo, valor)

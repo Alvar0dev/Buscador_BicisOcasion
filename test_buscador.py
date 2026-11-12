@@ -23,7 +23,15 @@ from scrapers.enriquecedor_web import (
     _extraer_motor,
     _extraer_ano,
     _extraer_recorrido,
+    _extraer_km,
+    _extraer_peso,
+    _normalizar_km_existente,
+    _extraer_pares_ficha_estructurada,
+    _recolectar_urls_imagenes_ficha,
+    _parsear_respuesta_km_vision,
+    _extraer_km_de_imagenes,
 )
+from main import exportar_radar_mercado_md
 from scraper_base import BaseScraper
 from db import BaseDatos
 from notifier import formatear_mensaje
@@ -592,6 +600,123 @@ def test_todos_historial_catalogo_recorrido_y_stats():
             pass
 
 
+def test_extraccion_km_imagenes_ficha_buhobike_vigilancia_y_radar_md():
+    """
+    Valida:
+      1. Normalización de km (string/int) y extracción con formato prefijo 'Km: 1837'.
+      2. Extracción estructurada de tabla técnica de Buhobike (peso real de báscula 19,57Kg, recorrido 140mm).
+      3. Extracción de km desde galería de imágenes mediante Gemini Vision cuando no aparece en texto/datos.
+      4. Alerta proactiva de Entrada desde Zona de Vigilancia (> 3.000 € -> <= 3.000 €).
+      5. Exportación automática del informe Markdown docs/radar_mercado.md.
+    """
+    from bs4 import BeautifulSoup
+    from unittest.mock import patch, MagicMock
+    from pathlib import Path
+    import config as cfg
+
+    # 1. Normalización de km y formato 'Km: 1837' de Bike Ocasión
+    assert _normalizar_km_existente(4237) == 4237
+    assert _normalizar_km_existente("4.237") == 4237
+    assert _normalizar_km_existente("1.837 km") == 1837
+    assert _normalizar_km_existente("-") is None
+    assert _normalizar_km_existente(None) is None
+    assert _extraer_km("Potencia batería: 540Wh | % batería: - | Km: 1837 | Rango: De 500Wh") == 1837
+
+    # 2. Extracción de tabla técnica de Buhobike (peso exacto 19,57Kg y recorrido 140 mm)
+    html_buhobike = """
+    <div id="description">
+      <table class="caracteristicas-tecnicas-2-tablas">
+        <tbody>
+          <tr><th>AÑO</th><td>2022</td></tr>
+          <tr><th>CUADRO</th><td>ALUMINIO</td></tr>
+          <tr><th>HORQUILLA</th><td>FOX 34 FACTORY KASHIMA con 140 mm de recorrido</td></tr>
+          <tr><th>MOTOR</th><td>SHIMANO EP8-RS</td></tr>
+          <tr><th>BATERÍA</th><td>ORBEA INTERNAL 540 WH</td></tr>
+          <tr><th>PESO</th><td>19,57Kg </td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ul class="product-images">
+      <li><img class="js-thumb" data-image-large-src="https://www.buhobike.com/200248-large_default/orbea-rise.jpg" src="thumb1.jpg"/></li>
+      <li><img class="js-thumb" data-image-large-src="https://www.buhobike.com/203857-large_default/orbea-rise.jpg" src="thumb2.jpg"/></li>
+    </ul>
+    """
+    soup_bh = BeautifulSoup(html_buhobike, "html.parser")
+    pares = dict(_extraer_pares_ficha_estructurada(soup_bh))
+    assert "peso" in pares
+    assert _extraer_peso(f"Peso: {pares['peso']}") == 19.57
+    assert _extraer_recorrido(pares["horquilla"]) == 140
+
+    # 3. Extracción de URLs de galería y lectura de odómetro en imágenes (Gemini Vision mock)
+    urls_galeria = _recolectar_urls_imagenes_ficha(soup_bh, url_ficha="https://www.buhobike.com/bici.html")
+    assert len(urls_galeria) == 2
+    assert "203857-large_default" in urls_galeria[1]
+
+    assert _parsear_respuesta_km_vision('{"km": 4238}') == 4238
+    assert _parsear_respuesta_km_vision('{"odometer_total_km": 4237.59}') == 4238
+    assert _parsear_respuesta_km_vision('{"km": null}') is None
+
+    mock_get_resp = MagicMock()
+    mock_get_resp.status_code = 200
+    mock_get_resp.content = b"\xff\xd8\xff\xe0" + (b"0" * 4000)
+
+    mock_post_resp = MagicMock()
+    mock_post_resp.status_code = 200
+    mock_post_resp.json.return_value = {
+        "candidates": [{"content": {"parts": [{"text": '{"km": 4238}'}]}}]
+    }
+
+    with patch.object(cfg, "GEMINI_API_KEY", "fake-key-test"), \
+         patch("scrapers.enriquecedor_web.requests.get", return_value=mock_get_resp), \
+         patch("scrapers.enriquecedor_web.requests.post", return_value=mock_post_resp):
+        km_img = _extraer_km_de_imagenes(soup_bh, url_ficha="https://www.buhobike.com/bici.html")
+        assert km_img == 4238
+
+    # 4. Alerta de Zona de Vigilancia (> 3.000 € -> <= 3.000 €) y exportación de docs/radar_mercado.md
+    fd, path_tmp = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    fd_md, path_md_tmp = tempfile.mkstemp(suffix=".md")
+    os.close(fd_md)
+    try:
+        db = BaseDatos(ruta=path_tmp)
+        b_vig = bici_prueba(bici_id="vig-001", titulo="Orbea Rise M10 2023", precio=3250.0)
+        r_ini = db.registrar_en_catalogo(b_vig)
+        assert r_ini["entrada_desde_vigilancia"] is False
+
+        # Baja a 2.890 € (entra desde Zona de Vigilancia al presupuesto <= 3.000 €)
+        b_vig.precio = 2890.0
+        r_drop = db.registrar_en_catalogo(b_vig)
+        assert r_drop["entrada_desde_vigilancia"] is True
+        assert r_drop["ahorro_eur"] == 360.0
+
+        seg_vig = db.obtener_seguimiento("vig-001")
+        assert seg_vig is not None and seg_vig["entrada_desde_vigilancia"] is True
+
+        msg_vig = formatear_mensaje(
+            b_vig,
+            nota=9.0,
+            desglose="Desglose vigilancia",
+            seguimiento=seg_vig,
+        )
+        assert "ENTRADA DESDE ZONA DE VIGILANCIA" in msg_vig
+        assert "BAJADA DE PRECIO" in msg_vig
+        assert "-360" in msg_vig
+
+        # 5. Exportación de radar de mercado a Markdown
+        ruta_generada = exportar_radar_mercado_md(ruta=Path(path_md_tmp), db=db)
+        contenido_md = ruta_generada.read_text(encoding="utf-8")
+        assert "Radar de Mercado e-MTB de Ocasión" in contenido_md
+        assert "Orbea Rise M10 2023" in contenido_md
+        assert "-360 €" in contenido_md
+    finally:
+        for p in (path_tmp, path_md_tmp):
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except PermissionError:
+                pass
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -610,4 +735,5 @@ if __name__ == "__main__":
     test_range_extender_extraccion_y_filtros()
     test_salud_bateria_soh_disponibilidad_y_extractores()
     test_todos_historial_catalogo_recorrido_y_stats()
+    test_extraccion_km_imagenes_ficha_buhobike_vigilancia_y_radar_md()
     print("Todas las pruebas pasaron (GREEN).")

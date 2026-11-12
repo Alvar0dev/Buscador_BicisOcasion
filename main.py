@@ -16,6 +16,7 @@ import logging
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Optional
 
 import config as cfg
 from config import SITIOS, HORA_EJECUCION, NOTA_MIN_NOTIFICAR, NOTA_MIN_AGUARDAR, TOP_N_NOTIFICAR
@@ -132,20 +133,26 @@ def clave_orden_estrictas(item: tuple) -> tuple:
       1. Salud mecánica: nota >= 6.0 y km <= 4.000 (las bicis mecánicamente sanas
          siempre van antes que bicis con desgaste severo de > 4.000 km).
       2. Sin Línea Roja activa (km <= 6.000 y peso < 21.0 kg).
-      3. Prioridad de modalidad: XC / Downcountry (3) > Light e-MTB (2) > Trail (1).
+      3. Prioridad de modalidad efectiva (para bicicletas mecánicamente sanas):
+         XC / Downcountry (3) > Light e-MTB (2) > Trail (1).
+         Si salud_mecanica == 0 (> 4.000 km o nota < 6.0), prima la Nota Pericial
+         para que un 5.5/10 (4.238 km) supere siempre a un 3.5/10 (5.000 km).
       4. Mayor Nota de Oportunidad del Perito Mecánico.
-      5. Menor peso en kg.
+      5. Prioridad de modalidad como desempate en desgastadas.
+      6. Menor peso en kg.
     """
     bici, nota = item[0], item[1]
     km = bici.km or 0
     peso = bici.peso_kg or 20.0
     salud_mecanica = 1 if (nota >= 6.0 and km <= 4000) else 0
     sin_linea_roja = 1 if (km <= 6000 and peso < 21.0) else 0
+    mod_prio = prioridad_modalidad(bici)
     return (
         salud_mecanica,
         sin_linea_roja,
-        prioridad_modalidad(bici),
+        mod_prio if salud_mecanica else 0,
         nota,
+        mod_prio,
         -peso,
     )
 
@@ -208,6 +215,15 @@ def _recolectar_oportunidades(db: BaseDatos, forzar_envio: bool = False) -> list
                         bici.range_extender_wh = ext
                         if bici.bateria_wh is not None and bici.bateria_wh <= 600:
                             bici.bateria_wh += ext
+                # Registrar en Zona de Vigilancia bicicletas aptas entre 3.301 € y 3.500 €
+                # para detectar cuándo bajan al rango objetivo <= 3.000 € / <= 3.300 €.
+                if 3300.0 < bici.precio <= 3500.0:
+                    from dataclasses import replace
+                    bici_test_vig = replace(bici, precio=3000.0)
+                    apto_vig, _ = pasa_filtros_estrictos(bici_test_vig)
+                    if apto_vig:
+                        db.registrar_en_catalogo(bici)
+
                 # Pre-filtro rápido con los campos ya conocidos de la tarjeta (precio, talla, batería, disponibilidad...)
                 apto_pre, motivo_pre = pasa_filtros_estrictos(bici)
                 if not apto_pre:
@@ -296,12 +312,118 @@ def _recolectar_oportunidades(db: BaseDatos, forzar_envio: bool = False) -> list
     return seleccion
 
 
+def exportar_radar_mercado_md(
+    ruta: Optional[Path] = None,
+    db: Optional[BaseDatos] = None,
+) -> Path:
+    """
+    Exporta automáticamente el informe de Radar de Mercado en Markdown (docs/radar_mercado.md).
+    """
+    db_inst = db if db is not None else BaseDatos()
+    stats = db_inst.obtener_estadisticas_mercado()
+    destino = Path(ruta) if ruta is not None else (cfg.BASE_DIR / "docs" / "radar_mercado.md")
+    destino.parent.mkdir(parents=True, exist_ok=True)
+
+    ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    total = stats.get("total", 0)
+    lineas = [
+        "# 📡 Radar de Mercado e-MTB de Ocasión",
+        "",
+        f"> **Última actualización:** `{ahora}`  ",
+        f"> **Total de bicicletas en seguimiento activo:** `{total}` unidades",
+        "",
+        "---",
+        "",
+        "## 🏪 1. Distribución por Portal",
+        "",
+    ]
+
+    if stats.get("por_sitio"):
+        lineas.extend([
+            "| Portal | Unidades en seguimiento | Cuota (%) |",
+            "| :--- | :---: | :---: |",
+        ])
+        for sitio, cant in sorted(stats["por_sitio"].items(), key=lambda x: x[1], reverse=True):
+            pct = (cant / total * 100.0) if total > 0 else 0.0
+            lineas.append(f"| **{sitio}** | {cant} | {pct:.1f}% |")
+    else:
+        lineas.append("_Sin bicicletas registradas en el catálogo._")
+
+    lineas.extend([
+        "",
+        "## 🎯 2. Modelos Clave de e-MTB Ligera",
+        "",
+    ])
+
+    if stats.get("modelos_clave"):
+        lineas.extend([
+            "| Familia / Modelo | Unidades | Precio Mínimo | Precio Medio |",
+            "| :--- | :---: | :---: | :---: |",
+        ])
+        for modelo, info in stats["modelos_clave"].items():
+            p_min = f"{info['precio_min']:.0f} €" if info.get("precio_min") else "-"
+            p_med = f"{info['precio_medio']:.0f} €" if info.get("precio_medio") else "-"
+            lineas.append(f"| **{modelo}** | {info['unidades']} | {p_min} | {p_med} |")
+    else:
+        lineas.append("_No hay unidades activas de las familias clave en este momento._")
+
+    lineas.extend([
+        "",
+        "## 📉 3. Oportunidades con Bajada de Precio Detectada",
+        "",
+    ])
+
+    if stats.get("con_rebajas"):
+        lineas.extend([
+            "| Bicicleta | Portal | Precio Actual | Precio Inicial | Ahorro | Días en Stock |",
+            "| :--- | :---: | :---: | :---: | :---: | :---: |",
+        ])
+        for r in stats["con_rebajas"]:
+            badge = " 🚨" if r.get("entrada_vigilancia") else ""
+            lineas.append(
+                f"| [{r['titulo']}]({r['url']}){badge} | {r['sitio']} | "
+                f"**{r['precio_actual']:.0f} €** | ~{r['precio_inicial']:.0f} €~ | "
+                f"**-{r['ahorro']:.0f} €** | {r['dias']}d |"
+            )
+    else:
+        lineas.append("_Todavía no se han acumulado bajadas de precio respecto al registro inicial._")
+
+    lineas.extend([
+        "",
+        "## 👀 4. Zona de Vigilancia (2.900 € – 3.500 € esperando rebaja)",
+        "",
+    ])
+
+    if stats.get("en_vigilancia"):
+        lineas.extend([
+            "| Bicicleta | Portal | Precio Actual | Días en Stock |",
+            "| :--- | :---: | :---: | :---: |",
+        ])
+        for v in stats["en_vigilancia"]:
+            lineas.append(
+                f"| [{v['titulo']}]({v['url']}) | {v['sitio']} | "
+                f"**{v['precio']:.0f} €** | {v['dias']}d |"
+            )
+    else:
+        lineas.append("_Sin bicicletas en la franja de vigilancia actualmente._")
+
+    lineas.append("")
+    destino.write_text("\n".join(lineas), encoding="utf-8")
+    return destino
+
+
 def ejecutar_busqueda(forzar_envio: bool = False) -> None:
     """Ejecuta una pasada completa de búsqueda, clasificación IA y notificación Top N."""
     logger.info(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Iniciando búsqueda de e-MTB...")
 
     db = BaseDatos()
     oportunidades = _recolectar_oportunidades(db, forzar_envio=forzar_envio)
+
+    try:
+        ruta_md = exportar_radar_mercado_md(db=db)
+        logger.info(f"[Radar] Informe de mercado actualizado en {ruta_md}")
+    except Exception as e:
+        logger.warning(f"[Radar] No se pudo exportar docs/radar_mercado.md: {e}")
 
     if not oportunidades:
         logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Finalizado. "
@@ -333,10 +455,12 @@ def mostrar_radar_mercado() -> None:
     """Imprime la radiografía del mercado de e-MTB basada en el catálogo rastreado (TODO 3)."""
     db = BaseDatos()
     stats = db.obtener_estadisticas_mercado()
+    ruta_md = exportar_radar_mercado_md(db=db)
     print("\n" + "=" * 65)
     print(" 📡 RADAR DE MERCADO e-MTB DE OCASIÓN (ESTADÍSTICAS)")
     print("=" * 65)
     print(f"Total bicicletas en seguimiento activo: {stats['total']}")
+    print(f"Informe Markdown exportado en: {ruta_md}")
     if stats["por_sitio"]:
         print("\n🏪 Distribución por portal:")
         for sitio, cant in sorted(stats["por_sitio"].items(), key=lambda x: x[1], reverse=True):
@@ -358,7 +482,7 @@ def mostrar_radar_mercado() -> None:
             print(f"    Precio: {r['precio_actual']:.0f} € (Antes: {r['precio_inicial']:.0f} € | Ahorro: -{r['ahorro']:.0f} € | {r['dias']} días en stock)")
 
     if stats["en_vigilancia"]:
-        print(f"\n👀 Zona de Vigilancia (2.900 € - 3.400 € esperando rebaja, {len(stats['en_vigilancia'])} unidades):")
+        print(f"\n👀 Zona de Vigilancia (2.900 € - 3.500 € esperando rebaja, {len(stats['en_vigilancia'])} unidades):")
         for v in stats["en_vigilancia"][:5]:
             print(f"  • {v['titulo']} — {v['precio']:.0f} € ({v['sitio']}) [{v['dias']} días en stock]")
 

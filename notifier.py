@@ -64,10 +64,22 @@ def formatear_mensaje(
         .replace("`", "'")
     )
 
-    es_bajada = precio_anterior is not None and bici.precio < precio_anterior
-    if es_bajada:
-        ahorro = precio_anterior - bici.precio
-        linea_precio = f"💰 Precio: *{bici.precio:.0f} €* (Antes: ~{precio_anterior:.0f} €~ | 📉 Ahorro: *-{ahorro:.0f} €*)"
+    precio_ref = precio_anterior
+    if precio_ref is None and seguimiento and seguimiento.get("precio_inicial"):
+        p_ini = float(seguimiento["precio_inicial"])
+        if p_ini > bici.precio:
+            precio_ref = p_ini
+
+    es_bajada = precio_ref is not None and bici.precio < precio_ref
+    es_vigilancia = bool(seguimiento and seguimiento.get("entrada_desde_vigilancia"))
+
+    if es_vigilancia and es_bajada:
+        ahorro = precio_ref - bici.precio
+        linea_precio = f"💰 Precio: *{bici.precio:.0f} €* (Antes: ~{precio_ref:.0f} €~ | 🚨 Ahorro: *-{ahorro:.0f} €*)"
+        cabecera = "🚨 *¡ENTRADA DESDE ZONA DE VIGILANCIA! BAJADA DE PRECIO DETECTADA*"
+    elif es_bajada:
+        ahorro = precio_ref - bici.precio
+        linea_precio = f"💰 Precio: *{bici.precio:.0f} €* (Antes: ~{precio_ref:.0f} €~ | 📉 Ahorro: *-{ahorro:.0f} €*)"
         cabecera = "📉 *¡BAJADA DE PRECIO DETECTADA! Oportunidad e-MTB*"
     else:
         linea_precio = f"💰 Precio: *{bici.precio} €*"
