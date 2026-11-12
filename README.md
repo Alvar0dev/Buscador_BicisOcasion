@@ -360,7 +360,7 @@ Deberías ver: `Todas las pruebas pasaron (GREEN).`
 - [x] Probar scraping real sitio por sitio (Upway, Bike Ocasión y Buhobike probados con Scrapling).
 - [ ] Configurar `.env` con tu bot de Telegram y probar el envío de mensajes.
 - [ ] Automatizar con `main.py` o cron según `CRON.md`.
-- [ ] Configurar proxies rotatorios (`PROXY_LIST` en `.env`) si un sitio bloquea por IP.
+- [x] Configurar proxies rotatorios (`PROXY_LIST` en `.env`) con soporte nativo de rotación cíclica y aleatoria en Scrapling (`scraper_base.py`).
 
 ---
 
@@ -473,6 +473,7 @@ El sistema se encuentra en **producción activa y 100% automatizado**:
 | 11 | **Modo radar de mercado CLI (`python main.py --stats`) y exportación Markdown (`docs/radar_mercado.md`)** | ✅ Completado | Comando de consola (`--stats` o `--radar`) y generación automática de `docs/radar_mercado.md` en cada corrida con unidades por tienda, precios medios/mínimos de modelos estrella (*Orbea Rise*, *BH iLynx*), unidades en vigilancia (2.900–3.500 €) y rebajas activas. |
 | 12 | **Extracción multimodal en lote de odómetros en imágenes (`gemini-3.5-flash-lite`) y tabla técnica Buhobike** | ✅ Completado | Cuando `km` no aparece en string ni int en los datos/ficha, inspecciona hasta 6 fotos de galería en una única llamada multimodal a Gemini Vision (`4238 km` detectados en foto #3 de Orbea Rise H10) y extrae peso de báscula (`19,57Kg`) de `table.caracteristicas-tecnicas-2-tablas` y `#product-details`. |
 | 13 | **Alertas proactivas de Entrada desde Zona de Vigilancia** | ✅ Completado | Seguimiento activo de bicicletas hasta 3.500 € en `historial_catalogo` y disparo de cabecera prioritaria `🚨 ¡ENTRADA DESDE ZONA DE VIGILANCIA! BAJADA DE PRECIO DETECTADA` cuando bajan a `<= 3.000 €` o acumulan `>= 200 €` de descuento. |
+| 14 | **Soporte robusto de Proxies Rotatorios (`PROXY_LIST` y `PROXY_ROTATION`)** | ✅ Completado | Integración de `ProxyRotator` en `scraper_base.py` y `enriquecedor_web.py` con soporte para rotación cíclica y aleatoria en `Fetcher` y `StealthyFetcher` ante bloqueos de IP en Cloudflare. |
 
 ---
 
@@ -582,6 +583,7 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 - [x] **TODO 5 — Extracción estructurada de tabla técnica de Buhobike (`table.caracteristicas-tecnicas-2-tablas` y `#product-details`)**: Parseo de filas `<tr><th>/<td>` y JSON `data-product` para extraer peso real de báscula (`19,57Kg`) y recorrido de suspensión (`140 mm`) antes de descomponer el DOM.
 - [x] **TODO 6 — Extracción multimodal en lote de kilómetros desde imágenes (`_extraer_km_de_imagenes`)**: Cuando los kilómetros no aparecen en string ni int en los datos/ficha, inspecciona hasta 6 imágenes de la galería en una única petición multimodal con `gemini-3.5-flash-lite` / `gemini-3.5-flash`, invalidando cachés sin `km` verificado (`4238 km` detectados en foto #3 de la Orbea Rise H10 2022 de Buhobike).
 - [x] **TODO 7 — Exportación automática del Radar a Markdown (`docs/radar_mercado.md`)**: Generación automática de `docs/radar_mercado.md` en cada corrida y en `--stats`.
+- [x] **TODO 8 — Soporte robusto de Proxies Rotatorios (`scraper_base.py` + `enriquecedor_web.py`)**: Implementado `ProxyRotator` en `scraper_base.py` con rotación cíclica (`cyclic`) y aleatoria (`random`), inyección en `FetcherSession` y `StealthyFetcher`, e integración en `enriquecedor_web.py` para apertura de fichas y descarga de fotos de galería con tests unitarios.
 - [x] **Ejecución de búsqueda diaria en vivo**: Notificado el Top 3 actualizado a Telegram en vivo con éxito.
 
 ### Dependencias instaladas

@@ -5,6 +5,7 @@ Comentarios en español, tal como se solicitó.
 """
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List
@@ -136,14 +137,15 @@ USER_AGENTS: List[str] = [
 # Scrapling trae ProxyRotator integrado. Configurar proxies rotatorios
 # para evitar bloqueos por IP en sitios con Cloudflare agresivo.
 # Variables de entorno:
-#   PROXY_LIST: lista de proxies separados por coma (ej. "http://user:pass@ip:port,http://...")
-#   PROXY_ROTATION: "cyclic" o "custom" (default: cyclic)
+#   PROXY_LIST: lista de proxies separados por coma o líneas (ej. "http://user:pass@ip:port,http://...")
+#   PROXY_ROTATION: "cyclic" o "random" / "aleatorio" (default: cyclic)
+_raw_proxy_list = os.getenv("PROXY_LIST", "")
 PROXY_LIST: List[str] = [
-    p.strip()
-    for p in os.getenv("PROXY_LIST", "").split(",")
-    if p.strip()
+    p.strip().strip("'\"")
+    for p in re.split(r"[\n,]+", _raw_proxy_list)
+    if p.strip().strip("'\"")
 ]
-PROXY_ROTATION: str = os.getenv("PROXY_ROTATION", "cyclic")
+PROXY_ROTATION: str = os.getenv("PROXY_ROTATION", "cyclic").strip().lower()
 
 # Horario de ejecución (S10): todos los días a las 12:30
 HORA_EJECUCION: str = "12:30"

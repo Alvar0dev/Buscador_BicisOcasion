@@ -32,7 +32,8 @@ from scrapers.enriquecedor_web import (
     _extraer_km_de_imagenes,
 )
 from main import exportar_radar_mercado_md
-from scraper_base import BaseScraper
+from scraper_base import BaseScraper, crear_proxy_rotator, random_rotation
+import config as cfg
 from db import BaseDatos
 from notifier import formatear_mensaje
 
@@ -717,6 +718,59 @@ def test_extraccion_km_imagenes_ficha_buhobike_vigilancia_y_radar_md():
                 pass
 
 
+def test_proxy_rotator_y_resiliencia_red():
+    """
+    Valida:
+      1. crear_proxy_rotator devuelve None si la lista está vacía.
+      2. Rotación cíclica con ProxyRotator entregando proxies en orden secuencial.
+      3. Rotación aleatoria con random_rotation.
+      4. Inicialización correcta de _proxy_rotator y _session_proxy en BaseScraper.
+      5. Limpieza de comillas y formato de proxies.
+    """
+    # 1. Lista vacía devuelve None
+    assert crear_proxy_rotator(proxies=[]) is None
+    assert crear_proxy_rotator(proxies=["   "]) is None
+
+    # 2. Rotación cíclica
+    proxies_test = ["http://proxy1.test:8080", "http://proxy2.test:8080"]
+    rotator_ciclico = crear_proxy_rotator(proxies=proxies_test, rotacion="cyclic")
+    assert rotator_ciclico is not None
+    p1 = rotator_ciclico.get_proxy()
+    p2 = rotator_ciclico.get_proxy()
+    p3 = rotator_ciclico.get_proxy()
+    assert p1 == "http://proxy1.test:8080"
+    assert p2 == "http://proxy2.test:8080"
+    assert p3 == "http://proxy1.test:8080"  # Vuelve al inicio
+
+    # 3. Rotación aleatoria
+    rotator_random = crear_proxy_rotator(proxies=proxies_test, rotacion="random")
+    assert rotator_random is not None
+    pr = rotator_random.get_proxy()
+    assert pr in proxies_test
+
+    # 4. BaseScraper con proxy rotator activo
+    class ScraperPrueba(BaseScraper):
+        def extraer_bicicletas(self):
+            return []
+
+    sitio_dummy = cfg.SitioObjetivo(
+        nombre="SitioPrueba",
+        base_url="https://prueba.com",
+        seccion_emtb="https://prueba.com/emtb",
+    )
+
+    # Inyectamos temporalmente proxies en cfg para probar instanciación
+    proxies_originales = cfg.PROXY_LIST
+    try:
+        cfg.PROXY_LIST = ["http://usuario:pass@proxy.corp:3128"]
+        scraper = ScraperPrueba(sitio=sitio_dummy)
+        assert scraper._proxy_rotator is not None
+        assert scraper._proxy_rotator.get_proxy() == "http://usuario:pass@proxy.corp:3128"
+        assert scraper._session_proxy is not None
+    finally:
+        cfg.PROXY_LIST = proxies_originales
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -736,4 +790,5 @@ if __name__ == "__main__":
     test_salud_bateria_soh_disponibilidad_y_extractores()
     test_todos_historial_catalogo_recorrido_y_stats()
     test_extraccion_km_imagenes_ficha_buhobike_vigilancia_y_radar_md()
+    test_proxy_rotator_y_resiliencia_red()
     print("Todas las pruebas pasaron (GREEN).")

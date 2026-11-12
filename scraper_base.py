@@ -28,10 +28,50 @@ log = logging.getLogger("scraper")
 
 # Scrapling: Fetcher (HTTP stealth) y StealthyFetcher (navegador + Cloudflare solver)
 try:
-    from scrapling.fetchers import Fetcher, StealthyFetcher, FetcherSession, StealthySession, ProxyRotator
+    from scrapling.fetchers import (
+        Fetcher,
+        StealthyFetcher,
+        FetcherSession,
+        StealthySession,
+        ProxyRotator,
+    )
+    from scrapling.engines.toolbelt.proxy_rotation import cyclic_rotation
     SCRAPLING_AVAILABLE = True
 except ImportError:
     SCRAPLING_AVAILABLE = False
+
+
+def random_rotation(proxies: List[str], current_index: int):
+    """Estrategia de rotación aleatoria para ProxyRotator."""
+    idx = random.randrange(len(proxies))
+    return proxies[idx], idx
+
+
+def crear_proxy_rotator(
+    proxies: Optional[List[str]] = None,
+    rotacion: Optional[str] = None,
+) -> Optional[object]:
+    """
+    Crea una instancia de ProxyRotator de Scrapling con la estrategia configurada.
+    Devuelve None si no hay proxies configurados o Scrapling no está disponible.
+    """
+    if not SCRAPLING_AVAILABLE:
+        return None
+    raw_lista = proxies if proxies is not None else cfg.PROXY_LIST
+    lista = [p.strip().strip("'\"") for p in raw_lista if p and p.strip().strip("'\"")]
+    if not lista:
+        return None
+    estrategia = cfg.PROXY_ROTATION if rotacion is None else rotacion
+    strategy_fn = (
+        random_rotation
+        if str(estrategia).lower() in ("random", "aleatorio")
+        else cyclic_rotation
+    )
+    try:
+        return ProxyRotator(proxies=list(lista), strategy=strategy_fn)
+    except Exception as e:
+        log.warning(f"[ProxyRotator] No se pudo inicializar la rotación de proxies: {e}")
+        return None
 
 
 class BaseScraper(ABC):
@@ -41,23 +81,18 @@ class BaseScraper(ABC):
         self.sitio = sitio
         self._delay_ultimo_request: float = 0.0
         self._ultimo_status_http: Optional[int] = None
+        self._proxy_rotator = crear_proxy_rotator()
         self._session_proxy = self._crear_sesion_con_proxy()
 
     def _crear_sesion_con_proxy(self):
         """
-        Crea una sesión de Scrapling con ProxyRotator si hay proxies configurados
-        en config.py (variable de entorno PROXY_LIST).
+        Crea una sesión FetcherSession con ProxyRotator si hay proxies configurados.
         Devuelve None si no hay proxies o Scrapling no está disponible.
         """
-        if not SCRAPLING_AVAILABLE or not cfg.PROXY_LIST:
+        if not SCRAPLING_AVAILABLE or not self._proxy_rotator:
             return None
         try:
-            rotator = ProxyRotator()
-            for proxy_url in cfg.PROXY_LIST:
-                rotator.add(proxy_url)
-            # Sesión HTTP con proxy rotator (para Fetcher)
-            session = FetcherSession(proxy_rotator=rotator)
-            return session
+            return FetcherSession(proxy_rotator=self._proxy_rotator)
         except Exception as e:
             log.warning(
                 f"[{self.sitio.nombre}] No se pudo crear sesión con proxy: {e}"
@@ -81,6 +116,10 @@ class BaseScraper(ABC):
             if self._session_proxy is not None:
                 # Usar sesión con proxy rotator
                 page = self._session_proxy.get(url, impersonate="chrome120", timeout=timeout)
+            elif self._proxy_rotator is not None:
+                page = Fetcher.get(
+                    url, impersonate="chrome120", timeout=timeout, proxy_rotator=self._proxy_rotator
+                )
             else:
                 page = Fetcher.get(url, impersonate="chrome120", timeout=timeout)
             self._ultimo_status_http = page.status
@@ -101,21 +140,16 @@ class BaseScraper(ABC):
         if not SCRAPLING_AVAILABLE:
             return None
         try:
-            if self._session_proxy is not None:
-                # Sesión stealth con proxy rotator
-                stealth_session = StealthySession(
-                    headless=True,
-                    solve_cloudflare=True,
-                    proxy_rotator=self._session_proxy.proxy_rotator,
-                )
-                page = stealth_session.fetch(url, timeout=timeout)
-            else:
-                page = StealthyFetcher.fetch(
-                    url,
-                    headless=True,
-                    solve_cloudflare=True,
-                    timeout=timeout,
-                )
+            kwargs = {
+                "headless": True,
+                "solve_cloudflare": True,
+                "timeout": timeout,
+            }
+            if self._proxy_rotator is not None:
+                kwargs["proxy_rotator"] = self._proxy_rotator
+
+            page = StealthyFetcher.fetch(url, **kwargs)
+            self._ultimo_status_http = page.status
             if page.status == 200:
                 return page.html_content
             log.warning(
@@ -193,15 +227,27 @@ class BaseScraper(ABC):
             return None
         self._espera_cortesa()
         try:
-            page = Fetcher.get(url, impersonate="chrome120", timeout=30)
+            if self._session_proxy is not None:
+                page = self._session_proxy.get(url, impersonate="chrome120", timeout=30)
+            elif self._proxy_rotator is not None:
+                page = Fetcher.get(
+                    url, impersonate="chrome120", timeout=30, proxy_rotator=self._proxy_rotator
+                )
+            else:
+                page = Fetcher.get(url, impersonate="chrome120", timeout=30)
             if page.status == 200:
                 return page
             return None
         except Exception:
             try:
-                page = StealthyFetcher.fetch(
-                    url, headless=True, solve_cloudflare=True, timeout=60
-                )
+                stealth_kwargs = {
+                    "headless": True,
+                    "solve_cloudflare": True,
+                    "timeout": 60,
+                }
+                if self._proxy_rotator is not None:
+                    stealth_kwargs["proxy_rotator"] = self._proxy_rotator
+                page = StealthyFetcher.fetch(url, **stealth_kwargs)
                 if page.status == 200:
                     return page
             except Exception:

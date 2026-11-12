@@ -32,6 +32,11 @@ try:
 except ImportError:
     SCRAPLING_AVAILABLE = False
 
+try:
+    from scraper_base import crear_proxy_rotator
+except Exception:
+    crear_proxy_rotator = lambda: None
+
 
 import threading
 
@@ -209,18 +214,21 @@ def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str, km_ya_conocido: bool
         log.info(f"[Caché] Re-analizando ficha para extraer km desde imágenes: {url}")
 
     try:
+        rotator = crear_proxy_rotator()
+        kwargs_fetcher = {"impersonate": "chrome120", "timeout": 30}
+        kwargs_stealth = {"headless": True, "solve_cloudflare": True, "timeout": 60}
+        if rotator is not None:
+            kwargs_fetcher["proxy_rotator"] = rotator
+            kwargs_stealth["proxy_rotator"] = rotator
+
         es_buhobike = "buhobike.com" in url.lower() or sitio_nombre.lower() == "buhobike"
         if es_buhobike:
-            page = StealthyFetcher.fetch(
-                url, headless=True, solve_cloudflare=True, timeout=60
-            )
+            page = StealthyFetcher.fetch(url, **kwargs_stealth)
         else:
-            page = Fetcher.get(url, impersonate="chrome120", timeout=30)
+            page = Fetcher.get(url, **kwargs_fetcher)
             if page.status != 200:
                 # Fallback a stealth si el sitio tiene Cloudflare
-                page = StealthyFetcher.fetch(
-                    url, headless=True, solve_cloudflare=True, timeout=60
-                )
+                page = StealthyFetcher.fetch(url, **kwargs_stealth)
         if page.status != 200:
             log.warning(f"[Enriquecedor] No se pudo abrir ficha {url} (status {page.status})")
             return dict(cache_hit) if cache_hit else detalle
@@ -714,7 +722,11 @@ def _descargar_bytes_imagen(img_url: str) -> Optional[bytes]:
 
     if SCRAPLING_AVAILABLE:
         try:
-            page = Fetcher.get(img_url, impersonate="chrome120", timeout=12)
+            rotator = crear_proxy_rotator()
+            kwargs_img = {"impersonate": "chrome120", "timeout": 12}
+            if rotator is not None:
+                kwargs_img["proxy_rotator"] = rotator
+            page = Fetcher.get(img_url, **kwargs_img)
             body = getattr(page, "body", None)
             if page.status == 200 and body and len(body) >= 2500:
                 return bytes(body)
