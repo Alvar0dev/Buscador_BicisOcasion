@@ -534,9 +534,24 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
   * `prioridad_modalidad` en `evaluator.py` supedita el ranking a la cota física: **`≤ 130 mm` -> Nivel 3 (XC / Downcountry)**, **`131–145 mm` -> Nivel 2 (Light Trail / Downcountry largo)**, **`146–165 mm` -> Nivel 1 (Trail / All-Mountain)** y `> 165 mm` -> Nivel 0 (Enduro).
   * Filtro `S2bis`: Descarte automático e inapelable de unidades con recorrido `> 170 mm` (bicicletas de Enduro severo o Freeride incompatibles con el pliego).
 
-### 9. Radiografía de Mercado en CLI (`python main.py --stats`)
+### 9. Radiografía de Mercado en CLI (`python main.py --stats`) y Exportación Markdown
 * **Por qué**: El usuario y el desarrollador necesitan ver en cualquier momento qué está pasando en el mercado (precios medios de Orbea Rise o BH iLynx, unidades estancadas, oportunidades en zona de vigilancia) sin depender exclusivamente del push diario de las 12:00 ni consultar tablas SQL a mano.
-* **Cómo se construyó**: Se añadió la función `mostrar_radar_mercado()` activable mediante el flag `--stats` (o `--radar`), que procesa en tiempo real las 29+ unidades monitorizadas y muestra distribución por tienda, precios por modelo insignia, rebajas detectadas y candidatos en zona de vigilancia (2.900–3.400 €).
+* **Cómo se construyó**: Se implementó `mostrar_radar_mercado()` activable mediante el flag `--stats` (o `--radar`) y la función `exportar_radar_mercado_md()`, que genera automáticamente `docs/radar_mercado.md` en cada corrida resumiendo cuotas de mercado por tienda, modelos clave, alertas de vigilancia (2.900–3.500 €) y rebajas acumuladas.
+
+### 10. Resiliencia de Red y Rotación de Proxies (`ProxyRotator` en Scrapling 0.5)
+* **Por qué**: En tiendas con Cloudflare agresivo (Buhobike y Bike Ocasión), realizar scraping frecuente o enriquecer docenas de fichas de detalle desde una misma IP residencial puede provocar bloqueos preventivos por reputación de IP (HTTP 403/503 o CAPTCHAs interactivos). Aunque `StealthyFetcher` resuelve el handshake y JS de Cloudflare, una IP penalizada en origen bloquea cualquier capa de fetch.
+* **Cómo se construyó**:
+  * Se implementó `crear_proxy_rotator()` en `scraper_base.py`, integrando el `ProxyRotator` nativo de Scrapling con soporte para rotación secuencial cíclica (`cyclic`) y rotación aleatoria (`random`).
+  * El rotador se inyecta de forma transparente tanto en peticiones HTTP rápidas (`FetcherSession` y `Fetcher.get`) como en el navegador stealth (`StealthyFetcher.fetch`).
+  * Se extendió a `scrapers/enriquecedor_web.py` para que la apertura paralela de fichas de detalle y la descarga binaria de fotos de odómetro también roten proxies si `PROXY_LIST` está configurada en `.env`.
+
+### 11. Odómetros en Lote Multimodal vs Timeouts de Inferencia Individual
+* **Por qué**: Al inspeccionar imágenes de galería de producto para leer displays de cuentakilómetros, las llamadas individuales foto por foto con `gemini-flash-latest` (que mapea internamente a Gemini 3.8 Flash con thinking activado) tardaban > 15s por petición y provocaban `ReadTimeout`.
+* **Cómo se construyó**: Se agrupan hasta 6 fotos de la galería en un único payload multimodal enviado a `gemini-3.5-flash-lite` (con fallback a `gemini-3.5-flash`), resolviendo toda la galería en 3–5 segundos con 100% de precisión en la extracción del odómetro (ej. `4.238 km` leídos en el display Shimano de Buhobike) y cacheando el resultado con invalidación reactiva si cambia el dato.
+
+### 12. Aislamiento de Peso de Báscula vs Peso con Embalaje en Buhobike
+* **Por qué**: En Buhobike, el bloque de descripción y ficha técnica declara `Peso estimado del producto + embalaje: 22,000 Kg` (caja de transporte y protecciones), mientras que el peso neto de la bicicleta (`19,57 Kg`) se encuentra en una tabla estructurada interna. Un extractor genérico tomaba los 22 kg activando el filtro `S3` (> 21 kg) y descartando bicicletas ultraligeras aptas.
+* **Cómo se construyó**: Se implementó el parseo estructurado de `table.caracteristicas-tecnicas-2-tablas` (`<tr><th>/<td>`) y del atributo JSON `#product-details[data-product]`, aislando el peso neto de báscula antes de la descomposición del DOM y descartando cualquier valor asociado al texto contextual de `embalaje`.
 
 ---
 
@@ -561,30 +576,44 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 | **Bloqueo de archivo SQLite en Windows (`WinError 32`)** | Base de datos / Tests | En Windows, abrir conexiones SQLite mediante `with sqlite3.connect(...)` sin invocar `.close()` mantiene abierto el descriptor del archivo temporal hasta que el recolector de basura lo destruye, causando `PermissionError: [WinError 32]` en los tests. | Se encapsuló la limpieza de bases de datos temporales en bloques `try...except PermissionError` para garantizar tests atómicos y confiables. |
 | **Ambigüedad entre milímetros de suspensión vs ruedas, bielas o discos** | Enriquecedor / Evaluador | Regex ingenuos sobre `\d+ mm` capturaban diámetros de rueda (`29" / 622 mm`), discos de freno (`180 mm`, `203 mm`) o longitud de biela (`170 mm`, `175 mm`), contaminando el recorrido. | `_extraer_recorrido` restringe la búsqueda a prefijos explícitos (`recorrido`, `travel`, `horquilla`, `suspensión`, `amortiguador`) o marcas reconocidas (`Fox 34`, `RockShox SID/Pike`, `Marzocchi`), validando el rango estricto entre 100 y 180 mm. |
 | **Trazabilidad de catálogo sin penalizar latencia de scraping** | Orquestador / Base de datos | Si para registrar el historial de precios tuviéramos que entrar a las 320 fichas de detalle, la búsqueda tardaría >12 minutos por corrida. | `registrar_en_catalogo` se nutre directamente del flujo de pre-filtrado en memoria de los 4 scrapers paralelos, manteniendo la corrida completa en ~51 segundos. |
+| **Scrapling 0.5 ProxyRotator sin método `.add()` e inicialización posicional** | BaseScraper / Enriquecedor | En Scrapling 0.5 `ProxyRotator()` no admite constructor vacío ni tiene método `.add()`; exige `proxies: List[str]` en `__init__`. Además `FetcherSession` guarda `_proxy_rotator` como atributo privado y no público. | Se diseñó la factoría `crear_proxy_rotator(proxies, rotacion)` con sanitización de comillas/líneas en `config.py`, inyectando el rotador directamente en los argumentos de `FetcherSession`, `StealthyFetcher.fetch` y `Fetcher.get`. |
+| **Tracking accidental de archivo dinámico `logs/buscador.log` en Git** | Repositorio / Git | Aunque `logs/` figuraba en `.gitignore`, `logs/buscador.log` había sido indexado en commits anteriores, ensuciando los diffs y el árbol de trabajo en cada corrida. | Se desindexó mediante `git rm --cached logs/buscador.log` manteniendo el archivo local y limpiando los commits de producción. |
+| **Timeout de inferencia individual en odómetros por imagen** | Enriquecedor / Visión IA | `gemini-flash-latest` con thinking tardaba >15s por foto en llamadas secuenciales, disparando timeouts en galerías de 6 fotos. | Agrupación de la galería completa en un único lote multimodal hacia `gemini-3.5-flash-lite`, resolviendo toda la galería en 3–5 segundos. |
+| **Peso con embalaje (22 kg) enmascarando peso real en Buhobike** | Buhobike / Enriquecedor | Buhobike mezcla el peso de envío (`22,000 Kg`) con el peso de báscula (`19,57 Kg`), provocando descarte por filtro S3 (> 21 kg). | Parseo estructurado previo de `table.caracteristicas-tecnicas-2-tablas` y `#product-details`, extrayendo peso neto de báscula antes de limpiar el DOM. |
 
 ---
 
 ## Estado actual y próximos pasos
 
-### Fotografía del estado actual (10/11/2026)
-- **Rendimiento de búsqueda**: Los 4 portales oficiales (**Bike Ocasión**, **Buhobike**, **Upway** y **Mammoth Bikes**) se rastrean en paralelo en **~51 segundos** totales (~319 e-MTBs inspeccionadas por corrida).
-- **Calidad de filtrado y telemetría**: Operativos los filtros estrictos `S0` (en stock, sin reservadas) a `S6`, detección de Range Extenders incluidos, lectura de odómetros en fotos con Gemini Vision, telemetría real de batería (`SoH %` y ciclos de carga) y clasificación matemática por milímetros de recorrido de suspensión (`≤130 mm` XC > `140 mm` Trail Ligero > `150-160 mm` All-Mountain).
-- **Historial de catálogo y tiempo en stock**: Tabla SQLite `historial_catalogo` registrando automáticamente la evolución diaria de precios, días en stock y rebajas acumuladas.
-- **Radar de mercado CLI**: Disponible `python main.py --stats` (o `--radar`) para emitir en segundos la radiografía completa del mercado.
+### Fotografía del estado actual (12/11/2026)
+- **Rendimiento de búsqueda**: Los 4 portales oficiales (**Bike Ocasión**, **Buhobike**, **Upway** y **Mammoth Bikes**) se rastrean en paralelo y se enriquecen con Perito Mecánico en **~1m 40s** totales.
+- **Calidad de filtrado y telemetría**: Operativos los filtros estrictos `S0` (en stock, sin reservadas) a `S6`, detección de Range Extenders incluidos, lectura de odómetros en fotos con Gemini Vision en lote, telemetría real de batería (`SoH %` y ciclos de carga) y clasificación matemática por milímetros de recorrido de suspensión (`≤130 mm` XC > `140 mm` Trail Ligero > `150-160 mm` All-Mountain).
+- **Historial de catálogo y tiempo en stock**: Tabla SQLite `historial_catalogo` registrando automáticamente la evolución diaria de precios, días en stock, rebajas acumuladas y alertas prioritarias de Zona de Vigilancia (2.900–3.500 €).
+- **Radar de mercado y reportes**: Generación automática de `docs/radar_mercado.md` en cada corrida y modo CLI `python main.py --stats` con métricas de catálogo activo.
+- **Resiliencia de red**: Integrado `ProxyRotator` nativo en `scraper_base.py` y `enriquecedor_web.py` con estrategias cíclica y aleatoria configurable vía `PROXY_LIST` en `.env`.
 - **Suite de tests**: `python test_buscador.py` 100% en **GREEN**.
-- **Automatización y logs**: Tarea `BuscadorBiciOcasion` activa a las 12:00 diarias con despertar automático (`WakeToRun: True`) y registro completo en `logs/buscador.log`.
+- **Automatización y logs**: Tarea `BuscadorBiciOcasion` activa a las 12:00 diarias con despertar automático (`WakeToRun: True`), ignorando `logs/buscador.log` en el control de versiones.
 
 ### Tareas completadas en esta sesión
 
-- [x] **TODO 1 — Historial de evolución de precios y "Tiempo en Stock" (`db.py` + `notifier.py`)**: Implementado en `historial_catalogo`, registrando cada candidata pre-filtrada con días en stock y rebajas acumuladas, formateado en las alertas de Telegram.
-- [x] **TODO 2 — Clasificación objetiva de modalidad por recorrido de suspensión en milímetros (`enriquecedor_web.py` + `evaluator.py`)**: Extracción de mm de suspensión (`_extraer_recorrido`), asignación directa en `prioridad_modalidad` y descarte preventivo de modelos Enduro > 170 mm.
-- [x] **TODO 3 — Modo Radar de Mercado por CLI (`python main.py --stats`)**: Comando `--stats` operativo con análisis de unidades por tienda, modelos estrella, zona de vigilancia y rebajas.
+- [x] **Higiene de Git**: Desindexado `logs/buscador.log` del repositorio (`git rm --cached`) para respetar `.gitignore`.
 - [x] **TODO 4 — Alerta proactiva en Telegram ante rebajas en la "Zona de Vigilancia" (3.000 € – 3.500 €)**: Detección automática de `entrada_desde_vigilancia` en `db.py` y formato prioritario `🚨 ¡ENTRADA DESDE ZONA DE VIGILANCIA! BAJADA DE PRECIO DETECTADA` en `notifier.py`.
 - [x] **TODO 5 — Extracción estructurada de tabla técnica de Buhobike (`table.caracteristicas-tecnicas-2-tablas` y `#product-details`)**: Parseo de filas `<tr><th>/<td>` y JSON `data-product` para extraer peso real de báscula (`19,57Kg`) y recorrido de suspensión (`140 mm`) antes de descomponer el DOM.
 - [x] **TODO 6 — Extracción multimodal en lote de kilómetros desde imágenes (`_extraer_km_de_imagenes`)**: Cuando los kilómetros no aparecen en string ni int en los datos/ficha, inspecciona hasta 6 imágenes de la galería en una única petición multimodal con `gemini-3.5-flash-lite` / `gemini-3.5-flash`, invalidando cachés sin `km` verificado (`4238 km` detectados en foto #3 de la Orbea Rise H10 2022 de Buhobike).
 - [x] **TODO 7 — Exportación automática del Radar a Markdown (`docs/radar_mercado.md`)**: Generación automática de `docs/radar_mercado.md` en cada corrida y en `--stats`.
 - [x] **TODO 8 — Soporte robusto de Proxies Rotatorios (`scraper_base.py` + `enriquecedor_web.py`)**: Implementado `ProxyRotator` en `scraper_base.py` con rotación cíclica (`cyclic`) y aleatoria (`random`), inyección en `FetcherSession` y `StealthyFetcher`, e integración en `enriquecedor_web.py` para apertura de fichas y descarga de fotos de galería con tests unitarios.
-- [x] **Ejecución de búsqueda diaria en vivo**: Notificado el Top 3 actualizado a Telegram en vivo con éxito.
+- [x] **Ejecución de búsqueda diaria en vivo**: Notificado el Top 3 actualizado a Telegram en vivo con éxito (Orbea Rise H30 7.5/10, BH iLynx+ 6.5/10, Orbea Rise H10 5.5/10).
+
+### Plan de trabajo propuesto para mañana (TODOs)
+
+- [ ] **TODO 1 — Profundización de telemetría de batería (SoH % y ciclos) en Upway y Mammoth**
+  - **Objetivo**: Refinar extractores específicos en `enriquecedor_web.py` para capturar datos de salud de batería y ciclos de carga cuando Upway o Mammoth los publiquen en su ficha técnica o descripción estructurada.
+- [ ] **TODO 2 — Enriquecimiento analítico del Radar de Mercado (`docs/radar_mercado.md`)**
+  - **Objetivo**: Incorporar en el informe métricas de ahorro medio respecto al PVP original declarado en tienda y días promedio en stock por portal para detectar qué tienda rota más lento sus e-MTB.
+- [ ] **TODO 3 — Heartbeat / Notificación de estado del cron a Telegram**
+  - **Objetivo**: Enviar una confirmación diaria silenciosa o resumen de salud de corrida a Telegram cuando la tarea programada de Windows finalice, validando que corrió sin interrupciones ni bloqueos de red.
+- [ ] **TODO 4 — Sincronización de credenciales y push a GitHub (`origin/main`)**
+  - **Objetivo**: Reautenticar el CLI de GitHub con `gh auth login` en la máquina local para sincronizar los commits acumulados en local hacia el repositorio remoto.
 
 ### Dependencias instaladas
 
