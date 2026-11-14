@@ -27,6 +27,7 @@ from scrapers.enriquecedor_web import (
     _extraer_peso,
     _normalizar_km_existente,
     _extraer_pares_ficha_estructurada,
+    _aplicar_detalle,
     _recolectar_urls_imagenes_ficha,
     _parsear_respuesta_km_vision,
     _extraer_km_de_imagenes,
@@ -35,7 +36,9 @@ from main import exportar_radar_mercado_md
 from scraper_base import BaseScraper, crear_proxy_rotator, random_rotation
 import config as cfg
 from db import BaseDatos
-from notifier import formatear_mensaje
+from notifier import formatear_mensaje, formatear_heartbeat, enviar_heartbeat
+from scrapers.upway import UpwayScraper
+from unittest.mock import patch, MagicMock
 
 
 def bici_prueba(**kwargs) -> Bicicleta:
@@ -771,6 +774,175 @@ def test_proxy_rotator_y_resiliencia_red():
         cfg.PROXY_LIST = proxies_originales
 
 
+def test_profundizacion_telemetria_bateria_upway_y_mammoth():
+    """Valida la profundización de telemetría de batería (SoH % y ciclos) en Upway y Mammoth."""
+    # 1. Upway: Batería sustituida / reemplazada / a estrenar
+    txt_reemplazada = (
+        "Batería Estado: Reemplazada Capacidad de la batería: 750 Wh "
+        "Número de ciclos de carga de la batería: 1 Ubicación: Cuadro"
+    )
+    soh_r, ciclos_r = _extraer_salud_bateria(txt_reemplazada)
+    assert soh_r == 100
+    assert ciclos_r == 1
+    assert _extraer_bateria(txt_reemplazada) == 750
+
+    # 2. Upway: Capacidad restante porcentual
+    txt_restante = "En esta bici la batería se ha comprobado y la capacidad restante es del 88% respecto al valor original de 625 Wh."
+    soh_rest, _ = _extraer_salud_bateria(txt_restante)
+    assert soh_rest == 88
+    assert _extraer_bateria(txt_restante) == 625
+
+    # 3. Upway: Ciclos de carga sin salud porcentual explícita
+    txt_ciclos_solos = "Batería Estado: De origen Capacidad de la batería: 625 Wh Número de ciclos de carga de la batería: 5"
+    soh_cs, ciclos_cs = _extraer_salud_bateria(txt_ciclos_solos)
+    assert soh_cs is None
+    assert ciclos_cs == 5
+
+    # 4. Mammoth: Capacidad principal (EnergyPak 625) frente a extender opcional/compatible (250 Wh)
+    txt_mammoth = "Batería: EnergyPak Smart 625EnergyPak Plus 250Wh range extender compatible"
+    bat_m = _extraer_bateria(txt_mammoth)
+    assert bat_m == 625
+
+    # 5. Mammoth / Bicicleta nueva a estrenar (km=0 y garantía >= 2 años)
+    bici_nueva = bici_prueba(sitio="Mammoth Bikes", km=0, garantia_anos=3, bateria_wh=625)
+    detalle_simulado = {}
+    bici_enriquecida = _aplicar_detalle(bici_nueva, detalle_simulado)
+    assert bici_enriquecida.bateria_salud_pct == 100
+    assert bici_enriquecida.bateria_ciclos == 0
+
+    # Mensaje de Telegram y Perito Mecánico para bici nueva con SoH 100% y 0 ciclos
+    audit_nueva = auditar_perito_mecanico(bici_enriquecida)
+    assert audit_nueva["delta_bateria"] == 0.5
+    msg_nueva = formatear_mensaje(bici_enriquecida, audit_nueva["nota_final"], "Desglose")
+    assert "625 Wh [SoH: 100% | 0 ciclos]" in msg_nueva
+
+
+def test_radar_mercado_metricas_enriquecidas_y_heartbeat():
+    """
+    Valida:
+      1. Soporte de pvp_original en BaseDatos y cálculo de descuento % vs PVP original.
+      2. Enriquecimiento de obtener_estadisticas_mercado con metricas_por_sitio y resumen_global
+         (permanencia media en stock, ahorro medio por rebajas y precios medios).
+      3. Exportación de docs/radar_mercado.md con las nuevas tablas enriquecidas.
+      4. Extractor de PVP original en tarjetas de Upway ('2.499 € 6.000 € nuevo' -> 6000.0).
+      5. Formateo y envío de Heartbeat operativo para Telegram.
+    """
+    fd, path_tmp = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    try:
+        db = BaseDatos(ruta=path_tmp)
+
+        # 1. Registro con pvp_original en Upway y rebaja posterior
+        bici_upway = bici_prueba(
+            sitio="Upway",
+            bici_id="upway-rise-01",
+            titulo="Orbea Rise H30 2023",
+            precio=2200.0,
+            url="https://upway.es/products/orbea-rise-h30",
+            pvp_original=5499.0,
+        )
+        res_ini = db.registrar_en_catalogo(bici_upway)
+        assert res_ini["pvp_original"] == 5499.0
+        assert res_ini["rebajas_detectadas"] == 0
+
+        # Rebaja de 200 €
+        from dataclasses import replace
+        bici_rebajada = replace(bici_upway, precio=2000.0)
+        res_reb = db.registrar_en_catalogo(bici_rebajada)
+        assert res_reb["rebajas_detectadas"] == 1
+        assert res_reb["ahorro_eur"] == 200.0
+
+        # Segunda bici en Zona de Vigilancia (Bike Ocasión)
+        bici_vig = bici_prueba(
+            sitio="Bike Ocasión",
+            bici_id="bo-vig-01",
+            titulo="BH iLynx Trail Carbon 8.7",
+            precio=3100.0,
+            url="https://bike-ocasion.com/bici/bo-vig-01",
+            pvp_original=6800.0,
+        )
+        db.registrar_en_catalogo(bici_vig)
+
+        # 2. Métricas agregadas de mercado
+        stats = db.obtener_estadisticas_mercado()
+        assert stats["total"] == 2
+        assert "metricas_por_sitio" in stats
+        m_upway = stats["metricas_por_sitio"]["Upway"]
+        assert m_upway["unidades"] == 1
+        assert m_upway["precio_medio"] == 2000.0
+        assert m_upway["con_rebajas"] == 1
+        assert m_upway["ahorro_medio_rebajas"] == 200.0
+        assert m_upway["descuento_pvp_medio_pct"] is not None
+        assert m_upway["descuento_pvp_medio_pct"] > 60.0  # (5499 - 2000)/5499 = ~63.6%
+
+        res_glob = stats["resumen_global"]
+        assert res_glob["total"] == 2
+        assert res_glob["con_rebajas"] == 1
+        assert res_glob["ahorro_total_acumulado"] == 200.0
+        assert res_glob["en_vigilancia"] == 1
+
+        assert "Orbea Rise" in stats["modelos_clave"]
+        assert stats["modelos_clave"]["Orbea Rise"]["precio_medio"] == 2000.0
+
+        # 3. Exportación Markdown
+        fd_md, path_md = tempfile.mkstemp(suffix=".md")
+        os.close(fd_md)
+        try:
+            exportar_radar_mercado_md(ruta=path_md, db=db)
+            with open(path_md, "r", encoding="utf-8") as f:
+                md_contenido = f.read()
+
+            assert "Distribución por Portal y Permanencia" in md_contenido
+            assert "Días en Stock (medio)" in md_contenido
+            assert "Ahorro Medio Rebajas" in md_contenido
+            assert "Permanencia media global" in md_contenido
+            assert "-200 €" in md_contenido
+        finally:
+            if os.path.exists(path_md):
+                os.remove(path_md)
+
+        # 4. Extractor PVP original de Upway
+        scraper_up = UpwayScraper(cfg.SITIOS[2])
+        ejemplo_txt = "Mejor precio Recién llegada Focus THRON² 6.9 2023 1m60-1m70 1786 km 2.499 € 6.000 € nuevo"
+        pvp_detectado = scraper_up._parsear_pvp_original(ejemplo_txt)
+        assert pvp_detectado == 6000.0
+
+        # 5. Heartbeat formateo y envío mockeado
+        resumen_hb = {
+            "fecha_hora": "2026-11-14 12:00:15",
+            "duracion_seg": 42.5,
+            "conteo_por_portal": {"Bike Ocasión": 180, "Upway": 65, "Buhobike": 40, "Mammoth": 34},
+            "total_procesadas": 319,
+            "candidatas_aptas": 4,
+            "notificadas": 2,
+            "total_en_catalogo": 64,
+            "total_en_vigilancia": 27,
+            "estado": "🟢 Runner operativo",
+        }
+        msg_hb = formatear_heartbeat(resumen_hb)
+        assert "Heartbeat Buscador e-MTB" in msg_hb
+        assert "319 bicicletas" in msg_hb
+        assert "Bike Ocasión: *180*" in msg_hb
+        assert "*2* enviada(s)" in msg_hb
+        assert "64" in msg_hb
+        assert "🟢 Runner operativo" in msg_hb
+
+        with patch("requests.post") as mock_post:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_post.return_value = mock_resp
+            ok = enviar_heartbeat(resumen_hb)
+            assert ok is True
+            assert mock_post.called
+
+    finally:
+        try:
+            if os.path.exists(path_tmp):
+                os.remove(path_tmp)
+        except PermissionError:
+            pass
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -791,4 +963,6 @@ if __name__ == "__main__":
     test_todos_historial_catalogo_recorrido_y_stats()
     test_extraccion_km_imagenes_ficha_buhobike_vigilancia_y_radar_md()
     test_proxy_rotator_y_resiliencia_red()
+    test_profundizacion_telemetria_bateria_upway_y_mammoth()
+    test_radar_mercado_metricas_enriquecidas_y_heartbeat()
     print("Todas las pruebas pasaron (GREEN).")

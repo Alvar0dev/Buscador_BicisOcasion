@@ -62,6 +62,7 @@ class UpwayScraper(BaseScraper):
                 # sin lanzar peticiones secuenciales bloqueantes (main.py ya enriquece
                 # en paralelo con caché en disco solo las candidatas que pasan el pre-filtro).
                 datos_tarjeta = self._extraer_datos_tarjeta(texto_completo)
+                pvp_original = self._parsear_pvp_original(texto_completo)
 
                 bicis.append(Bicicleta(
                     sitio=self.sitio.nombre,
@@ -74,6 +75,7 @@ class UpwayScraper(BaseScraper):
                     ano=datos_tarjeta.get("ano"),
                     suspension_trasera="si" if es_coleccion_doble else datos_tarjeta.get("suspension_trasera"),
                     garantia_anos=self.sitio.garantia_anos,
+                    pvp_original=pvp_original,
                 ))
             except Exception as e:
                 print(f"[Upway] Error parseando producto: {e}")
@@ -233,3 +235,21 @@ class UpwayScraper(BaseScraper):
             return float(digitos)
         except ValueError:
             return 0.0
+
+    def _parsear_pvp_original(self, texto: str) -> Optional[float]:
+        """Extrae el precio nuevo / original de catálogo si figura en la tarjeta (ej. '2.499 € 6.000 € nuevo')."""
+        matches = re.findall(r"([\d\.\s,\u00A0]+)\s*€", texto)
+        if len(matches) >= 2:
+            try:
+                def _limpiar(val_str: str) -> float:
+                    d = "".join(c for c in val_str if c.isdigit() or c in ".,").replace(".", "").replace(",", ".")
+                    return float(d) if d else 0.0
+
+                p_actual = _limpiar(matches[0])
+                for m in matches[1:]:
+                    p_orig = _limpiar(m)
+                    if p_orig > p_actual:
+                        return p_orig
+            except Exception:
+                pass
+        return None

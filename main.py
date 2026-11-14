@@ -23,7 +23,7 @@ from config import SITIOS, HORA_EJECUCION, NOTA_MIN_NOTIFICAR, NOTA_MIN_AGUARDAR
 from db import BaseDatos
 from evaluator import evaluar, calcular_nota_oportunidad, pasa_filtros_estrictos, prioridad_modalidad
 from gemini_classifier import enriquecer_y_valorar_bici
-from notifier import enviar
+from notifier import enviar, enviar_heartbeat
 from scrapers.bike_ocasion import BikeOcasionScraper
 from scrapers.buhobike import BuhobikeScraper
 from scrapers.upway import UpwayScraper
@@ -180,7 +180,11 @@ def _scrapear_sitio(sitio: cfg.SitioObjetivo) -> list:
         return []
 
 
-def _recolectar_oportunidades(db: BaseDatos, forzar_envio: bool = False) -> list:
+def _recolectar_oportunidades(
+    db: BaseDatos,
+    forzar_envio: bool = False,
+    telemetria: Optional[dict] = None,
+) -> list:
     """
     Recorre los sitios objetivo en paralelo (con health check integrado),
     pre-filtra candidatas, enriquece y valora con el clasificador híbrido
@@ -194,6 +198,7 @@ def _recolectar_oportunidades(db: BaseDatos, forzar_envio: bool = False) -> list
       4. Candidatas cercanas por peso vigentes.
     """
     candidatas_pre = []
+    conteo_por_portal: Dict[str, int] = {}
 
     with ThreadPoolExecutor(max_workers=len(SITIOS)) as pool_sitios:
         futuros_sitios = {
@@ -204,8 +209,10 @@ def _recolectar_oportunidades(db: BaseDatos, forzar_envio: bool = False) -> list
             sitio = futuros_sitios[futuro_s]
             try:
                 bicis = futuro_s.result()
+                conteo_por_portal[sitio.nombre] = len(bicis)
             except Exception as e:
                 logger.error(f"[{sitio.nombre}] Excepción en worker de scraping: {e}")
+                conteo_por_portal[sitio.nombre] = 0
                 continue
 
             for bici in bicis:
@@ -309,6 +316,12 @@ def _recolectar_oportunidades(db: BaseDatos, forzar_envio: bool = False) -> list
         faltantes = TOP_N_NOTIFICAR - len(seleccion)
         seleccion.extend(pool[:faltantes])
 
+    if telemetria is not None:
+        telemetria["conteo_por_portal"] = conteo_por_portal
+        telemetria["total_procesadas"] = sum(conteo_por_portal.values())
+        telemetria["candidatas_pre"] = len(candidatas_pre)
+        telemetria["candidatas_aptas"] = len(seleccion)
+
     return seleccion
 
 
@@ -318,6 +331,7 @@ def exportar_radar_mercado_md(
 ) -> Path:
     """
     Exporta automáticamente el informe de Radar de Mercado en Markdown (docs/radar_mercado.md).
+    Incluye métricas de permanencia en stock (días), ahorro medio en rebajas y comparación vs PVP original.
     """
     db_inst = db if db is not None else BaseDatos()
     stats = db_inst.obtener_estadisticas_mercado()
@@ -326,26 +340,49 @@ def exportar_radar_mercado_md(
 
     ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     total = stats.get("total", 0)
+    res_global = stats.get("resumen_global", {})
+    metricas_sitios = stats.get("metricas_por_sitio", {})
+
+    dias_global = res_global.get("dias_stock_medio", 0.0)
+    p_medio_global = res_global.get("precio_medio", 0.0)
+    total_rebajas = res_global.get("con_rebajas", len(stats.get("con_rebajas", [])))
+    ahorro_medio_rebajas = res_global.get("ahorro_medio_rebajas", 0.0)
+    total_vigilancia = res_global.get("en_vigilancia", len(stats.get("en_vigilancia", [])))
+
     lineas = [
         "# 📡 Radar de Mercado e-MTB de Ocasión",
         "",
         f"> **Última actualización:** `{ahora}`  ",
-        f"> **Total de bicicletas en seguimiento activo:** `{total}` unidades",
+        f"> **Total en seguimiento activo:** `{total}` unidades | **Permanencia media global:** `{dias_global:.1f} días`  ",
+        f"> **Oportunidades con rebaja activa:** `{total_rebajas}` unidades (Ahorro medio: `-{ahorro_medio_rebajas:.0f} €`) | **Zona de Vigilancia:** `{total_vigilancia}` unidades",
         "",
         "---",
         "",
-        "## 🏪 1. Distribución por Portal",
+        "## 🏪 1. Distribución por Portal y Permanencia",
         "",
     ]
 
     if stats.get("por_sitio"):
         lineas.extend([
-            "| Portal | Unidades en seguimiento | Cuota (%) |",
-            "| :--- | :---: | :---: |",
+            "| Portal | Unidades | Cuota (%) | Días en Stock (medio) | Precio Medio | Ahorro Medio Rebajas |",
+            "| :--- | :---: | :---: | :---: | :---: | :---: |",
         ])
         for sitio, cant in sorted(stats["por_sitio"].items(), key=lambda x: x[1], reverse=True):
-            pct = (cant / total * 100.0) if total > 0 else 0.0
-            lineas.append(f"| **{sitio}** | {cant} | {pct:.1f}% |")
+            m = metricas_sitios.get(sitio, {})
+            pct = m.get("cuota_pct", (cant / total * 100.0) if total > 0 else 0.0)
+            dias_medio = m.get("dias_stock_medio", 0.0)
+            p_med = m.get("precio_medio", 0.0)
+            con_reb = m.get("con_rebajas", 0)
+            ahorro_m = m.get("ahorro_medio_rebajas", 0.0)
+            dto_pvp = m.get("descuento_pvp_medio_pct")
+
+            ahorro_txt = f"-{ahorro_m:.0f} €" if con_reb > 0 else "-"
+            if dto_pvp is not None:
+                ahorro_txt += f" (~{dto_pvp:.0f}% vs PVP)"
+
+            lineas.append(
+                f"| **{sitio}** | {cant} | {pct:.1f}% | {dias_medio:.1f}d | {p_med:.0f} € | {ahorro_txt} |"
+            )
     else:
         lineas.append("_Sin bicicletas registradas en el catálogo._")
 
@@ -357,13 +394,14 @@ def exportar_radar_mercado_md(
 
     if stats.get("modelos_clave"):
         lineas.extend([
-            "| Familia / Modelo | Unidades | Precio Mínimo | Precio Medio |",
-            "| :--- | :---: | :---: | :---: |",
+            "| Familia / Modelo | Unidades | Precio Mínimo | Precio Medio | Permanencia Media |",
+            "| :--- | :---: | :---: | :---: | :---: |",
         ])
         for modelo, info in stats["modelos_clave"].items():
             p_min = f"{info['precio_min']:.0f} €" if info.get("precio_min") else "-"
             p_med = f"{info['precio_medio']:.0f} €" if info.get("precio_medio") else "-"
-            lineas.append(f"| **{modelo}** | {info['unidades']} | {p_min} | {p_med} |")
+            d_med = f"{info.get('dias_stock_medio', 0.0):.1f}d"
+            lineas.append(f"| **{modelo}** | {info['unidades']} | {p_min} | {p_med} | {d_med} |")
     else:
         lineas.append("_No hay unidades activas de las familias clave en este momento._")
 
@@ -414,10 +452,12 @@ def exportar_radar_mercado_md(
 
 def ejecutar_busqueda(forzar_envio: bool = False) -> None:
     """Ejecuta una pasada completa de búsqueda, clasificación IA y notificación Top N."""
+    t_inicio = time.time()
     logger.info(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Iniciando búsqueda de e-MTB...")
 
     db = BaseDatos()
-    oportunidades = _recolectar_oportunidades(db, forzar_envio=forzar_envio)
+    telemetria_ejecucion: Dict[str, Any] = {}
+    oportunidades = _recolectar_oportunidades(db, forzar_envio=forzar_envio, telemetria=telemetria_ejecucion)
 
     try:
         ruta_md = exportar_radar_mercado_md(db=db)
@@ -425,29 +465,46 @@ def ejecutar_busqueda(forzar_envio: bool = False) -> None:
     except Exception as e:
         logger.warning(f"[Radar] No se pudo exportar docs/radar_mercado.md: {e}")
 
-    if not oportunidades:
-        logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Finalizado. "
-                    "No se encontraron bicis aptas en ninguno de los sitios.\n")
-        return
-
-    # Seleccionar el Top N (por defecto las 3 más interesantes)
-    a_notificar = oportunidades[:TOP_N_NOTIFICAR]
-    mejor_nota = max(x[1] for x in a_notificar)
-    logger.info(
-        f"[main] Seleccionadas las {len(a_notificar)} bicicletas más interesantes "
-        f"(mejor nota: {mejor_nota}/10)."
-    )
-
     total_notificadas = 0
-    for bici, nota, desglose in a_notificar:
-        precio_anterior = db.precio_previo(bici.bici_id)
-        seguimiento = db.obtener_seguimiento(bici.bici_id)
-        if enviar(bici, nota, desglose, precio_anterior=precio_anterior, seguimiento=seguimiento):
-            db.registrar(bici, nota, precio_anterior=precio_anterior)
-            total_notificadas += 1
-            logger.info(f"  NOTIFICADA: {bici.titulo} ({bici.peso_kg} kg) - Nota {nota}/10")
+    if oportunidades:
+        # Seleccionar el Top N (por defecto las 3 más interesantes)
+        a_notificar = oportunidades[:TOP_N_NOTIFICAR]
+        mejor_nota = max(x[1] for x in a_notificar)
+        logger.info(
+            f"[main] Seleccionadas las {len(a_notificar)} bicicletas más interesantes "
+            f"(mejor nota: {mejor_nota}/10)."
+        )
 
-    logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Finalizado. "
+        for bici, nota, desglose in a_notificar:
+            precio_anterior = db.precio_previo(bici.bici_id)
+            seguimiento = db.obtener_seguimiento(bici.bici_id)
+            if enviar(bici, nota, desglose, precio_anterior=precio_anterior, seguimiento=seguimiento):
+                db.registrar(bici, nota, precio_anterior=precio_anterior)
+                total_notificadas += 1
+                logger.info(f"  NOTIFICADA: {bici.titulo} ({bici.peso_kg} kg) - Nota {nota}/10")
+    else:
+        logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+                    "No se encontraron bicis aptas en ninguno de los sitios.\n")
+
+    duracion_seg = round(time.time() - t_inicio, 1)
+    stats_radar = db.obtener_estadisticas_mercado()
+
+    # Heartbeat a Telegram: si está configurado, o si se forzó la búsqueda
+    if cfg.TELEGRAM_HEARTBEAT or forzar_envio:
+        resumen_hb = {
+            "fecha_hora": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "duracion_seg": duracion_seg,
+            "conteo_por_portal": telemetria_ejecucion.get("conteo_por_portal", {}),
+            "total_procesadas": telemetria_ejecucion.get("total_procesadas", 0),
+            "candidatas_aptas": len(oportunidades),
+            "notificadas": total_notificadas,
+            "total_en_catalogo": stats_radar.get("total", 0),
+            "total_en_vigilancia": len(stats_radar.get("en_vigilancia", [])),
+            "estado": "🟢 Runner operativo" if telemetria_ejecucion.get("total_procesadas", 0) > 0 else "⚠️ Sin bicicletas procesadas",
+        }
+        enviar_heartbeat(resumen_hb)
+
+    logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Finalizado en {duracion_seg}s. "
                 f"{len(oportunidades)} candidatas aptas, {total_notificadas} notificadas.\n")
 
 
@@ -456,24 +513,37 @@ def mostrar_radar_mercado() -> None:
     db = BaseDatos()
     stats = db.obtener_estadisticas_mercado()
     ruta_md = exportar_radar_mercado_md(db=db)
-    print("\n" + "=" * 65)
+    res_global = stats.get("resumen_global", {})
+    metricas_sitios = stats.get("metricas_por_sitio", {})
+
+    print("\n" + "=" * 70)
     print(" 📡 RADAR DE MERCADO e-MTB DE OCASIÓN (ESTADÍSTICAS)")
-    print("=" * 65)
+    print("=" * 70)
     print(f"Total bicicletas en seguimiento activo: {stats['total']}")
+    print(f"Permanencia media global en stock: {res_global.get('dias_stock_medio', 0.0):.1f} días")
+    print(f"Precio medio global de catálogo: {res_global.get('precio_medio', 0.0):.0f} €")
     print(f"Informe Markdown exportado en: {ruta_md}")
+
     if stats["por_sitio"]:
-        print("\n🏪 Distribución por portal:")
+        print("\n🏪 Distribución y permanencia por portal:")
+        print(f"  {'Portal':16} | {'Uds':4} | {'Días Stock':10} | {'P. Medio':9} | {'Ahorro Rebajas':14}")
+        print("  " + "-" * 62)
         for sitio, cant in sorted(stats["por_sitio"].items(), key=lambda x: x[1], reverse=True):
-            print(f"  • {sitio:15}: {cant} unidades")
+            m = metricas_sitios.get(sitio, {})
+            d_med = f"{m.get('dias_stock_medio', 0.0):.1f}d"
+            p_med = f"{m.get('precio_medio', 0.0):.0f} €"
+            ahorro_m = f"-{m.get('ahorro_medio_rebajas', 0.0):.0f} €" if m.get("con_rebajas", 0) > 0 else "-"
+            print(f"  {sitio:16} | {cant:4} | {d_med:>10} | {p_med:>9} | {ahorro_m:>14}")
 
     if stats["modelos_clave"]:
         print("\n🎯 Modelos Clave de e-MTB Ligera:")
-        print(f"  {'Modelo':22} | {'Uds':4} | {'Mínimo':9} | {'Precio Medio':12}")
-        print("  " + "-" * 55)
+        print(f"  {'Modelo':22} | {'Uds':4} | {'Mínimo':9} | {'P. Medio':10} | {'Días Stock':10}")
+        print("  " + "-" * 65)
         for modelo, info in stats["modelos_clave"].items():
             p_min = f"{info['precio_min']:.0f} €" if info['precio_min'] else "-"
             p_med = f"{info['precio_medio']:.0f} €" if info['precio_medio'] else "-"
-            print(f"  {modelo:22} | {info['unidades']:4} | {p_min:>9} | {p_med:>12}")
+            d_med = f"{info.get('dias_stock_medio', 0.0):.1f}d"
+            print(f"  {modelo:22} | {info['unidades']:4} | {p_min:>9} | {p_med:>10} | {d_med:>10}")
 
     if stats["con_rebajas"]:
         print(f"\n📉 Oportunidades con Bajada de Precio ({len(stats['con_rebajas'])} detectadas):")
@@ -486,7 +556,7 @@ def mostrar_radar_mercado() -> None:
         for v in stats["en_vigilancia"][:5]:
             print(f"  • {v['titulo']} — {v['precio']:.0f} € ({v['sitio']}) [{v['dias']} días en stock]")
 
-    print("=" * 65 + "\n")
+    print("=" * 70 + "\n")
 
 
 def main() -> None:
@@ -509,7 +579,29 @@ def main() -> None:
         dest="stats",
         help="Muestra informe de radar de mercado a partir del historial de catálogo.",
     )
+    parser.add_argument(
+        "--heartbeat",
+        action="store_true",
+        help="Envía un heartbeat de prueba con el estado del runner y del radar a Telegram.",
+    )
     args = parser.parse_args()
+
+    if args.heartbeat:
+        db = BaseDatos()
+        stats = db.obtener_estadisticas_mercado()
+        resumen_hb = {
+            "fecha_hora": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "duracion_seg": 0.0,
+            "conteo_por_portal": stats.get("por_sitio", {}),
+            "total_procesadas": stats.get("total", 0),
+            "candidatas_aptas": len(stats.get("con_rebajas", [])),
+            "notificadas": 0,
+            "total_en_catalogo": stats.get("total", 0),
+            "total_en_vigilancia": len(stats.get("en_vigilancia", [])),
+            "estado": "🟢 Test manual de Heartbeat",
+        }
+        enviar_heartbeat(resumen_hb)
+        return
 
     if args.stats:
         mostrar_radar_mercado()

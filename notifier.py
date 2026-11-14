@@ -161,3 +161,74 @@ def enviar(
     except requests.RequestException as e:
         print(f"[Telegram] Error enviando mensaje: {e}")
         return False
+
+
+def formatear_heartbeat(resumen: dict) -> str:
+    """
+    Construye el mensaje Markdown del Heartbeat para Telegram (TODO 2).
+    Informa del pulso diario de salud del scraper, portales procesados,
+    candidatas analizadas y estado del radar de mercado.
+    """
+    fecha_hora = resumen.get("fecha_hora", "")
+    duracion = resumen.get("duracion_seg", 0.0)
+    total_proc = resumen.get("total_procesadas", 0)
+    conteo_sitios = resumen.get("conteo_por_portal", {})
+    aptas = resumen.get("candidatas_aptas", 0)
+    notificadas = resumen.get("notificadas", 0)
+    en_catalogo = resumen.get("total_en_catalogo", 0)
+    en_vigilancia = resumen.get("total_en_vigilancia", 0)
+    estado = resumen.get("estado", "🟢 Runner operativo")
+
+    lineas_portales = []
+    for sitio, cant in sorted(conteo_sitios.items(), key=lambda x: x[1], reverse=True):
+        lineas_portales.append(f"  • {sitio}: *{cant}* bicis")
+    bloque_portales = "\n".join(lineas_portales) if lineas_portales else "  • _Sin desglose disponible_"
+
+    if notificadas > 0:
+        texto_notif = f"*{notificadas}* enviada(s) 🔥"
+    else:
+        texto_notif = "0 (sin nuevas oportunidades ni rebajas en el Top)"
+
+    mensaje = (
+        f"💓 *Heartbeat Buscador e-MTB* — Pulso Operativo\n"
+        f"📅 `{fecha_hora}` | ⏱️ `{duracion}s`\n\n"
+        f"🏪 *Portales rastreados ({total_proc} bicicletas)*:\n"
+        f"{bloque_portales}\n\n"
+        f"📊 *Diagnóstico del runner*:\n"
+        f"  • Candidatas aptas analizadas: *{aptas}*\n"
+        f"  • Alertas prioritarias: {texto_notif}\n"
+        f"  • Radar activo en seguimiento: *{en_catalogo}* unidades\n"
+        f"  • Zona de vigilancia (2.900-3.500 €): *{en_vigilancia}* unidades\n\n"
+        f"{estado}"
+    )
+    return mensaje
+
+
+def enviar_heartbeat(resumen: dict) -> bool:
+    """
+    Envía el mensaje de heartbeat a Telegram. Devuelve True si tuvo éxito.
+    """
+    if not cfg.TELEGRAM_BOT_TOKEN or not cfg.TELEGRAM_CHAT_ID:
+        print("[Telegram/Heartbeat] Credenciales no configuradas. Se omite el envío.")
+        return False
+
+    url = cfg.TELEGRAM_API_URL.format(token=cfg.TELEGRAM_BOT_TOKEN)
+    texto = formatear_heartbeat(resumen)
+    payload = {
+        "chat_id": cfg.TELEGRAM_CHAT_ID,
+        "text": texto,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True,
+    }
+
+    try:
+        resp = requests.post(url, json=payload, timeout=15)
+        if resp.status_code == 400:
+            payload.pop("parse_mode", None)
+            resp = requests.post(url, json=payload, timeout=15)
+        resp.raise_for_status()
+        print(f"[Telegram/Heartbeat] Heartbeat enviado exitosamente.")
+        return True
+    except requests.RequestException as e:
+        print(f"[Telegram/Heartbeat] Error enviando heartbeat: {e}")
+        return False

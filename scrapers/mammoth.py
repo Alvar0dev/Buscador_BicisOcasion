@@ -88,6 +88,11 @@ class MammothScraper(BaseScraper):
                 es_categoria_xc = "rally-xc" in url_listado.lower() or "c-3104" in url_listado.lower()
                 modalidad = "XC / Downcountry" if (es_categoria_xc and not es_rigida) else None
 
+                old_el = card.select_one(".card-price-old, .old-price, del, .price-before-discount")
+                pvp_original = self._parsear_precio(old_el.get_text()) if old_el else None
+                if pvp_original and pvp_original <= precio:
+                    pvp_original = None
+
                 bicis.append(Bicicleta(
                     sitio=self.sitio.nombre,
                     bici_id=f"mammoth-{bici_id}",
@@ -98,8 +103,11 @@ class MammothScraper(BaseScraper):
                     modalidad=modalidad,
                     ano=ano,
                     km=0,
+                    bateria_salud_pct=100,
+                    bateria_ciclos=0,
                     suspension_trasera="no" if es_rigida else "si",
                     garantia_anos=self.sitio.garantia_anos,
+                    pvp_original=pvp_original,
                 ))
             except Exception as e:
                 print(f"[Mammoth] Error parseando tarjeta: {e}")

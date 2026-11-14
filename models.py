@@ -30,6 +30,7 @@ class Bicicleta:
     recorrido_mm: Optional[int] = None        # Recorrido de suspensión en mm (ej. 120, 140, 150)
     garantia_anos: Optional[int] = None
     disponible: bool = True                  # False si figura reservada, agotada o sin stock
+    pvp_original: Optional[float] = None     # PVP original de fábrica / nuevo (referencia de catálogo)
 
     def to_dict(self) -> dict:
         return asdict(self)

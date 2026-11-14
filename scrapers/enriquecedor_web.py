@@ -138,6 +138,21 @@ def _extraer_pares_ficha_estructurada(soup: BeautifulSoup) -> List[Tuple[str, st
         except Exception:
             pass
 
+    # 4. Listas técnicas <li> clave-valor (ej. Mammoth: <li>Batería: ...</li>, .technical-specifications li)
+    elementos_li = soup.select(
+        "ul.specifications li, ul.features li, .product-features li, "
+        ".technical-specifications li, .tech-specs li, #specs li, "
+        ".caracteristicas li, .product-attributes li, ul.data-sheet li"
+    )
+    for li in elementos_li:
+        txt_li = li.get_text(" ", strip=True)
+        if ":" in txt_li:
+            partes = txt_li.split(":", 1)
+            lbl = partes[0].strip().lower()
+            val_li = partes[1].strip()
+            if lbl and val_li and len(lbl) <= 50:
+                pares.append((lbl, val_li))
+
     return pares
 
 
@@ -256,6 +271,14 @@ def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str, km_ya_conocido: bool
             bat_dt = _extraer_bateria(val)
             if bat_dt is not None:
                 detalle["bateria_wh"] = bat_dt
+        elif any(k in label for k in ("salud", "soh", "estado de salud", "capacidad restante", "vida útil", "vida util")) and "bateria_salud_pct" not in detalle:
+            soh_dt, _ = _extraer_salud_bateria(f"{label}: {val}")
+            if soh_dt is not None:
+                detalle["bateria_salud_pct"] = soh_dt
+        elif any(k in label for k in ("ciclo", "ciclos", "recargas", "cargas")) and "bateria_ciclos" not in detalle:
+            _, cic_dt = _extraer_salud_bateria(f"{label}: {val}")
+            if cic_dt is not None:
+                detalle["bateria_ciclos"] = cic_dt
         elif "talla" in label and "talla" not in detalle:
             talla_limpia = val.split(":")[0].strip() if ":" in val else val.split()[0].strip()
             if talla_limpia in ("XS", "S", "M", "L", "XL", "XXL"):
@@ -487,11 +510,13 @@ def _extraer_peso(texto: str) -> Optional[float]:
 
 
 def _extraer_bateria(texto: str) -> Optional[int]:
+    if not texto:
+        return None
     texto_norm = texto.replace("\u202f", " ").replace("\u00a0", " ")
     # 1. Si menciona la capacidad nominal original (ej. Upway: "capacidad original de 750 Wh, es decir, 670 Wh"),
     # usar la capacidad nominal del modelo y dejar la degradación en bateria_salud_pct.
     match_orig = re.search(
-        r"capacidad\s+original\s+de\s+(\d{3,4})\s*wh\b",
+        r"(?:capacidad|valor)\s+original\s+de\s+(\d{3,4})\s*wh\b",
         texto_norm,
         re.IGNORECASE,
     )
@@ -500,8 +525,40 @@ def _extraer_bateria(texto: str) -> Optional[int]:
         if 250 <= val_orig <= 1200:
             return val_orig
 
-    # 2. Búsqueda general de Wh
+    # 2. Búsqueda de modelos conocidos de batería donde los Wh vienen en el nombre
+    # (ej. Giant EnergyPak Smart 625, Bosch PowerTube 750, Yamaha InTube 630)
+    patrones_modelo = (
+        r"EnergyPak\s*(?:Smart\s*)?(\d{3,4})",
+        r"PowerTube\s*(\d{3,4})",
+        r"PowerPack\s*(\d{3,4})",
+        r"InTube\s*(\d{3,4})",
+        r"Simplo\s*(\d{3,4})",
+        r"Darfon\s*(\d{3,4})",
+        r"Flyer\s*(?:FIB\s*)?(\d{3,4})",
+    )
+    for p_mod in patrones_modelo:
+        m_mod = re.search(p_mod, texto_norm, re.IGNORECASE)
+        if m_mod:
+            try:
+                val_mod = int(m_mod.group(1))
+                if 250 <= val_mod <= 1200:
+                    return val_mod
+            except ValueError:
+                pass
+
+    # 3. Búsqueda general de Wh ignorando menciones de Range Extender compatible/opcional
+    palabras_extender_opcional = (
+        "range extender compatible", "compatible con extender", "extender compatible",
+        "extender opcional", "opción de extender", "opcion de extender",
+        "compatible con batería externa", "compatible con bateria externa",
+        "se vende por separado", "se adquiere por separado", "no incluido", "no incluida"
+    )
     for match in re.finditer(r"(\d+)\s*wh\b", texto_norm, re.IGNORECASE):
+        ini = max(0, match.start() - 50)
+        fin = min(len(texto_norm), match.end() + 50)
+        ctx = texto_norm[ini:fin].lower()
+        if any(exc in ctx for exc in palabras_extender_opcional):
+            continue
         try:
             val = int(match.group(1))
             if 250 <= val <= 1200:
@@ -526,8 +583,12 @@ def _extraer_salud_bateria(texto: str) -> Tuple[Optional[int], Optional[int]]:
 
     patrones_salud = (
         r"estado\s+de\s+salud\s*[:\-]?\s*(\d{2,3})\s*%",
-        r"conserva\s+el\s+(\d{2,3})\s*%\s+de\s+su\s+capacidad",
-        r"(?:salud|estado)\s+(?:de\s+(?:la\s+)?)?bater[ií]a\s*[:\-]?\s*(\d{2,3})\s*%",
+        r"conserva\s+el\s+(\d{2,3})\s*%\s+de\s+(?:su\s+)?capacidad",
+        r"capacidad\s+(?:restante|real|comprobada|residual|actual)\s*(?:es\s+del\s*|:\s*|\-\s*)?(\d{2,3})\s*%",
+        r"(?:salud|estado|rendimiento|vida\s+[úu]til|condici[óo]n)\s+(?:de\s+(?:la\s+)?)?bater[ií]a\s*[:\-]?\s*(\d{2,3})\s*%",
+        r"bater[ií]a\s+(?:al|con(?:\s+el)?)\s*(\d{2,3})\s*%\s*(?:de\s+capacidad|de\s+salud)?",
+        r"diagn[óo]stico\s+(?:de\s+)?bater[ií]a\s*[:\-]?\s*(\d{2,3})\s*%",
+        r"test\s+(?:de\s+)?bater[ií]a\s*[:\-]?\s*(\d{2,3})\s*%",
         r"%\s*bater[ií]a\s*[:\-]?\s*(\d{2,3})\s*%?",
         r"\bsoh\s*[:\-]?\s*(\d{2,3})\s*%",
     )
@@ -539,9 +600,26 @@ def _extraer_salud_bateria(texto: str) -> Tuple[Optional[int], Optional[int]]:
                 salud_pct = val
                 break
 
+    # Si dice explícitamente "batería nueva", "batería sustituida", "batería reemplazada",
+    # "batería a estrenar" o en Upway "Batería Estado: Nueva" / "Batería Estado: Reemplazada"
+    if salud_pct is None:
+        if re.search(
+            r"bater[ií]a\s+(?:estado\s*:\s*)?(?:nueva|reemplazada|sustituida|a\s+estrenar)\b|"
+            r"(?:bater[ií]a\s+de\s+reemplazo|bater[ií]a\s+sin\s+usar)\b",
+            texto_norm,
+            re.IGNORECASE,
+        ):
+            salud_pct = 100
+            if ciclos is None:
+                ciclos = 0
+
     patrones_ciclos = (
-        r"(?:n[úu]mero\s+de\s+)?ciclos\s+de\s+carga(?:\s+de\s+la\s+bater[ií]a)?\s*[:\-]?\s*(\d{1,4})\b",
+        r"(?:n[úu]mero|n[ºo]|n\.º)\s+de\s+ciclos(?:\s+de\s+carga)?(?:\s+de\s+la\s+bater[ií]a)?\s*[:\-]?\s*(\d{1,4})\b",
+        r"ciclos\s+de\s+carga(?:\s+de\s+la\s+bater[ií]a)?\s*[:\-]?\s*(\d{1,4})\b",
         r"\b(\d{1,4})\s+ciclos\s+de\s+carga\b",
+        r"(?:ciclos|recargas|cargas)\s+(?:de\s+)?bater[ií]a\s*[:\-]?\s*(\d{1,4})\b",
+        r"bater[ií]a\s*[:\-]?\s*.*?(\d{1,4})\s+ciclos\b",
+        r"\b(\d{1,4})\s+ciclos\b",
     )
     for patron in patrones_ciclos:
         m = re.search(patron, texto_norm, re.IGNORECASE)
@@ -1168,5 +1246,12 @@ def _aplicar_detalle(bici: Bicicleta, detalle: dict) -> Bicicleta:
 
     if "bateria_wh" in detalle and detalle["bateria_wh"] is not None and bici.bateria_wh is None:
         bici.bateria_wh = detalle["bateria_wh"]
+
+    # Bicicleta nueva a estrenar con garantía oficial (ej. Mammoth Bikes km=0, garantia_anos >= 2)
+    if getattr(bici, "km", None) == 0 and (getattr(bici, "garantia_anos", 0) or 0) >= 2:
+        if getattr(bici, "bateria_salud_pct", None) is None:
+            bici.bateria_salud_pct = 100
+        if getattr(bici, "bateria_ciclos", None) is None:
+            bici.bateria_ciclos = 0
 
     return bici

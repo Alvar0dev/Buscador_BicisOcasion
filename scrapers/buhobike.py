@@ -124,6 +124,11 @@ class BuhobikeScraper(BaseScraper):
                     or any(k in titulo.lower() for k in ["ilynx", "lynx", "rise", "strike", "zesty", "overvolt tr", "crafty", "thron", "jam", "stereo", "lt "])
                 )
 
+                reg_el = p.select_one(".regular-price, del, .price-before-discount")
+                pvp_original = self._parsear_precio(reg_el.get_text()) if reg_el else None
+                if pvp_original and pvp_original <= precio:
+                    pvp_original = None
+
                 bicis.append(Bicicleta(
                     sitio=self.sitio.nombre,
                     bici_id=str(bici_id),
@@ -135,6 +140,7 @@ class BuhobikeScraper(BaseScraper):
                     km=km,
                     suspension_trasera="no" if es_no_mtb_doble else ("si" if es_doble else None),
                     garantia_anos=self.sitio.garantia_anos,
+                    pvp_original=pvp_original,
                 ))
             except Exception as e:
                 print(f"[Buhobike] Error parseando producto: {e}")

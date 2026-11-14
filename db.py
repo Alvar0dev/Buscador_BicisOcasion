@@ -51,10 +51,16 @@ class BaseDatos:
                     fecha_primera_vez   TEXT NOT NULL DEFAULT (date('now')),
                     fecha_ultima_vez    TEXT NOT NULL DEFAULT (date('now')),
                     dias_en_stock       INTEGER NOT NULL DEFAULT 0,
-                    rebajas_detectadas  INTEGER NOT NULL DEFAULT 0
+                    rebajas_detectadas  INTEGER NOT NULL DEFAULT 0,
+                    pvp_original        REAL
                 )
                 """
             )
+            # Migración: asegurar que la columna pvp_original exista en bases de datos previas
+            try:
+                conn.execute("ALTER TABLE historial_catalogo ADD COLUMN pvp_original REAL")
+            except Exception:
+                pass
             conn.commit()
 
     def ya_enviada(self, bici_id: str) -> bool:
@@ -118,6 +124,7 @@ class BaseDatos:
         Calcula días en stock, rebajas detectadas y ahorro acumulado.
         """
         hoy_str = date.today().strftime("%Y-%m-%d")
+        pvp_orig = getattr(bici, "pvp_original", None)
         with self._conectar() as conn:
             fila = conn.execute(
                 "SELECT * FROM historial_catalogo WHERE bici_id = ?", (bici.bici_id,)
@@ -130,8 +137,8 @@ class BaseDatos:
                     INSERT INTO historial_catalogo
                         (bici_id, sitio, titulo, url, precio_actual, precio_inicial,
                          precio_minimo, fecha_primera_vez, fecha_ultima_vez,
-                         dias_en_stock, rebajas_detectadas)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+                         dias_en_stock, rebajas_detectadas, pvp_original)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
                     """,
                     (
                         bici.bici_id,
@@ -143,6 +150,7 @@ class BaseDatos:
                         bici.precio,
                         hoy_str,
                         hoy_str,
+                        pvp_orig,
                     ),
                 )
                 conn.commit()
@@ -152,6 +160,7 @@ class BaseDatos:
                     "precio_inicial": bici.precio,
                     "precio_minimo": bici.precio,
                     "precio_actual": bici.precio,
+                    "pvp_original": pvp_orig,
                     "ahorro_eur": 0.0,
                     "entrada_desde_vigilancia": False,
                 }
@@ -170,6 +179,10 @@ class BaseDatos:
                 except Exception:
                     dias_stock = int(fila["dias_en_stock"])
 
+                pvp_guardado = fila["pvp_original"] if "pvp_original" in fila.keys() else None
+                if pvp_orig is not None:
+                    pvp_guardado = pvp_orig
+
                 conn.execute(
                     """
                     UPDATE historial_catalogo
@@ -177,7 +190,8 @@ class BaseDatos:
                         precio_minimo = ?,
                         fecha_ultima_vez = ?,
                         dias_en_stock = ?,
-                        rebajas_detectadas = ?
+                        rebajas_detectadas = ?,
+                        pvp_original = ?
                     WHERE bici_id = ?
                     """,
                     (
@@ -186,6 +200,7 @@ class BaseDatos:
                         hoy_str,
                         dias_stock,
                         rebajas,
+                        pvp_guardado,
                         bici.bici_id,
                     ),
                 )
@@ -243,16 +258,44 @@ class BaseDatos:
 
     def obtener_estadisticas_mercado(self) -> Dict[str, Any]:
         """
-        Genera la radiografía del mercado a partir del historial de catálogo (TODO 3).
+        Genera la radiografía del mercado a partir del historial de catálogo.
+        Calcula permanencia en stock (días), cuotas, precios medios,
+        ahorros acumulados por rebaja y descuentos respecto al PVP original.
         """
         with self._conectar() as conn:
             filas = conn.execute("SELECT * FROM historial_catalogo").fetchall()
 
         if not filas:
-            return {"total": 0, "por_sitio": {}, "modelos_clave": {}, "en_vigilancia": [], "con_rebajas": []}
+            return {
+                "total": 0,
+                "por_sitio": {},
+                "metricas_por_sitio": {},
+                "modelos_clave": {},
+                "en_vigilancia": [],
+                "con_rebajas": [],
+                "resumen_global": {
+                    "total": 0,
+                    "dias_stock_medio": 0.0,
+                    "precio_medio": 0.0,
+                    "con_rebajas": 0,
+                    "ahorro_total_acumulado": 0.0,
+                    "ahorro_medio_rebajas": 0.0,
+                    "en_vigilancia": 0,
+                    "descuento_pvp_medio_pct": None,
+                },
+            }
 
         total = len(filas)
         por_sitio: Dict[str, int] = {}
+        dias_por_sitio: Dict[str, List[int]] = {}
+        precios_por_sitio: Dict[str, List[float]] = {}
+        ahorros_por_sitio: Dict[str, List[float]] = {}
+        pvp_pcts_por_sitio: Dict[str, List[float]] = {}
+
+        todos_los_dias: List[int] = []
+        todos_los_precios: List[float] = []
+        todos_los_pvp_pcts: List[float] = []
+
         con_rebajas: List[Dict[str, Any]] = []
         en_vigilancia: List[Dict[str, Any]] = []
 
@@ -265,35 +308,68 @@ class BaseDatos:
             "Mondraker Neat": ["neat"],
         }
         stats_familias: Dict[str, Dict[str, Any]] = {
-            f: {"unidades": 0, "precios": [], "precio_min": None, "precio_medio": None}
+            f: {
+                "unidades": 0,
+                "precios": [],
+                "dias": [],
+                "ahorros": [],
+                "pvp_pcts": [],
+                "precio_min": None,
+                "precio_medio": None,
+                "dias_stock_medio": 0.0,
+                "ahorro_medio_rebajas": 0.0,
+                "descuento_pvp_medio_pct": None,
+            }
             for f in familias_clave
         }
 
         for f in filas:
             sitio = f["sitio"]
             por_sitio[sitio] = por_sitio.get(sitio, 0) + 1
+            dias_s = int(f["dias_en_stock"])
             precio = float(f["precio_actual"])
+            p_ini = float(f["precio_inicial"])
             titulo = f["titulo"].lower()
 
+            pvp_orig = None
+            if "pvp_original" in f.keys() and f["pvp_original"] is not None:
+                try:
+                    pvp_orig = float(f["pvp_original"])
+                except (ValueError, TypeError):
+                    pvp_orig = None
+
+            dias_por_sitio.setdefault(sitio, []).append(dias_s)
+            precios_por_sitio.setdefault(sitio, []).append(precio)
+            todos_los_dias.append(dias_s)
+            todos_los_precios.append(precio)
+
+            ahorro_rebaja = 0.0
             if int(f["rebajas_detectadas"]) > 0:
-                p_ini = float(f["precio_inicial"])
+                ahorro_rebaja = max(0.0, p_ini - precio)
+                ahorros_por_sitio.setdefault(sitio, []).append(ahorro_rebaja)
                 con_rebajas.append({
                     "titulo": f["titulo"],
                     "sitio": f["sitio"],
                     "precio_actual": precio,
                     "precio_inicial": p_ini,
-                    "ahorro": p_ini - precio,
-                    "dias": int(f["dias_en_stock"]),
+                    "ahorro": ahorro_rebaja,
+                    "dias": dias_s,
                     "entrada_vigilancia": bool(p_ini > cfg.PRECIO_MAX_EUR and precio <= cfg.PRECIO_MAX_EUR),
                     "url": f["url"],
                 })
+
+            pct_pvp = None
+            if pvp_orig and pvp_orig > precio:
+                pct_pvp = ((pvp_orig - precio) / pvp_orig) * 100.0
+                pvp_pcts_por_sitio.setdefault(sitio, []).append(pct_pvp)
+                todos_los_pvp_pcts.append(pct_pvp)
 
             if 2900.0 <= precio <= 3500.0:
                 en_vigilancia.append({
                     "titulo": f["titulo"],
                     "sitio": f["sitio"],
                     "precio": precio,
-                    "dias": int(f["dias_en_stock"]),
+                    "dias": dias_s,
                     "url": f["url"],
                 })
 
@@ -301,21 +377,67 @@ class BaseDatos:
                 if any(t in titulo for t in tokens):
                     stats_familias[nom_fam]["unidades"] += 1
                     stats_familias[nom_fam]["precios"].append(precio)
+                    stats_familias[nom_fam]["dias"].append(dias_s)
+                    if ahorro_rebaja > 0:
+                        stats_familias[nom_fam]["ahorros"].append(ahorro_rebaja)
+                    if pct_pvp is not None:
+                        stats_familias[nom_fam]["pvp_pcts"].append(pct_pvp)
                     break
+
+        metricas_por_sitio: Dict[str, Dict[str, Any]] = {}
+        for sitio, cant in por_sitio.items():
+            dias_arr = dias_por_sitio.get(sitio, [])
+            precios_arr = precios_por_sitio.get(sitio, [])
+            ahorros_arr = ahorros_por_sitio.get(sitio, [])
+            pvp_arr = pvp_pcts_por_sitio.get(sitio, [])
+
+            dias_medio = round(sum(dias_arr) / len(dias_arr), 1) if dias_arr else 0.0
+            p_medio = round(sum(precios_arr) / len(precios_arr), 2) if precios_arr else 0.0
+            ahorro_medio = round(sum(ahorros_arr) / len(ahorros_arr), 2) if ahorros_arr else 0.0
+            dto_pvp_medio = round(sum(pvp_arr) / len(pvp_arr), 1) if pvp_arr else None
+
+            metricas_por_sitio[sitio] = {
+                "unidades": cant,
+                "cuota_pct": round((cant / total * 100.0), 1) if total > 0 else 0.0,
+                "dias_stock_medio": dias_medio,
+                "precio_medio": p_medio,
+                "con_rebajas": len(ahorros_arr),
+                "ahorro_medio_rebajas": ahorro_medio,
+                "descuento_pvp_medio_pct": dto_pvp_medio,
+            }
 
         for nom_fam, data in stats_familias.items():
             precios = data.pop("precios")
+            dias = data.pop("dias")
+            ahorros = data.pop("ahorros")
+            pvp_pcts = data.pop("pvp_pcts")
             if precios:
                 data["precio_min"] = round(min(precios), 2)
                 data["precio_medio"] = round(sum(precios) / len(precios), 2)
+                data["dias_stock_medio"] = round(sum(dias) / len(dias), 1) if dias else 0.0
+                data["ahorro_medio_rebajas"] = round(sum(ahorros) / len(ahorros), 2) if ahorros else 0.0
+                data["descuento_pvp_medio_pct"] = round(sum(pvp_pcts) / len(pvp_pcts), 1) if pvp_pcts else None
 
         con_rebajas.sort(key=lambda x: x["ahorro"], reverse=True)
         en_vigilancia.sort(key=lambda x: x["precio"])
 
+        resumen_global = {
+            "total": total,
+            "dias_stock_medio": round(sum(todos_los_dias) / total, 1) if total > 0 else 0.0,
+            "precio_medio": round(sum(todos_los_precios) / total, 2) if total > 0 else 0.0,
+            "con_rebajas": len(con_rebajas),
+            "ahorro_total_acumulado": round(sum(r["ahorro"] for r in con_rebajas), 2),
+            "ahorro_medio_rebajas": round(sum(r["ahorro"] for r in con_rebajas) / len(con_rebajas), 2) if con_rebajas else 0.0,
+            "en_vigilancia": len(en_vigilancia),
+            "descuento_pvp_medio_pct": round(sum(todos_los_pvp_pcts) / len(todos_los_pvp_pcts), 1) if todos_los_pvp_pcts else None,
+        }
+
         return {
             "total": total,
             "por_sitio": por_sitio,
+            "metricas_por_sitio": metricas_por_sitio,
             "modelos_clave": {k: v for k, v in stats_familias.items() if v["unidades"] > 0},
             "con_rebajas": con_rebajas,
             "en_vigilancia": en_vigilancia,
+            "resumen_global": resumen_global,
         }

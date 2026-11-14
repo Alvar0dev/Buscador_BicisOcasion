@@ -95,6 +95,23 @@ class BikeOcasionScraper(BaseScraper):
                     ):
                         detalle["suspension_trasera"] = "si"
 
+                pvp_original = None
+                regular_el = p.select_one(".regular-price, .old-price, del, .price-before-discount")
+                if regular_el:
+                    p_orig = self._parsear_precio(regular_el.get_text())
+                    if p_orig > precio:
+                        pvp_original = p_orig
+                if not pvp_original:
+                    for m in re.findall(r"([\d\.\s,\u00A0]+)\s*€", texto_tarjeta):
+                        d = "".join(c for c in m if c.isdigit() or c in ".,").replace(".", "").replace(",", ".")
+                        try:
+                            val = float(d)
+                            if val > precio:
+                                pvp_original = val
+                                break
+                        except ValueError:
+                            pass
+
                 bici = Bicicleta(
                     sitio=self.sitio.nombre,
                     bici_id=bici_id,
@@ -112,6 +129,7 @@ class BikeOcasionScraper(BaseScraper):
                     ano=detalle.get("ano"),
                     peso_kg=detalle.get("peso_kg"),
                     garantia_anos=self.sitio.garantia_anos,
+                    pvp_original=pvp_original,
                 )
 
                 bicis.append(bici)

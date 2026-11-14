@@ -212,19 +212,19 @@ El proyecto está separado en módulos con responsabilidad única:
 
 | Archivo | Responsabilidad |
 |---------|-----------------|
-| `config.py` | Configuración central: URLs objetivo optimizadas, filtros estrictos, credenciales Telegram/Gemini, user-agents rotatorios, proxies (opcional), horario de ejecución. |
-| `models.py` | Dataclass `Bicicleta` con todos los campos necesarios para scoring y notificación. |
-| `db.py` | Base de datos SQLite: registro de bicicletas ya enviadas, deduplicación por ID y detección de bajadas de precio para re-alerta. |
+| `config.py` | Configuración central: URLs objetivo optimizadas, filtros estrictos, credenciales Telegram/Gemini, user-agents rotatorios, proxies (opcional), flags operativos (`TELEGRAM_HEARTBEAT`), horario de ejecución. |
+| `models.py` | Dataclass `Bicicleta` con todos los campos necesarios para scoring, telemetría de batería (`bateria_salud_pct`, `bateria_ciclos`), `pvp_original` y notificación. |
+| `db.py` | Base de datos SQLite: registro de bicicletas ya enviadas, deduplicación por ID, detección de bajadas de precio, historial de catálogo (`historial_catalogo`), permanencia en stock (días) y métricas agregadas de mercado con PVP original. |
 | `evaluator.py` | Filtros estrictos (S1-S6), algoritmo de Nota de Oportunidad y ordenamiento por prioridad de modalidad (`prioridad_modalidad`: XC > Light e-MTB > Trail). |
 | `gemini_classifier.py` | Motor Perito Mecánico Senior (`auditar_perito_mecanico`), catálogo técnico de e-MTB, desambiguación de motores BH (BH 2EXMAG vs Shimano EP801) y clasificador híbrido con Gemini Flash + caché thread-safe. |
-| `notifier.py` | Notificador de Telegram vía `requests`, mensaje Markdown con todos los campos requeridos (S9). |
+| `notifier.py` | Notificador de Telegram vía `requests`, mensaje Markdown con todos los campos requeridos (S9) y Heartbeat operativo diario (`enviar_heartbeat`). |
 | `scraper_base.py` | Clase base con **motor Scrapling**: `Fetcher` (HTTP con impersonación TLS) → `StealthyFetcher` (navegador stealth con `solve_cloudflare=True`), con `usar_stealth_directo` y salto inmediato ante bloqueos HTTP 403/503 de Cloudflare. |
-| `scrapers/bike_ocasion.py` | Adaptador específico para Bike Ocasión. Extrae título limpio (`h3.s_title_block a`), talla, batería, km, marca del motor (`Km / <Marca>`) y doble suspensión directamente de la tarjeta del listado. Paginación de hasta 6 páginas (180+ bicis). |
-| `scrapers/buhobike.py` | Adaptador específico para Buhobike con modo stealth directo (`usar_stealth_directo=True`), rastreo combinado de `/3230-electricas-trail-dobles?order=product.price.asc` y `/9448-segunda-mano-montana-electricas`, y extracción en tarjeta de título completo (`img.thumbnail-img[alt]`), talla (`#/...-talla-m`), año y km desde SKU (`KM5000`). |
-| `scrapers/upway.py` | Adaptador específico para Upway sobre `/collections/doble-suspension`. Extrae año, kilometraje (`\u202fkm` y `< 5 km`), talla (desde el rango de estatura `1mXX-1mYY`) y doble suspensión directamente de la tarjeta en `< 1s`. |
-| `scrapers/mammoth.py` | Adaptador específico para Mammoth Bikes sobre `/bicicletas-electricas-mtb-dobles-rally-xc/c-3104` y `/bicicletas-electricas-mtb-trail-all-mountain-dobles/c-2139`. Extrae precio, tallas en stock (`M`), modalidad XC, año y filtro anti-rígidas directamente de `div.card-content` en `~2.5s`. |
-| `scrapers/enriquecedor_web.py` | Enriquecedor web paralelo con caché JSON en disco (`cache/fichas_detalle.json`), extracción de pares `<dt>/<dd>`, limpieza de DOM y regex con bordes de palabra (`\b`) y filtrado de pesos con embalaje. |
-| `main.py` | Orquestador: scrape de los sitios → **health check** → pre-filtro → **enriquecimiento paralelo** → auditoría Perito Mecánico Senior → ordenamiento por salud mecánica (`nota >= 6.0` y `km <= 4.000`), Línea Roja y prioridad de modalidad (`XC > Light e-MTB > Trail`) → SQLite → Telegram (`--once` y `--forzar`). |
+| `scrapers/bike_ocasion.py` | Adaptador específico para Bike Ocasión. Extrae título limpio (`h3.s_title_block a`), talla, batería, km, marca del motor (`Km / <Marca>`), PVP original y doble suspensión directamente de la tarjeta del listado. Paginación de hasta 6 páginas (180+ bicis). |
+| `scrapers/buhobike.py` | Adaptador específico para Buhobike con modo stealth directo (`usar_stealth_directo=True`), rastreo combinado de `/3230-electricas-trail-dobles?order=product.price.asc` y `/9448-segunda-mano-montana-electricas`, y extracción en tarjeta de título completo (`img.thumbnail-img[alt]`), talla (`#/...-talla-m`), año, km desde SKU (`KM5000`) y PVP original. |
+| `scrapers/upway.py` | Adaptador específico para Upway sobre `/collections/doble-suspension`. Extrae año, kilometraje (`\u202fkm` y `< 5 km`), talla (desde el rango de estatura `1mXX-1mYY`), PVP original nuevo ('6.000 € nuevo') y doble suspensión directamente de la tarjeta en `< 1s`. |
+| `scrapers/mammoth.py` | Adaptador específico para Mammoth Bikes sobre `/bicicletas-electricas-mtb-dobles-rally-xc/c-3104` y `/bicicletas-electricas-mtb-trail-all-mountain-dobles/c-2139`. Extrae precio, tallas en stock (`M`), modalidad XC, año, PVP original, telemetría de bici nueva (km=0, SoH=100%, 0 ciclos) y filtro anti-rígidas directamente de `div.card-content` en `~2.5s`. |
+| `scrapers/enriquecedor_web.py` | Enriquecedor web paralelo con caché JSON en disco (`cache/fichas_detalle.json`), extracción de pares `<dt>/<dd>`, telemetría de batería (SoH % y ciclos), limpieza de DOM y regex con bordes de palabra (`\b`) y filtrado de pesos con embalaje. |
+| `main.py` | Orquestador: scrape de los sitios → **health check** → pre-filtro → **enriquecimiento paralelo** → auditoría Perito Mecánico Senior → ordenamiento por salud mecánica (`nota >= 6.0` y `km <= 4.000`), Línea Roja y prioridad de modalidad (`XC > Light e-MTB > Trail`) → SQLite → Telegram (`--once`, `--forzar`, `--stats`, `--heartbeat`). |
 | `test_buscador.py` | Suite de pruebas unitarias RED/GREEN con datos simulados para validar filtros, Perito Mecánico Senior, scrapers de tarjetas, prioridad de modalidades y dedup. |
 | `CRON.md` | Instrucciones para ejecutar mediante cronjob en Linux/Mac o Programador de tareas de Windows. |
 | `.env.example` | Plantilla de variables de entorno. |
@@ -580,40 +580,43 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 | **Tracking accidental de archivo dinámico `logs/buscador.log` en Git** | Repositorio / Git | Aunque `logs/` figuraba en `.gitignore`, `logs/buscador.log` había sido indexado en commits anteriores, ensuciando los diffs y el árbol de trabajo en cada corrida. | Se desindexó mediante `git rm --cached logs/buscador.log` manteniendo el archivo local y limpiando los commits de producción. |
 | **Timeout de inferencia individual en odómetros por imagen** | Enriquecedor / Visión IA | `gemini-flash-latest` con thinking tardaba >15s por foto en llamadas secuenciales, disparando timeouts en galerías de 6 fotos. | Agrupación de la galería completa en un único lote multimodal hacia `gemini-3.5-flash-lite`, resolviendo toda la galería en 3–5 segundos. |
 | **Peso con embalaje (22 kg) enmascarando peso real en Buhobike** | Buhobike / Enriquecedor | Buhobike mezcla el peso de envío (`22,000 Kg`) con el peso de báscula (`19,57 Kg`), provocando descarte por filtro S3 (> 21 kg). | Parseo estructurado previo de `table.caracteristicas-tecnicas-2-tablas` y `#product-details`, extrayendo peso neto de báscula antes de limpiar el DOM. |
+| **Extracción de PVP original nuevo vs precio de ocasión** | Upway / Bike Ocasión / Mammoth / Buhobike | Las tiendas muestran en la misma tarjeta o ficha el precio actual y el PVP original de fábrica tachado (ej. *"2.499 € 6.000 € nuevo"* en Upway, `<del>` o `.price-before-discount`). Un regex simple capturaba el primer valor o confundía el descuento con el precio real de venta. | Implementado extractor específico `_parsear_pvp_original` que compara los montos adyacentes mayores al precio ofertado, persistiendo `pvp_original` en SQLite para calcular el descuento real vs nuevo (~57% en Upway). |
+| **Extenders opcionales vs batería principal en Mammoth (`EnergyPak 625` + extender compatible)** | Mammoth / Enriquecedor | Fichas técnicas en Mammoth declaran cadenas compuestas como *"Batería: EnergyPak Smart 625EnergyPak Plus 250Wh range extender compatible"*. Un extractor ingenuo tomaba los 250 Wh o sumaba una batería opcional no incluida. | Aislamiento de capacidades comerciales de catálogo sin 'Wh' explícito (`EnergyPak 625`, `PowerTube 750`, etc.) y filtrado estricto que descarta menciones adyacentes de compatibilidad comercial (`compatible`, `opcional`). |
+| **Telemetría de bicis nuevas (km=0) y baterías sustituidas** | Mammoth / Upway / Enriquecedor | Unidades nuevas de liquidación (km=0 con 3 años de garantía) o de ocasión con batería a estrenar ("Batería: Reemplazada") no publican informe de degradación en texto, arriesgando quedar sin telemetría o penalizadas. | Detección contextual de batería sustituida/a estrenar fijando `SoH: 100%` y `0 ciclos`, y normalización automática para bicis con `km=0` y `garantia_anos >= 2`, otorgando la bonificación de +0.5 pts en el Perito Mecánico Senior. |
+| **Heartbeat operativo diario sin saturar alertas en Telegram** | Notificador / Orquestador | En días donde ninguna e-MTB supera el corte de oportunidad (nota >= 8.0), el usuario no tenía certeza de si el cron de las 12:00 corrió con éxito, se suspendió o fue bloqueado por Cloudflare. | Implementado `enviar_heartbeat` (`formatear_heartbeat`) que reporta duración, conteo por tienda, candidatas aptas analizadas, tamaño del radar activo y unidades en vigilancia diaria con flag `TELEGRAM_HEARTBEAT`. |
+| **Migración no destructiva de base de datos SQLite en producción** | Base de datos (`db.py`) | Añadir `pvp_original` a la tabla `historial_catalogo` en entornos con bases de datos preexistentes causaba `OperationalError` al no existir la columna. | Migración preventiva idempotente con `ALTER TABLE historial_catalogo ADD COLUMN pvp_original REAL` encapsulada en `try...except` durante la inicialización de la conexión. |
 
 ---
 
 ## Estado actual y próximos pasos
 
-### Fotografía del estado actual (12/11/2026)
+### Fotografía del estado actual (14/11/2026)
 - **Rendimiento de búsqueda**: Los 4 portales oficiales (**Bike Ocasión**, **Buhobike**, **Upway** y **Mammoth Bikes**) se rastrean en paralelo y se enriquecen con Perito Mecánico en **~1m 40s** totales.
-- **Calidad de filtrado y telemetría**: Operativos los filtros estrictos `S0` (en stock, sin reservadas) a `S6`, detección de Range Extenders incluidos, lectura de odómetros en fotos con Gemini Vision en lote, telemetría real de batería (`SoH %` y ciclos de carga) y clasificación matemática por milímetros de recorrido de suspensión (`≤130 mm` XC > `140 mm` Trail Ligero > `150-160 mm` All-Mountain).
-- **Historial de catálogo y tiempo en stock**: Tabla SQLite `historial_catalogo` registrando automáticamente la evolución diaria de precios, días en stock, rebajas acumuladas y alertas prioritarias de Zona de Vigilancia (2.900–3.500 €).
-- **Radar de mercado y reportes**: Generación automática de `docs/radar_mercado.md` en cada corrida y modo CLI `python main.py --stats` con métricas de catálogo activo.
+- **Calidad de filtrado y telemetría**: Operativos los filtros estrictos `S0` (en stock, sin reservadas) a `S6`, detección de Range Extenders incluidos, lectura de odómetros en fotos con Gemini Vision en lote, telemetría real de batería (`SoH %` y ciclos de carga) para baterías originales y sustituidas, y clasificación matemática por milímetros de recorrido de suspensión (`≤130 mm` XC > `140 mm` Trail Ligero > `150-160 mm` All-Mountain).
+- **Historial de catálogo, permanencia y ahorro**: Tabla SQLite `historial_catalogo` registrando evolución diaria de precios, días de permanencia en stock por portal, rebajas acumuladas, PVP original de fábrica y alertas prioritarias de Zona de Vigilancia (2.900–3.500 €).
+- **Radar de mercado y reportes**: Generación automática de `docs/radar_mercado.md` en cada corrida y modo CLI `python main.py --stats` enriquecido con días promedio de stock por portal y modelo, descuentos medios acumulados y % de ahorro frente a PVP nuevo.
+- **Heartbeat operativo en Telegram**: Diagnóstico automático del runner diario vía Telegram (`TELEGRAM_HEARTBEAT` en `config.py` o comando CLI `python main.py --heartbeat`), confirmando salud de corrida, desglose por tienda y pulso de vigilancia.
 - **Resiliencia de red**: Integrado `ProxyRotator` nativo en `scraper_base.py` y `enriquecedor_web.py` con estrategias cíclica y aleatoria configurable vía `PROXY_LIST` en `.env`.
 - **Suite de tests**: `python test_buscador.py` 100% en **GREEN**.
 - **Automatización y logs**: Tarea `BuscadorBiciOcasion` activa a las 12:00 diarias con despertar automático (`WakeToRun: True`), ignorando `logs/buscador.log` en el control de versiones.
 
 ### Tareas completadas en esta sesión
 
-- [x] **Higiene de Git**: Desindexado `logs/buscador.log` del repositorio (`git rm --cached`) para respetar `.gitignore`.
-- [x] **TODO 4 — Alerta proactiva en Telegram ante rebajas en la "Zona de Vigilancia" (3.000 € – 3.500 €)**: Detección automática de `entrada_desde_vigilancia` en `db.py` y formato prioritario `🚨 ¡ENTRADA DESDE ZONA DE VIGILANCIA! BAJADA DE PRECIO DETECTADA` en `notifier.py`.
-- [x] **TODO 5 — Extracción estructurada de tabla técnica de Buhobike (`table.caracteristicas-tecnicas-2-tablas` y `#product-details`)**: Parseo de filas `<tr><th>/<td>` y JSON `data-product` para extraer peso real de báscula (`19,57Kg`) y recorrido de suspensión (`140 mm`) antes de descomponer el DOM.
-- [x] **TODO 6 — Extracción multimodal en lote de kilómetros desde imágenes (`_extraer_km_de_imagenes`)**: Cuando los kilómetros no aparecen en string ni int en los datos/ficha, inspecciona hasta 6 imágenes de la galería en una única petición multimodal con `gemini-3.5-flash-lite` / `gemini-3.5-flash`, invalidando cachés sin `km` verificado (`4238 km` detectados en foto #3 de la Orbea Rise H10 2022 de Buhobike).
-- [x] **TODO 7 — Exportación automática del Radar a Markdown (`docs/radar_mercado.md`)**: Generación automática de `docs/radar_mercado.md` en cada corrida y en `--stats`.
-- [x] **TODO 8 — Soporte robusto de Proxies Rotatorios (`scraper_base.py` + `enriquecedor_web.py`)**: Implementado `ProxyRotator` en `scraper_base.py` con rotación cíclica (`cyclic`) y aleatoria (`random`), inyección en `FetcherSession` y `StealthyFetcher`, e integración en `enriquecedor_web.py` para apertura de fichas y descarga de fotos de galería con tests unitarios.
-- [x] **Ejecución de búsqueda diaria en vivo**: Notificado el Top 3 actualizado a Telegram en vivo con éxito (Orbea Rise H30 7.5/10, BH iLynx+ 6.5/10, Orbea Rise H10 5.5/10).
+- [x] **TODO 1 — Profundización de telemetría de batería (SoH % y ciclos) en Upway y Mammoth**: Refinados extractores en `enriquecedor_web.py` para baterías sustituidas/a estrenar (100% SoH, 0 ciclos), bicis nuevas de catálogo (Mammoth km=0 con garantía >= 2 años) y desambiguación de nombres de batería sin 'Wh' frente a extenders opcionales.
+- [x] **TODO 2 — Enriquecimiento analítico del Radar de Mercado (`docs/radar_mercado.md`)**: Incorporadas métricas de permanencia media en stock (días), ahorro medio en rebajas y porcentaje de descuento frente al PVP original nuevo de fábrica en SQLite y Markdown.
+- [x] **TODO 3 — Heartbeat operativo y diagnóstico de ejecución a Telegram**: Notificación diaria estructurada con resumen de portales rastreados, candidatas analizadas, alertas prioritarias enviadas y estado de la Zona de Vigilancia.
+- [x] **TODO 4 — Documentación exhaustiva y trazabilidad de ingeniería**: Actualizado `README.md` con las dificultades encontradas, justificación de arquitectura y suite de pruebas `test_buscador.py` en GREEN.
 
 ### Plan de trabajo propuesto para mañana (TODOs)
 
-- [ ] **TODO 1 — Profundización de telemetría de batería (SoH % y ciclos) en Upway y Mammoth**
-  - **Objetivo**: Refinar extractores específicos en `enriquecedor_web.py` para capturar datos de salud de batería y ciclos de carga cuando Upway o Mammoth los publiquen en su ficha técnica o descripción estructurada.
-- [ ] **TODO 2 — Enriquecimiento analítico del Radar de Mercado (`docs/radar_mercado.md`)**
-  - **Objetivo**: Incorporar en el informe métricas de ahorro medio respecto al PVP original declarado en tienda y días promedio en stock por portal para detectar qué tienda rota más lento sus e-MTB.
-- [ ] **TODO 3 — Heartbeat / Notificación de estado del cron a Telegram**
-  - **Objetivo**: Enviar una confirmación diaria silenciosa o resumen de salud de corrida a Telegram cuando la tarea programada de Windows finalice, validando que corrió sin interrupciones ni bloqueos de red.
-- [ ] **TODO 4 — Sincronización de credenciales y push a GitHub (`origin/main`)**
-  - **Objetivo**: Reautenticar el CLI de GitHub con `gh auth login` en la máquina local para sincronizar los commits acumulados en local hacia el repositorio remoto.
+- [ ] **TODO 1 — Ejecución de prueba en vivo y validación con los 4 portales reales (`python main.py --once` / `--forzar`)**
+  - **Objetivo**: Correr la búsqueda diaria hacia Telegram para verificar en tiempo real la emisión del nuevo Heartbeat operativo y el comportamiento con las ofertas del día.
+- [ ] **TODO 2 — Scoring de degradación de batería en el evaluador (`evaluator.py`)**
+  - **Objetivo**: Incorporar formalmente en el algoritmo de `evaluator.py` la penalización/bonificación por `bateria_salud_pct` y `bateria_ciclos` cuando estén disponibles, alineándolo con el Perito Mecánico Senior.
+- [ ] **TODO 3 — Detección y alerta de "Mega Chollos" (>50% de descuento vs PVP original)**
+  - **Objetivo**: Añadir badge de alerta prioritaria en Telegram cuando una e-MTB acumule más del 50% de ahorro frente a su precio original nuevo de fábrica.
+- [ ] **TODO 4 — Dashboard web interactivo o exportación HTML para el Radar de Mercado**
+  - **Objetivo**: Desarrollar un visualizador web ligero (o exportación HTML interactiva) para consultar de forma gráfica la rotación de stock y precios del catálogo SQLite.
 
 ### Dependencias instaladas
 
@@ -629,22 +632,24 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 | Lógica de filtros, Perito Mecánico Senior, dedup, Telegram | ✅ Verificado (tests GREEN) |
 | Prioridad de modalidad (XC > Light e-MTB > Trail) | ✅ Implementado (`prioridad_modalidad` en `evaluator.py` y `main.py`) |
 | Desambiguación de motores BH (BH 2EXMAG vs Shimano EP801) | ✅ Verificado (BH iLynx Race/Trail fijado a 2EXMAG, iLynx+ a EP801 + batería BH) |
-| Selectores Bike Ocasión | ✅ Verificados en HTML real (`h3.s_title_block a`, badge `Km / <Marca>`, 6 páginas, 180+ bicis) |
-| Selectores Buhobike | ✅ Verificados en HTML real (`usar_stealth_directo=True`, `#/...-talla-m`, SKU `KM5000`, `img.thumbnail-img[alt]`) |
-| Selectores Upway | ✅ Verificados en `/collections/doble-suspension` (extracción en tarjeta de año, km `\u202fkm` y talla desde `1mXX-1mYY` en ~0.8s) |
+| Selectores Bike Ocasión | ✅ Verificados en HTML real (`h3.s_title_block a`, badge `Km / <Marca>`, PVP original, 6 páginas, 180+ bicis) |
+| Selectores Buhobike | ✅ Verificados en HTML real (`usar_stealth_directo=True`, `#/...-talla-m`, SKU `KM5000`, `img.thumbnail-img[alt]`, PVP original) |
+| Selectores Upway | ✅ Verificados en `/collections/doble-suspension` (extracción en tarjeta de año, km `\u202fkm`, PVP original 'nuevo' y talla desde `1mXX-1mYY`) |
 | Scraping real Upway | ✅ 23 e-MTB doble suspensión extraídas en ~0.8s (sin fetch secuencial redundante) |
 | Scraping real Buhobike | ✅ 34 e-MTB extraídas en ~12s combinando trail-dobles y segunda mano, detectando candidatas < 21 kg |
 | Scraping real Bike Ocasión | ✅ 182 bicis en 6 páginas con Scrapling Fetcher |
-| Enriquecedor web (ficha del sitio + DuckDuckGo) | ✅ Paralelo (`ThreadPoolExecutor`), `<dt>/<dd>`, regex con `\b` y filtro anti-peso de embalaje |
+| Scraping real Mammoth | ✅ Detección de bicis nuevas a estrenar, tallas M en stock, PVP original y telemetría SoH 100% |
+| Enriquecedor web (ficha del sitio + DuckDuckGo) | ✅ Paralelo (`ThreadPoolExecutor`), `<dt>/<dd>`, telemetría SoH/ciclos, regex con `\b` y filtro anti-peso de embalaje |
 | Caché de fichas de detalle | ✅ Implementado (`cache/fichas_detalle.json`, thread-safe) |
 | Health check de scrapers | ✅ Implementado (alerta por log y Telegram) |
 | Automatización diaria Windows 12:00 | ✅ Tarea programada `BuscadorBiciOcasion` (`main.py --once` con `WakeToRun` y `StartWhenAvailable`) |
+| Heartbeat operativo de Telegram | ✅ Implementado (`enviar_heartbeat`, `TELEGRAM_HEARTBEAT` en config y `--heartbeat` CLI) |
 | Logging a archivo | ✅ Implementado (`logs/buscador.log`) |
 | Proxies rotatorios (ProxyRotator) | ✅ Implementado (configurable vía `PROXY_LIST`) |
 | Paginación | ✅ Implementada (Bike Ocasión: 6 páginas, 180+ bicis) |
-| Historial de catálogo y rebajas (`historial_catalogo`) | ✅ Implementado en SQLite (`db.py` con días en stock y cálculo de ahorro) |
+| Historial de catálogo y rebajas (`historial_catalogo`) | ✅ Implementado en SQLite (`db.py` con días en stock, PVP original y cálculo de ahorro) |
 | Recorrido físico de suspensión en mm | ✅ Implementado (`enriquecedor_web.py`, modelo y `prioridad_modalidad`) |
-| Radar de mercado CLI (`--stats`) | ✅ Implementado (`main.py` con métricas de stock, modelos y vigilancia) |
+| Radar de mercado CLI y Markdown (`--stats`, `docs/radar_mercado.md`) | ✅ Implementado con permanencia en stock, ahorro medio y descuento vs PVP original |
 
 ---
 
