@@ -553,6 +553,14 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 * **Por qué**: En Buhobike, el bloque de descripción y ficha técnica declara `Peso estimado del producto + embalaje: 22,000 Kg` (caja de transporte y protecciones), mientras que el peso neto de la bicicleta (`19,57 Kg`) se encuentra en una tabla estructurada interna. Un extractor genérico tomaba los 22 kg activando el filtro `S3` (> 21 kg) y descartando bicicletas ultraligeras aptas.
 * **Cómo se construyó**: Se implementó el parseo estructurado de `table.caracteristicas-tecnicas-2-tablas` (`<tr><th>/<td>`) y del atributo JSON `#product-details[data-product]`, aislando el peso neto de báscula antes de la descomposición del DOM y descartando cualquier valor asociado al texto contextual de `embalaje`.
 
+### 13. Detección y Alerta de "Mega Chollos" (>50% vs PVP) Condicionada a Excelencia Mecánica (Nota ≥ 9.0)
+* **Por qué**: Una e-MTB puede tener un 55% de descuento sobre su PVP nuevo, pero si acumula 5.000 km, holguras de basculante o una batería degradada (nota 3.5 o 5.5/10), calificarla de "Mega Chollo" genera falso FOMO, alerta innecesaria y destruye la credibilidad del peritaje técnico. Un precio de liquidación por desgaste mecánico no es una oportunidad; es simplemente su valor residual real.
+* **Cómo se construyó**:
+  * Se diseñó una regla bicondicional estricta: `descuento_pvp >= 50%` **Y** `nota >= 9.0`.
+  * Solo cuando ambos criterios se cumplen simultáneamente, el notificador (`notifier.py`) dispara la cabecera destacada: `💥🏷️ ¡MEGA CHOLLO e-MTB DETECTADO! (-XX% vs PVP)` y el badge `💥 *MEGA CHOLLO*`.
+  * Si la bicicleta acumula un descuento masivo (≥ 50%) pero su nota pericial es `< 9.0`, el sistema la degrada automáticamente a **oferta normal** (`🚵‍♂️ Nueva oportunidad...` o `📉 Bajada de precio`), manteniendo la línea informativa de fábrica (`🏷️ PVP Original: ~XXXX €~ (-XX% | Ahorro: -XXXX €)`) sin estridencias alarmistas.
+  * Se incorporó el conteo de Mega Chollos en el Heartbeat diario y la bonificación pericial en `evaluator.py`.
+
 ---
 
 ## Proceso de desarrollo y dificultades encontradas
@@ -585,38 +593,38 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 | **Telemetría de bicis nuevas (km=0) y baterías sustituidas** | Mammoth / Upway / Enriquecedor | Unidades nuevas de liquidación (km=0 con 3 años de garantía) o de ocasión con batería a estrenar ("Batería: Reemplazada") no publican informe de degradación en texto, arriesgando quedar sin telemetría o penalizadas. | Detección contextual de batería sustituida/a estrenar fijando `SoH: 100%` y `0 ciclos`, y normalización automática para bicis con `km=0` y `garantia_anos >= 2`, otorgando la bonificación de +0.5 pts en el Perito Mecánico Senior. |
 | **Heartbeat operativo diario sin saturar alertas en Telegram** | Notificador / Orquestador | En días donde ninguna e-MTB supera el corte de oportunidad (nota >= 8.0), el usuario no tenía certeza de si el cron de las 12:00 corrió con éxito, se suspendió o fue bloqueado por Cloudflare. | Implementado `enviar_heartbeat` (`formatear_heartbeat`) que reporta duración, conteo por tienda, candidatas aptas analizadas, tamaño del radar activo y unidades en vigilancia diaria con flag `TELEGRAM_HEARTBEAT`. |
 | **Migración no destructiva de base de datos SQLite en producción** | Base de datos (`db.py`) | Añadir `pvp_original` a la tabla `historial_catalogo` en entornos con bases de datos preexistentes causaba `OperationalError` al no existir la columna. | Migración preventiva idempotente con `ALTER TABLE historial_catalogo ADD COLUMN pvp_original REAL` encapsulada en `try...except` durante la inicialización de la conexión. |
+| **Falsos positivos de "Mega Chollo" en bicis desgastadas (nota < 9.0)** | Notificador / Orquestador | Un descuento >50% vs PVP original en una bicicleta con alto kilometraje o batería mermada (ej. nota 3.5 o 5.5/10) activaba la cabecera `💥 ¡MEGA CHOLLO!`, generando falso FOMO cuando en realidad se trataba de un precio de liquidación acorde a su desgaste. | Se aplicó una regla bicondicional estricta: `descuento_pvp >= 50%` Y `nota >= 9.0`. Si la nota es inferior a 9.0, se degrada a oferta normal mostrando el PVP original a título informativo sin cabecera alarmista. |
 
 ---
 
 ## Estado actual y próximos pasos
 
-### Fotografía del estado actual (14/11/2026)
-- **Rendimiento de búsqueda**: Los 4 portales oficiales (**Bike Ocasión**, **Buhobike**, **Upway** y **Mammoth Bikes**) se rastrean en paralelo y se enriquecen con Perito Mecánico en **~1m 40s** totales.
+### Fotografía del estado actual (16/11/2026)
+- **Rendimiento de búsqueda**: Los 4 portales oficiales (**Bike Ocasión**, **Buhobike**, **Upway** y **Mammoth Bikes**) se rastrean en paralelo y se enriquecen con Perito Mecánico en **~37s** totales en corrida en vivo.
 - **Calidad de filtrado y telemetría**: Operativos los filtros estrictos `S0` (en stock, sin reservadas) a `S6`, detección de Range Extenders incluidos, lectura de odómetros en fotos con Gemini Vision en lote, telemetría real de batería (`SoH %` y ciclos de carga) para baterías originales y sustituidas, y clasificación matemática por milímetros de recorrido de suspensión (`≤130 mm` XC > `140 mm` Trail Ligero > `150-160 mm` All-Mountain).
+- **Detección de Mega Chollos y contraste PVP**: Detección estricta de Mega Chollos (`Nota >= 9.0` y `Descuento >= 50% vs PVP nuevo`) con badges de Telegram, bonificación pericial en calidad-precio (+0.5) y reporte informativo de PVP original nuevo para ofertas normales con ahorro masivo.
 - **Historial de catálogo, permanencia y ahorro**: Tabla SQLite `historial_catalogo` registrando evolución diaria de precios, días de permanencia en stock por portal, rebajas acumuladas, PVP original de fábrica y alertas prioritarias de Zona de Vigilancia (2.900–3.500 €).
-- **Radar de mercado y reportes**: Generación automática de `docs/radar_mercado.md` en cada corrida y modo CLI `python main.py --stats` enriquecido con días promedio de stock por portal y modelo, descuentos medios acumulados y % de ahorro frente a PVP nuevo.
-- **Heartbeat operativo en Telegram**: Diagnóstico automático del runner diario vía Telegram (`TELEGRAM_HEARTBEAT` en `config.py` o comando CLI `python main.py --heartbeat`), confirmando salud de corrida, desglose por tienda y pulso de vigilancia.
+- **Radar de mercado y reportes**: Generación automática de `docs/radar_mercado.md` en cada corrida (71 unidades activas en seguimiento, 8 rebajas acumuladas) y modo CLI `python main.py --stats`.
+- **Heartbeat operativo en Telegram**: Diagnóstico automático del runner diario vía Telegram (`TELEGRAM_HEARTBEAT` en `config.py` o comando CLI `python main.py --heartbeat`), confirmando salud de corrida, desglose por tienda, Mega Chollos analizados y pulso de vigilancia.
 - **Resiliencia de red**: Integrado `ProxyRotator` nativo en `scraper_base.py` y `enriquecedor_web.py` con estrategias cíclica y aleatoria configurable vía `PROXY_LIST` en `.env`.
 - **Suite de tests**: `python test_buscador.py` 100% en **GREEN**.
 - **Automatización y logs**: Tarea `BuscadorBiciOcasion` activa a las 12:00 diarias con despertar automático (`WakeToRun: True`), ignorando `logs/buscador.log` en el control de versiones.
 
 ### Tareas completadas en esta sesión
 
-- [x] **TODO 1 — Profundización de telemetría de batería (SoH % y ciclos) en Upway y Mammoth**: Refinados extractores en `enriquecedor_web.py` para baterías sustituidas/a estrenar (100% SoH, 0 ciclos), bicis nuevas de catálogo (Mammoth km=0 con garantía >= 2 años) y desambiguación de nombres de batería sin 'Wh' frente a extenders opcionales.
-- [x] **TODO 2 — Enriquecimiento analítico del Radar de Mercado (`docs/radar_mercado.md`)**: Incorporadas métricas de permanencia media en stock (días), ahorro medio en rebajas y porcentaje de descuento frente al PVP original nuevo de fábrica en SQLite y Markdown.
-- [x] **TODO 3 — Heartbeat operativo y diagnóstico de ejecución a Telegram**: Notificación diaria estructurada con resumen de portales rastreados, candidatas analizadas, alertas prioritarias enviadas y estado de la Zona de Vigilancia.
-- [x] **TODO 4 — Documentación exhaustiva y trazabilidad de ingeniería**: Actualizado `README.md` con las dificultades encontradas, justificación de arquitectura y suite de pruebas `test_buscador.py` en GREEN.
+- [x] **TODO 1 — Detección y alerta de "Mega Chollos" (>50% de descuento vs PVP original)**: Implementado formato con badge destacado en Telegram (`💥 *MEGA CHOLLO*`), cabecera prioritaria y bonificación en `evaluator.py`.
+- [x] **TODO 2 — Filtro de calidad para Mega Chollos (condicionamiento a Nota ≥ 9.0)**: Ajustado el umbral para que solo califiquen como "Mega Chollo" aquellas bicicletas con nota pericial sobresaliente (≥ 9.0). Unidades con nota < 9.0 y descuento masivo se notifican como ofertas normales informando el PVP de fábrica sin alarmismo.
+- [x] **TODO 3 — Ejecución de prueba en vivo y validación con los 4 portales reales (`python main.py --once --forzar`)**: Ejecución exitosa de scraping en paralelo, análisis pericial y despacho en tiempo real a Telegram de las oportunidades del Top 3 y del Heartbeat operativo.
+- [x] **TODO 4 — Documentación y trazabilidad en Engram**: Actualizado `README.md` con las dificultades técnicas, justificación de arquitectura y persistencia de decisiones en Engram.
 
 ### Plan de trabajo propuesto para mañana (TODOs)
 
-- [ ] **TODO 1 — Ejecución de prueba en vivo y validación con los 4 portales reales (`python main.py --once` / `--forzar`)**
-  - **Objetivo**: Correr la búsqueda diaria hacia Telegram para verificar en tiempo real la emisión del nuevo Heartbeat operativo y el comportamiento con las ofertas del día.
-- [ ] **TODO 2 — Scoring de degradación de batería en el evaluador (`evaluator.py`)**
-  - **Objetivo**: Incorporar formalmente en el algoritmo de `evaluator.py` la penalización/bonificación por `bateria_salud_pct` y `bateria_ciclos` cuando estén disponibles, alineándolo con el Perito Mecánico Senior.
-- [ ] **TODO 3 — Detección y alerta de "Mega Chollos" (>50% de descuento vs PVP original)**
-  - **Objetivo**: Añadir badge de alerta prioritaria en Telegram cuando una e-MTB acumule más del 50% de ahorro frente a su precio original nuevo de fábrica.
-- [ ] **TODO 4 — Dashboard web interactivo o exportación HTML para el Radar de Mercado**
-  - **Objetivo**: Desarrollar un visualizador web ligero (o exportación HTML interactiva) para consultar de forma gráfica la rotación de stock y precios del catálogo SQLite.
+- [ ] **TODO 1 — Scoring de degradación de batería en el evaluador (`evaluator.py`)**
+  - **Objetivo**: Incorporar formalmente en el algoritmo numérico de `evaluator.py` la penalización/bonificación por `bateria_salud_pct` y `bateria_ciclos` cuando estén disponibles, alineándolo con el Perito Mecánico Senior.
+- [ ] **TODO 2 — Dashboard web interactivo o exportación HTML para el Radar de Mercado**
+  - **Objetivo**: Desarrollar un visualizador web ligero (o exportación HTML interactiva) para consultar de forma gráfica la rotación de stock, curvas de permanencia y precios del catálogo SQLite.
+- [ ] **TODO 3 — Modo silencioso vs prioritario en Telegram**
+  - **Objetivo**: Configurar que las ofertas normales se envíen con notificación silenciosa (`disable_notification=True`) y reservar la alerta sonora / banner prioritario exclusivamente para verdaderos "Mega Chollos" (nota ≥ 9.0 y dto ≥ 50%).
 
 ### Dependencias instaladas
 
@@ -630,12 +638,13 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 | Componente | Estado |
 |------------|--------|
 | Lógica de filtros, Perito Mecánico Senior, dedup, Telegram | ✅ Verificado (tests GREEN) |
+| Detección de Mega Chollos (dto >= 50% y Nota >= 9.0) | ✅ Implementado en `notifier.py`, `evaluator.py` y `main.py` |
 | Prioridad de modalidad (XC > Light e-MTB > Trail) | ✅ Implementado (`prioridad_modalidad` en `evaluator.py` y `main.py`) |
 | Desambiguación de motores BH (BH 2EXMAG vs Shimano EP801) | ✅ Verificado (BH iLynx Race/Trail fijado a 2EXMAG, iLynx+ a EP801 + batería BH) |
 | Selectores Bike Ocasión | ✅ Verificados en HTML real (`h3.s_title_block a`, badge `Km / <Marca>`, PVP original, 6 páginas, 180+ bicis) |
 | Selectores Buhobike | ✅ Verificados en HTML real (`usar_stealth_directo=True`, `#/...-talla-m`, SKU `KM5000`, `img.thumbnail-img[alt]`, PVP original) |
 | Selectores Upway | ✅ Verificados en `/collections/doble-suspension` (extracción en tarjeta de año, km `\u202fkm`, PVP original 'nuevo' y talla desde `1mXX-1mYY`) |
-| Scraping real Upway | ✅ 23 e-MTB doble suspensión extraídas en ~0.8s (sin fetch secuencial redundante) |
+| Scraping real Upway | ✅ 21 e-MTB doble suspensión extraídas en ~0.8s (sin fetch secuencial redundante) |
 | Scraping real Buhobike | ✅ 34 e-MTB extraídas en ~12s combinando trail-dobles y segunda mano, detectando candidatas < 21 kg |
 | Scraping real Bike Ocasión | ✅ 182 bicis en 6 páginas con Scrapling Fetcher |
 | Scraping real Mammoth | ✅ Detección de bicis nuevas a estrenar, tallas M en stock, PVP original y telemetría SoH 100% |

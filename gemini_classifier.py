@@ -755,6 +755,15 @@ def auditar_perito_mecanico(bici: Bicicleta) -> dict:
     nota_aritmetica = base + delta_km + delta_peso + delta_motor + delta_bateria + delta_precio
     nota_final = round(max(0.0, min(10.0, nota_aritmetica, techo)), 2)
 
+    pvp_orig = getattr(bici, "pvp_original", None)
+    if pvp_orig and pvp_orig > precio > 0:
+        dto_pvp = ((pvp_orig - precio) / pvp_orig) * 100.0
+        if dto_pvp >= 50.0:
+            if nota_final >= 9.0:
+                txt_precio += f" ¡Mega Chollo certificado! Nota {nota_final}/10 con descuento del {dto_pvp:.0f}% respecto a PVP nuevo ({pvp_orig:.0f} €)."
+            else:
+                txt_precio += f" Oferta con descuento del {dto_pvp:.0f}% respecto a PVP nuevo ({pvp_orig:.0f} €)."
+
     signo_peso = f"+{delta_peso:.1f}" if delta_peso > 0 else f"{delta_peso:.1f}"
     bat_formula = ""
     if delta_bateria != 0.0:

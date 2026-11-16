@@ -73,17 +73,42 @@ def formatear_mensaje(
     es_bajada = precio_ref is not None and bici.precio < precio_ref
     es_vigilancia = bool(seguimiento and seguimiento.get("entrada_desde_vigilancia"))
 
+    # Detección de Mega Chollo: solo si tiene >= 50% de descuento vs PVP original Y nota pericial >= 9.0
+    pvp_orig = getattr(bici, "pvp_original", None)
+    es_mega_chollo = False
+    pct_dto_pvp = 0.0
+    ahorro_pvp = 0.0
+    if pvp_orig and pvp_orig > bici.precio > 0:
+        pct_dto_pvp = ((pvp_orig - bici.precio) / pvp_orig) * 100.0
+        ahorro_pvp = pvp_orig - bici.precio
+        if pct_dto_pvp >= 50.0 and nota >= 9.0:
+            es_mega_chollo = True
+
     if es_vigilancia and es_bajada:
         ahorro = precio_ref - bici.precio
         linea_precio = f"💰 Precio: *{bici.precio:.0f} €* (Antes: ~{precio_ref:.0f} €~ | 🚨 Ahorro: *-{ahorro:.0f} €*)"
-        cabecera = "🚨 *¡ENTRADA DESDE ZONA DE VIGILANCIA! BAJADA DE PRECIO DETECTADA*"
+        if es_mega_chollo:
+            cabecera = f"🚨💥 *¡MEGA CHOLLO + ENTRADA DE VIGILANCIA! (-{pct_dto_pvp:.0f}% vs PVP)*"
+        else:
+            cabecera = "🚨 *¡ENTRADA DESDE ZONA DE VIGILANCIA! BAJADA DE PRECIO DETECTADA*"
     elif es_bajada:
         ahorro = precio_ref - bici.precio
         linea_precio = f"💰 Precio: *{bici.precio:.0f} €* (Antes: ~{precio_ref:.0f} €~ | 📉 Ahorro: *-{ahorro:.0f} €*)"
-        cabecera = "📉 *¡BAJADA DE PRECIO DETECTADA! Oportunidad e-MTB*"
+        if es_mega_chollo:
+            cabecera = f"💥📉 *¡MEGA CHOLLO + BAJADA DE PRECIO! (-{pct_dto_pvp:.0f}% vs PVP)*"
+        else:
+            cabecera = "📉 *¡BAJADA DE PRECIO DETECTADA! Oportunidad e-MTB*"
+    elif es_mega_chollo:
+        linea_precio = f"💰 Precio: *{bici.precio:.0f} €*"
+        cabecera = f"💥🏷️ *¡MEGA CHOLLO e-MTB DETECTADO! (-{pct_dto_pvp:.0f}% vs PVP)*"
     else:
         linea_precio = f"💰 Precio: *{bici.precio} €*"
         cabecera = "🚵‍♂️ *Nueva oportunidad de e-MTB encontrada*"
+
+    linea_pvp = ""
+    if pvp_orig and pvp_orig > bici.precio:
+        badge_chollo = "💥 *MEGA CHOLLO* " if es_mega_chollo else ""
+        linea_pvp = f"🏷️ PVP Original: ~{pvp_orig:.0f} €~ ({badge_chollo}*-{pct_dto_pvp:.0f}%* | Ahorro: *-{ahorro_pvp:.0f} €*)\n"
 
     linea_seguimiento = ""
     if seguimiento:
@@ -102,6 +127,7 @@ def formatear_mensaje(
         f"*{bici.titulo}*\n"
         f"🏪 Tienda: {bici.sitio}\n"
         f"{linea_precio}\n"
+        f"{linea_pvp}"
         f"🔥 Nota de Oportunidad: *{nota}/10*\n\n"
         f"📏 Talla: {talla}\n"
         f"⚙️ Modalidad: {modalidad}\n"
@@ -175,6 +201,7 @@ def formatear_heartbeat(resumen: dict) -> str:
     conteo_sitios = resumen.get("conteo_por_portal", {})
     aptas = resumen.get("candidatas_aptas", 0)
     notificadas = resumen.get("notificadas", 0)
+    mega_chollos = resumen.get("mega_chollos", 0)
     en_catalogo = resumen.get("total_en_catalogo", 0)
     en_vigilancia = resumen.get("total_en_vigilancia", 0)
     estado = resumen.get("estado", "🟢 Runner operativo")
@@ -189,6 +216,8 @@ def formatear_heartbeat(resumen: dict) -> str:
     else:
         texto_notif = "0 (sin nuevas oportunidades ni rebajas en el Top)"
 
+    linea_mega = f"  • Mega Chollos (>50% dto y Nota >= 9.0): *{mega_chollos}* 💥\n" if mega_chollos > 0 else ""
+
     mensaje = (
         f"💓 *Heartbeat Buscador e-MTB* — Pulso Operativo\n"
         f"📅 `{fecha_hora}` | ⏱️ `{duracion}s`\n\n"
@@ -197,6 +226,7 @@ def formatear_heartbeat(resumen: dict) -> str:
         f"📊 *Diagnóstico del runner*:\n"
         f"  • Candidatas aptas analizadas: *{aptas}*\n"
         f"  • Alertas prioritarias: {texto_notif}\n"
+        f"{linea_mega}"
         f"  • Radar activo en seguimiento: *{en_catalogo}* unidades\n"
         f"  • Zona de vigilancia (2.900-3.500 €): *{en_vigilancia}* unidades\n\n"
         f"{estado}"

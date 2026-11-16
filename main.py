@@ -466,22 +466,37 @@ def ejecutar_busqueda(forzar_envio: bool = False) -> None:
         logger.warning(f"[Radar] No se pudo exportar docs/radar_mercado.md: {e}")
 
     total_notificadas = 0
+    mega_chollos_count = 0
     if oportunidades:
+        for op in oportunidades:
+            b_op, n_op = op[0], op[1]
+            p_orig = getattr(b_op, "pvp_original", None)
+            if p_orig and p_orig > b_op.precio > 0:
+                if ((p_orig - b_op.precio) / p_orig) >= 0.50 and n_op >= 9.0:
+                    mega_chollos_count += 1
+
         # Seleccionar el Top N (por defecto las 3 más interesantes)
         a_notificar = oportunidades[:TOP_N_NOTIFICAR]
         mejor_nota = max(x[1] for x in a_notificar)
         logger.info(
             f"[main] Seleccionadas las {len(a_notificar)} bicicletas más interesantes "
-            f"(mejor nota: {mejor_nota}/10)."
+            f"(mejor nota: {mejor_nota}/10 | Mega Chollos: {mega_chollos_count})."
         )
 
         for bici, nota, desglose in a_notificar:
             precio_anterior = db.precio_previo(bici.bici_id)
             seguimiento = db.obtener_seguimiento(bici.bici_id)
+            es_mega = False
+            p_orig_bici = getattr(bici, "pvp_original", None)
+            if p_orig_bici and p_orig_bici > bici.precio > 0:
+                if ((p_orig_bici - bici.precio) / p_orig_bici) >= 0.50 and nota >= 9.0:
+                    es_mega = True
+            tag_mega = " [💥 MEGA CHOLLO]" if es_mega else ""
+
             if enviar(bici, nota, desglose, precio_anterior=precio_anterior, seguimiento=seguimiento):
                 db.registrar(bici, nota, precio_anterior=precio_anterior)
                 total_notificadas += 1
-                logger.info(f"  NOTIFICADA: {bici.titulo} ({bici.peso_kg} kg) - Nota {nota}/10")
+                logger.info(f"  NOTIFICADA: {bici.titulo} ({bici.peso_kg} kg) - Nota {nota}/10{tag_mega}")
     else:
         logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
                     "No se encontraron bicis aptas en ninguno de los sitios.\n")
@@ -498,6 +513,7 @@ def ejecutar_busqueda(forzar_envio: bool = False) -> None:
             "total_procesadas": telemetria_ejecucion.get("total_procesadas", 0),
             "candidatas_aptas": len(oportunidades),
             "notificadas": total_notificadas,
+            "mega_chollos": mega_chollos_count,
             "total_en_catalogo": stats_radar.get("total", 0),
             "total_en_vigilancia": len(stats_radar.get("en_vigilancia", [])),
             "estado": "🟢 Runner operativo" if telemetria_ejecucion.get("total_procesadas", 0) > 0 else "⚠️ Sin bicicletas procesadas",

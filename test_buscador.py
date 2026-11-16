@@ -943,6 +943,72 @@ def test_radar_mercado_metricas_enriquecidas_y_heartbeat():
             pass
 
 
+def test_mega_chollo_alerta_y_formato_telegram():
+    """Valida que Mega Chollo requiera estrictamente >50% descuento vs PVP Y nota >= 9.0 (si nota < 9.0 es oferta normal)."""
+    b_oferta = bici_prueba(
+        titulo="Focus THRON² 6.9 2023",
+        precio=2499.0,
+        pvp_original=6000.0,
+        km=1786,
+    )
+
+    # 1. Descuento >50% pero nota < 9.0 (ej. 8.5) -> Oferta normal, NO es Mega Chollo
+    msg_normal = formatear_mensaje(b_oferta, 8.5, "Desglose pericial")
+    assert "MEGA CHOLLO" not in msg_normal
+    assert "Nueva oportunidad de e-MTB encontrada" in msg_normal
+    assert "PVP Original: ~6000 €~ (*-58%* | Ahorro: *-3501 €*)" in msg_normal
+
+    # 2. Descuento >50% Y nota >= 9.0 (ej. 9.2) -> ¡MEGA CHOLLO certificado!
+    msg_mega = formatear_mensaje(b_oferta, 9.2, "Desglose pericial")
+    assert "MEGA CHOLLO e-MTB DETECTADO" in msg_mega
+    assert "-58% vs PVP" in msg_mega
+    assert "PVP Original: ~6000 €~" in msg_mega
+    assert "💥 *MEGA CHOLLO* *-58%*" in msg_mega
+    assert "Ahorro: *-3501 €*" in msg_mega
+
+    # 3. Mega Chollo (nota >= 9.0) con bajada de precio activa
+    msg_mega_bajada = formatear_mensaje(b_oferta, 9.0, "Desglose", precio_anterior=2699.0)
+    assert "MEGA CHOLLO + BAJADA DE PRECIO" in msg_mega_bajada
+    assert "-58% vs PVP" in msg_mega_bajada
+    assert "Ahorro: *-200 €*" in msg_mega_bajada
+
+    # 4. Mega Chollo (nota >= 9.0) con entrada desde vigilancia y bajada
+    seg_vig = {"precio_inicial": 3100.0, "entrada_desde_vigilancia": True}
+    msg_mega_vig = formatear_mensaje(b_oferta, 9.1, "Desglose", seguimiento=seg_vig)
+    assert "MEGA CHOLLO + ENTRADA DE VIGILANCIA" in msg_mega_vig
+
+    # 5. Descuento menor al 50% con cualquier nota (no es Mega Chollo pero muestra PVP original)
+    b_bajo_dto = bici_prueba(
+        titulo="Trek Fuel EXe 9.5",
+        precio=2500.0,
+        pvp_original=4000.0,
+    )
+    msg_bajo = formatear_mensaje(b_bajo_dto, 9.5, "Desglose")
+    assert "MEGA CHOLLO" not in msg_bajo
+    assert "Nueva oportunidad de e-MTB encontrada" in msg_bajo
+    assert "PVP Original: ~4000 €~ (*-38%* | Ahorro: *-1500 €*)" in msg_bajo
+
+    # 6. Bonificación en evaluator._puntuacion_calidad_precio por descuento masivo
+    pts_mega, just_mega = _puntuacion_calidad_precio(b_oferta)
+    assert "Mega Chollo (58% dto vs PVP): +0.5" in just_mega or "dto vs PVP" in just_mega
+
+    # 7. Diagnóstico en Heartbeat con Mega Chollos
+    hb_data = {
+        "fecha_hora": "2026-11-16 11:20:00",
+        "duracion_seg": 35.0,
+        "conteo_por_portal": {"Upway": 20},
+        "total_procesadas": 20,
+        "candidatas_aptas": 3,
+        "notificadas": 1,
+        "mega_chollos": 2,
+        "total_en_catalogo": 70,
+        "total_en_vigilancia": 25,
+        "estado": "🟢 Runner operativo",
+    }
+    msg_hb = formatear_heartbeat(hb_data)
+    assert "Mega Chollos (>50% dto y Nota >= 9.0): *2* 💥" in msg_hb
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -965,4 +1031,5 @@ if __name__ == "__main__":
     test_proxy_rotator_y_resiliencia_red()
     test_profundizacion_telemetria_bateria_upway_y_mammoth()
     test_radar_mercado_metricas_enriquecidas_y_heartbeat()
+    test_mega_chollo_alerta_y_formato_telegram()
     print("Todas las pruebas pasaron (GREEN).")

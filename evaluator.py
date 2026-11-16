@@ -171,6 +171,12 @@ def _puntuacion_calidad_precio(bici: Bicicleta) -> Tuple[float, str]:
     if getattr(bici, "range_extender_wh", None):
         puntos += 0.5
         partes.append(f"Range Extender {bici.range_extender_wh}Wh incluido: +0.5")
+    pvp_orig = getattr(bici, "pvp_original", None)
+    if pvp_orig and pvp_orig > bici.precio > 0:
+        pct_dto = (pvp_orig - bici.precio) / pvp_orig
+        if pct_dto >= 0.50:
+            puntos += 0.5
+            partes.append(f"Mega Chollo ({pct_dto*100:.0f}% dto vs PVP): +0.5")
 
     if bici.precio <= cfg.PRECIO_MAX_EUR:
         puntos += 0.5
