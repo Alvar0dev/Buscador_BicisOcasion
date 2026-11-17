@@ -36,7 +36,7 @@ from main import exportar_radar_mercado_md
 from scraper_base import BaseScraper, crear_proxy_rotator, random_rotation
 import config as cfg
 from db import BaseDatos
-from notifier import formatear_mensaje, formatear_heartbeat, enviar_heartbeat
+from notifier import formatear_mensaje, formatear_heartbeat, enviar_heartbeat, enviar, es_mega_chollo
 from scrapers.upway import UpwayScraper
 from unittest.mock import patch, MagicMock
 
@@ -1009,6 +1009,54 @@ def test_mega_chollo_alerta_y_formato_telegram():
     assert "Mega Chollos (>50% dto y Nota >= 9.0): *2* 💥" in msg_hb
 
 
+def test_segmentacion_sonora_vs_silenciosa_telegram():
+    """Valida que las ofertas normales se envíen en silencio y solo los Mega Chollos con sonido prioritario (TODO 3)."""
+    # 1. Función pericial es_mega_chollo
+    b_chollo_real = bici_prueba(precio=2499.0, pvp_original=6000.0)
+    assert es_mega_chollo(b_chollo_real, 9.2) is True
+    assert es_mega_chollo(b_chollo_real, 8.9) is False
+
+    b_bajo_dto = bici_prueba(precio=2500.0, pvp_original=4000.0)
+    assert es_mega_chollo(b_bajo_dto, 9.5) is False
+
+    b_sin_pvp = bici_prueba(precio=2500.0, pvp_original=None)
+    assert es_mega_chollo(b_sin_pvp, 9.5) is False
+
+    # 2. Despacho silencioso para oferta normal (nota 8.5)
+    with patch("requests.post") as mock_post, patch.object(cfg, "TELEGRAM_BOT_TOKEN", "fake_token"), patch.object(cfg, "TELEGRAM_CHAT_ID", "123456"):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_post.return_value = mock_resp
+
+        ok_normal = enviar(b_chollo_real, 8.5, "Desglose normal")
+        assert ok_normal is True
+        assert mock_post.called
+        payload_normal = mock_post.call_args[1]["json"]
+        assert payload_normal["disable_notification"] is True, "Las ofertas normales deben despacharse silenciosas (disable_notification=True)"
+
+        # 3. Despacho sonoro prioritario para Mega Chollo (nota 9.2 y dto > 50%)
+        mock_post.reset_mock()
+        ok_mega = enviar(b_chollo_real, 9.2, "Desglose mega chollo")
+        assert ok_mega is True
+        payload_mega = mock_post.call_args[1]["json"]
+        assert payload_mega["disable_notification"] is False, "Los Mega Chollos deben notificar con sonido prioritario (disable_notification=False)"
+
+        # 4. Forzado explícito del parámetro silencioso
+        mock_post.reset_mock()
+        enviar(b_chollo_real, 9.2, "Desglose forzado silencio", silencioso=True)
+        assert mock_post.call_args[1]["json"]["disable_notification"] is True
+
+        mock_post.reset_mock()
+        enviar(b_bajo_dto, 7.5, "Desglose forzado sonoro", silencioso=False)
+        assert mock_post.call_args[1]["json"]["disable_notification"] is False
+
+        # 5. Heartbeat se envía siempre en silencio para no molestar
+        mock_post.reset_mock()
+        enviar_heartbeat({"fecha_hora": "2026-11-17 01:00:00", "duracion_seg": 10.0})
+        payload_hb = mock_post.call_args[1]["json"]
+        assert payload_hb["disable_notification"] is True, "El Heartbeat debe enviarse en silencio (disable_notification=True)"
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -1032,4 +1080,5 @@ if __name__ == "__main__":
     test_profundizacion_telemetria_bateria_upway_y_mammoth()
     test_radar_mercado_metricas_enriquecidas_y_heartbeat()
     test_mega_chollo_alerta_y_formato_telegram()
+    test_segmentacion_sonora_vs_silenciosa_telegram()
     print("Todas las pruebas pasaron (GREEN).")

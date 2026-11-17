@@ -99,6 +99,7 @@ El script usa la API de Telegram vía `requests` y envía un mensaje en **Markdo
 - Kilómetros, capacidad de batería y material del cuadro.
 - **Desglose breve** de por qué sacó esa nota.
 - **Enlace directo de compra**.
+- **Segmentación sonora (TODO 3)**: Las ofertas normales y el Heartbeat se entregan en silencio (`disable_notification=True`). Únicamente los verdaderos **Mega Chollos** (Nota $\ge$ 9.0 y dto $\ge$ 50% vs PVP nuevo) disparan notificación sonora/prioritaria con timbre (`disable_notification=False`), configurable mediante `TELEGRAM_SILENCIAR_OFERTAS_NORMALES=true`.
 
 Requiere configurar `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` en el archivo `.env`.
 
@@ -561,6 +562,13 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
   * Si la bicicleta acumula un descuento masivo (≥ 50%) pero su nota pericial es `< 9.0`, el sistema la degrada automáticamente a **oferta normal** (`🚵‍♂️ Nueva oportunidad...` o `📉 Bajada de precio`), manteniendo la línea informativa de fábrica (`🏷️ PVP Original: ~XXXX €~ (-XX% | Ahorro: -XXXX €)`) sin estridencias alarmistas.
   * Se incorporó el conteo de Mega Chollos en el Heartbeat diario y la bonificación pericial en `evaluator.py`.
 
+### 14. Segmentación Sonora en Telegram (`disable_notification`): Silencio Operativo vs Alerta Sonora Prioritaria
+* **Por qué**: Recibir notificaciones con sonido o vibración todos los días a las 12:00 por ofertas normales de catálogo o por el pulso de diagnóstico diario (Heartbeat) provoca fatiga de alertas (*alert fatigue*) y desensibilización. Si el móvil suena por cualquier bicicleta de rutina, el usuario termina silenciando el canal completo de Telegram y perdiendo las verdaderas oportunidades excepcionales.
+* **Cómo se construyó**:
+  * Se integró el parámetro nativo `disable_notification: True` de la Telegram Bot API para todas las ofertas estándar de catálogo y para el mensaje diario de diagnóstico Heartbeat en `notifier.py`.
+  * La función pericial `es_mega_chollo(bici, nota)` actúa como árbitro centralizado: si y solo si una e-MTB alcanza la excelencia pericial (`nota >= 9.0`) con descuento masivo de liquidación (`>= 50% vs PVP nuevo`), se despacha con `disable_notification: False` (activando el timbre y la vibración sonora prioritaria en el móvil).
+  * El comportamiento es configurable de forma reactiva mediante `TELEGRAM_SILENCIAR_OFERTAS_NORMALES` en `.env` / `config.py` y admite anulación manual mediante el parámetro `silencioso: Optional[bool]` en `enviar()`.
+
 ---
 
 ## Proceso de desarrollo y dificultades encontradas
@@ -594,17 +602,19 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 | **Heartbeat operativo diario sin saturar alertas en Telegram** | Notificador / Orquestador | En días donde ninguna e-MTB supera el corte de oportunidad (nota >= 8.0), el usuario no tenía certeza de si el cron de las 12:00 corrió con éxito, se suspendió o fue bloqueado por Cloudflare. | Implementado `enviar_heartbeat` (`formatear_heartbeat`) que reporta duración, conteo por tienda, candidatas aptas analizadas, tamaño del radar activo y unidades en vigilancia diaria con flag `TELEGRAM_HEARTBEAT`. |
 | **Migración no destructiva de base de datos SQLite en producción** | Base de datos (`db.py`) | Añadir `pvp_original` a la tabla `historial_catalogo` en entornos con bases de datos preexistentes causaba `OperationalError` al no existir la columna. | Migración preventiva idempotente con `ALTER TABLE historial_catalogo ADD COLUMN pvp_original REAL` encapsulada en `try...except` durante la inicialización de la conexión. |
 | **Falsos positivos de "Mega Chollo" en bicis desgastadas (nota < 9.0)** | Notificador / Orquestador | Un descuento >50% vs PVP original en una bicicleta con alto kilometraje o batería mermada (ej. nota 3.5 o 5.5/10) activaba la cabecera `💥 ¡MEGA CHOLLO!`, generando falso FOMO cuando en realidad se trataba de un precio de liquidación acorde a su desgaste. | Se aplicó una regla bicondicional estricta: `descuento_pvp >= 50%` Y `nota >= 9.0`. Si la nota es inferior a 9.0, se degrada a oferta normal mostrando el PVP original a título informativo sin cabecera alarmista. |
+| **Fatiga de alertas y ruido sonoro diario en Telegram** | Notificador / UX de usuario | Si el bot activa timbre y vibración en el móvil todos los días a las 12:00 para ofertas rutinarias o heartbeats de diagnóstico, el usuario silencia el canal y se desensibiliza, ignorando alertas críticas. | Segmentación acústica nativa en Telegram Bot API: `disable_notification=True` para ofertas estándar y Heartbeat diario, reservando el timbre sonoro y vibración exclusivamente para verdaderos Mega Chollos (`nota >= 9.0` y `dto >= 50%`). |
 
 ---
 
 ## Estado actual y próximos pasos
 
-### Fotografía del estado actual (16/11/2026)
+### Fotografía del estado actual (17/11/2026)
 - **Rendimiento de búsqueda**: Los 4 portales oficiales (**Bike Ocasión**, **Buhobike**, **Upway** y **Mammoth Bikes**) se rastrean en paralelo y se enriquecen con Perito Mecánico en **~37s** totales en corrida en vivo.
 - **Calidad de filtrado y telemetría**: Operativos los filtros estrictos `S0` (en stock, sin reservadas) a `S6`, detección de Range Extenders incluidos, lectura de odómetros en fotos con Gemini Vision en lote, telemetría real de batería (`SoH %` y ciclos de carga) para baterías originales y sustituidas, y clasificación matemática por milímetros de recorrido de suspensión (`≤130 mm` XC > `140 mm` Trail Ligero > `150-160 mm` All-Mountain).
 - **Detección de Mega Chollos y contraste PVP**: Detección estricta de Mega Chollos (`Nota >= 9.0` y `Descuento >= 50% vs PVP nuevo`) con badges de Telegram, bonificación pericial en calidad-precio (+0.5) y reporte informativo de PVP original nuevo para ofertas normales con ahorro masivo.
+- **Segmentación acústica en Telegram**: Notificaciones estándar y Heartbeat despachadas en silencio (`disable_notification=True`), reservando el timbre/vibración sonora (`disable_notification=False`) exclusivamente para verdaderos Mega Chollos, configurable con `TELEGRAM_SILENCIAR_OFERTAS_NORMALES`.
 - **Historial de catálogo, permanencia y ahorro**: Tabla SQLite `historial_catalogo` registrando evolución diaria de precios, días de permanencia en stock por portal, rebajas acumuladas, PVP original de fábrica y alertas prioritarias de Zona de Vigilancia (2.900–3.500 €).
-- **Radar de mercado y reportes**: Generación automática de `docs/radar_mercado.md` en cada corrida (71 unidades activas en seguimiento, 8 rebajas acumuladas) y modo CLI `python main.py --stats`.
+- **Radar de mercado y reportes**: Generación automática de `docs/radar_mercado.md` en cada corrida (71 unidades activas en seguimiento, 12 rebajas acumuladas) y modo CLI `python main.py --stats`.
 - **Heartbeat operativo en Telegram**: Diagnóstico automático del runner diario vía Telegram (`TELEGRAM_HEARTBEAT` en `config.py` o comando CLI `python main.py --heartbeat`), confirmando salud de corrida, desglose por tienda, Mega Chollos analizados y pulso de vigilancia.
 - **Resiliencia de red**: Integrado `ProxyRotator` nativo en `scraper_base.py` y `enriquecedor_web.py` con estrategias cíclica y aleatoria configurable vía `PROXY_LIST` en `.env`.
 - **Suite de tests**: `python test_buscador.py` 100% en **GREEN**.
@@ -612,10 +622,10 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 
 ### Tareas completadas en esta sesión
 
-- [x] **TODO 1 — Detección y alerta de "Mega Chollos" (>50% de descuento vs PVP original)**: Implementado formato con badge destacado en Telegram (`💥 *MEGA CHOLLO*`), cabecera prioritaria y bonificación en `evaluator.py`.
-- [x] **TODO 2 — Filtro de calidad para Mega Chollos (condicionamiento a Nota ≥ 9.0)**: Ajustado el umbral para que solo califiquen como "Mega Chollo" aquellas bicicletas con nota pericial sobresaliente (≥ 9.0). Unidades con nota < 9.0 y descuento masivo se notifican como ofertas normales informando el PVP de fábrica sin alarmismo.
-- [x] **TODO 3 — Ejecución de prueba en vivo y validación con los 4 portales reales (`python main.py --once --forzar`)**: Ejecución exitosa de scraping en paralelo, análisis pericial y despacho en tiempo real a Telegram de las oportunidades del Top 3 y del Heartbeat operativo.
-- [x] **TODO 4 — Documentación y trazabilidad en Engram**: Actualizado `README.md` con las dificultades técnicas, justificación de arquitectura y persistencia de decisiones en Engram.
+- [x] **TODO 1 — Segmentación de alertas sonoras vs silenciosas en Telegram (`notifier.py`)**: Implementado `disable_notification=True` para ofertas normales y diagnósticos diarios de Heartbeat, reservando la alerta sonora / vibración (`disable_notification=False`) exclusivamente para verdaderos Mega Chollos (nota ≥ 9.0 y dto ≥ 50%), configurable con `TELEGRAM_SILENCIAR_OFERTAS_NORMALES`.
+- [x] **TODO 2 — Centralización pericial `es_mega_chollo(bici, nota)`**: Diseñada una única fuente de verdad reutilizada en orquestador, notificador, peritaje y tests unitarios.
+- [x] **TODO 3 — Suite de pruebas unitarias (`test_buscador.py`)**: Añadido `test_segmentacion_sonora_vs_silenciosa_telegram` cubriendo ofertas normales, Mega Chollos, Heartbeats y overrides manuales (GREEN).
+- [x] **TODO 4 — Documentación y trazabilidad de ingeniería**: Actualizado `README.md` con la sección de ingeniería #14, tabla de dificultades, estado al 17/11/2026 y roadmap.
 
 ### Plan de trabajo propuesto para mañana (TODOs)
 
@@ -623,8 +633,8 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
   - **Objetivo**: Incorporar formalmente en el algoritmo numérico de `evaluator.py` la penalización/bonificación por `bateria_salud_pct` y `bateria_ciclos` cuando estén disponibles, alineándolo con el Perito Mecánico Senior.
 - [ ] **TODO 2 — Dashboard web interactivo o exportación HTML para el Radar de Mercado**
   - **Objetivo**: Desarrollar un visualizador web ligero (o exportación HTML interactiva) para consultar de forma gráfica la rotación de stock, curvas de permanencia y precios del catálogo SQLite.
-- [ ] **TODO 3 — Modo silencioso vs prioritario en Telegram**
-  - **Objetivo**: Configurar que las ofertas normales se envíen con notificación silenciosa (`disable_notification=True`) y reservar la alerta sonora / banner prioritario exclusivamente para verdaderos "Mega Chollos" (nota ≥ 9.0 y dto ≥ 50%).
+- [ ] **TODO 3 — Detección de chollos por degradación anómala de precio (Delta diario > 300 €)**
+  - **Objetivo**: Añadir badge de alerta reactiva cuando una bicicleta sufra un recorte repentino de precio mayor a 300 € en un solo día, independientemente de su PVP original.
 
 ### Dependencias instaladas
 
@@ -639,6 +649,7 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 |------------|--------|
 | Lógica de filtros, Perito Mecánico Senior, dedup, Telegram | ✅ Verificado (tests GREEN) |
 | Detección de Mega Chollos (dto >= 50% y Nota >= 9.0) | ✅ Implementado en `notifier.py`, `evaluator.py` y `main.py` |
+| Segmentación sonora Telegram (silencioso vs prioritario) | ✅ Implementado (`disable_notification` según Mega Chollo) |
 | Prioridad de modalidad (XC > Light e-MTB > Trail) | ✅ Implementado (`prioridad_modalidad` en `evaluator.py` y `main.py`) |
 | Desambiguación de motores BH (BH 2EXMAG vs Shimano EP801) | ✅ Verificado (BH iLynx Race/Trail fijado a 2EXMAG, iLynx+ a EP801 + batería BH) |
 | Selectores Bike Ocasión | ✅ Verificados en HTML real (`h3.s_title_block a`, badge `Km / <Marca>`, PVP original, 6 páginas, 180+ bicis) |

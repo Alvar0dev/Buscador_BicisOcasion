@@ -114,6 +114,8 @@ TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_API_URL: str = "https://api.telegram.org/bot{token}/sendMessage"
 # Enviar heartbeat de pulso diario/ejecución a Telegram (TODO 2)
 TELEGRAM_HEARTBEAT: bool = os.getenv("TELEGRAM_HEARTBEAT", "true").lower() in ("true", "1", "yes", "si")
+# Silenciar ofertas normales en Telegram (solo suenan los Mega Chollos >= 9.0 y >50% dto) (TODO 3)
+TELEGRAM_SILENCIAR_OFERTAS_NORMALES: bool = os.getenv("TELEGRAM_SILENCIAR_OFERTAS_NORMALES", "true").lower() in ("true", "1", "yes", "si")
 
 # ---------------------------------------------------------------------------
 # BASE DE DATOS (S12)

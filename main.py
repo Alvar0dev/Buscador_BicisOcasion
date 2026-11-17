@@ -23,7 +23,7 @@ from config import SITIOS, HORA_EJECUCION, NOTA_MIN_NOTIFICAR, NOTA_MIN_AGUARDAR
 from db import BaseDatos
 from evaluator import evaluar, calcular_nota_oportunidad, pasa_filtros_estrictos, prioridad_modalidad
 from gemini_classifier import enriquecer_y_valorar_bici
-from notifier import enviar, enviar_heartbeat
+from notifier import enviar, enviar_heartbeat, es_mega_chollo
 from scrapers.bike_ocasion import BikeOcasionScraper
 from scrapers.buhobike import BuhobikeScraper
 from scrapers.upway import UpwayScraper
@@ -470,10 +470,8 @@ def ejecutar_busqueda(forzar_envio: bool = False) -> None:
     if oportunidades:
         for op in oportunidades:
             b_op, n_op = op[0], op[1]
-            p_orig = getattr(b_op, "pvp_original", None)
-            if p_orig and p_orig > b_op.precio > 0:
-                if ((p_orig - b_op.precio) / p_orig) >= 0.50 and n_op >= 9.0:
-                    mega_chollos_count += 1
+            if es_mega_chollo(b_op, n_op):
+                mega_chollos_count += 1
 
         # Seleccionar el Top N (por defecto las 3 más interesantes)
         a_notificar = oportunidades[:TOP_N_NOTIFICAR]
@@ -486,11 +484,7 @@ def ejecutar_busqueda(forzar_envio: bool = False) -> None:
         for bici, nota, desglose in a_notificar:
             precio_anterior = db.precio_previo(bici.bici_id)
             seguimiento = db.obtener_seguimiento(bici.bici_id)
-            es_mega = False
-            p_orig_bici = getattr(bici, "pvp_original", None)
-            if p_orig_bici and p_orig_bici > bici.precio > 0:
-                if ((p_orig_bici - bici.precio) / p_orig_bici) >= 0.50 and nota >= 9.0:
-                    es_mega = True
+            es_mega = es_mega_chollo(bici, nota)
             tag_mega = " [💥 MEGA CHOLLO]" if es_mega else ""
 
             if enviar(bici, nota, desglose, precio_anterior=precio_anterior, seguimiento=seguimiento):
