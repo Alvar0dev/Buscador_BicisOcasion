@@ -569,6 +569,19 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
   * La función pericial `es_mega_chollo(bici, nota)` actúa como árbitro centralizado: si y solo si una e-MTB alcanza la excelencia pericial (`nota >= 9.0`) con descuento masivo de liquidación (`>= 50% vs PVP nuevo`), se despacha con `disable_notification: False` (activando el timbre y la vibración sonora prioritaria en el móvil).
   * El comportamiento es configurable de forma reactiva mediante `TELEGRAM_SILENCIAR_OFERTAS_NORMALES` en `.env` / `config.py` y admite anulación manual mediante el parámetro `silencioso: Optional[bool]` en `enviar()`.
 
+### 15. Rotación Dinámica de Alternativas en Análisis Consecutivos (Top 3 Idéntico -> Bloque 4-6)
+* **Por qué**: En ejecuciones consecutivas del buscador o en días sucesivos con baja rotación de stock en las tiendas, el Top 3 de oportunidades óptimas suele mantenerse invariable. Volver a notificar exactamente las mismas 3 bicicletas satura la atención y no aporta valor nuevo al comprador; mientras que no notificar nada genera incertidumbre sobre qué otras opciones interesantes existen en el catálogo.
+* **Cómo se construyó**:
+  * **Persistencia de ejecuciones en SQLite (`db.py`)**: Se creó la tabla `analisis_ejecuciones` (`id`, `fecha`, `top3_ids`, `enviados_ids`, `offset_usado`, `repetido`) que almacena la huella exacta del Top 3 de cada análisis.
+  * **Preservación íntegra del pool de candidatas (`main.py`)**: Se refactorizó `_recolectar_oportunidades()` para que devuelva la totalidad de candidatas aptas ordenadas por estricta prioridad (estrictas nuevas -> estrictas conocidas -> respaldo nuevas -> respaldo conocidas), eliminando el truncamiento prematuro a 3 unidades que impedía acceder a los puestos 4, 5 y 6.
+  * **Cálculo de rotación por offset cíclico**: Si `ultimo_analisis["top3_ids"] == top3_actual_ids` y existen más de 3 opciones en catálogo, el orquestador avanza automáticamente el offset (`offset_a_usar = 3`), seleccionando las alternativas posicionadas en los puestos #4, #5 y #6 (`oportunidades[3:6]`). Si se vuelve a ejecutar sin cambios, continúa rotando o cicla elegantemente.
+  * **Cabecera contextual en Telegram (`notifier.py`)**: Cuando se detecta repetición, el formateador antepone un banner informativo en cada ficha:
+    ```markdown
+    🔄 *Top 3 sin cambios respecto al análisis anterior*
+    💡 _Exponiendo siguiente mejor alternativa #4 del catálogo:_
+    ```
+  * **Diagnóstico en Heartbeat**: El pulso operativo diario de Telegram reporta la rotación activa con el rango de posiciones expuestas (`🔄 Rotación activa: Top 3 idéntico (exponiendo #4 a #6)`).
+
 ---
 
 ## Proceso de desarrollo y dificultades encontradas
@@ -603,6 +616,7 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 | **Migración no destructiva de base de datos SQLite en producción** | Base de datos (`db.py`) | Añadir `pvp_original` a la tabla `historial_catalogo` en entornos con bases de datos preexistentes causaba `OperationalError` al no existir la columna. | Migración preventiva idempotente con `ALTER TABLE historial_catalogo ADD COLUMN pvp_original REAL` encapsulada en `try...except` durante la inicialización de la conexión. |
 | **Falsos positivos de "Mega Chollo" en bicis desgastadas (nota < 9.0)** | Notificador / Orquestador | Un descuento >50% vs PVP original en una bicicleta con alto kilometraje o batería mermada (ej. nota 3.5 o 5.5/10) activaba la cabecera `💥 ¡MEGA CHOLLO!`, generando falso FOMO cuando en realidad se trataba de un precio de liquidación acorde a su desgaste. | Se aplicó una regla bicondicional estricta: `descuento_pvp >= 50%` Y `nota >= 9.0`. Si la nota es inferior a 9.0, se degrada a oferta normal mostrando el PVP original a título informativo sin cabecera alarmista. |
 | **Fatiga de alertas y ruido sonoro diario en Telegram** | Notificador / UX de usuario | Si el bot activa timbre y vibración en el móvil todos los días a las 12:00 para ofertas rutinarias o heartbeats de diagnóstico, el usuario silencia el canal y se desensibiliza, ignorando alertas críticas. | Segmentación acústica nativa en Telegram Bot API: `disable_notification=True` para ofertas estándar y Heartbeat diario, reservando el timbre sonoro y vibración exclusivamente para verdaderos Mega Chollos (`nota >= 9.0` y `dto >= 50%`). |
+| **Repetición estéril del Top 3 en análisis consecutivos** | Orquestador / Base de datos / Notificador | Al ejecutar búsquedas consecutivas o en períodos sin cambios de catálogo, notificar el mismo Top 3 no aporta valor, mientras que silenciarlo oculta alternativas viables. Además `_recolectar_oportunidades()` truncaba el pool a 3 unidades impidiendo acceder a puestos inferiores. | Refactorizado `_recolectar_oportunidades()` para preservar todo el catálogo apto; persistencia de la huella en tabla `analisis_ejecuciones` y rotación automática con offset cíclico (#4-#6) con cabecera de aviso contextual en Telegram (`🔄 Top 3 sin cambios respecto al análisis anterior`). |
 
 ---
 
@@ -613,9 +627,10 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 - **Calidad de filtrado y telemetría**: Operativos los filtros estrictos `S0` (en stock, sin reservadas) a `S6`, detección de Range Extenders incluidos, lectura de odómetros en fotos con Gemini Vision en lote, telemetría real de batería (`SoH %` y ciclos de carga) para baterías originales y sustituidas, y clasificación matemática por milímetros de recorrido de suspensión (`≤130 mm` XC > `140 mm` Trail Ligero > `150-160 mm` All-Mountain).
 - **Detección de Mega Chollos y contraste PVP**: Detección estricta de Mega Chollos (`Nota >= 9.0` y `Descuento >= 50% vs PVP nuevo`) con badges de Telegram, bonificación pericial en calidad-precio (+0.5) y reporte informativo de PVP original nuevo para ofertas normales con ahorro masivo.
 - **Segmentación acústica en Telegram**: Notificaciones estándar y Heartbeat despachadas en silencio (`disable_notification=True`), reservando el timbre/vibración sonora (`disable_notification=False`) exclusivamente para verdaderos Mega Chollos, configurable con `TELEGRAM_SILENCIAR_OFERTAS_NORMALES`.
+- **Rotación inteligente de alternativas en análisis consecutivos**: Detección de Top 3 idéntico en `analisis_ejecuciones`, rotando dinámicamente a las siguientes 3 alternativas del catálogo (#4, #5 y #6) con aviso contextual claro en el mensaje de Telegram.
 - **Historial de catálogo, permanencia y ahorro**: Tabla SQLite `historial_catalogo` registrando evolución diaria de precios, días de permanencia en stock por portal, rebajas acumuladas, PVP original de fábrica y alertas prioritarias de Zona de Vigilancia (2.900–3.500 €).
 - **Radar de mercado y reportes**: Generación automática de `docs/radar_mercado.md` en cada corrida (71 unidades activas en seguimiento, 12 rebajas acumuladas) y modo CLI `python main.py --stats`.
-- **Heartbeat operativo en Telegram**: Diagnóstico automático del runner diario vía Telegram (`TELEGRAM_HEARTBEAT` en `config.py` o comando CLI `python main.py --heartbeat`), confirmando salud de corrida, desglose por tienda, Mega Chollos analizados y pulso de vigilancia.
+- **Heartbeat operativo en Telegram**: Diagnóstico automático del runner diario vía Telegram (`TELEGRAM_HEARTBEAT` en `config.py` o comando CLI `python main.py --heartbeat`), confirmando salud de corrida, desglose por tienda, Mega Chollos analizados, rotación activa y pulso de vigilancia.
 - **Resiliencia de red**: Integrado `ProxyRotator` nativo en `scraper_base.py` y `enriquecedor_web.py` con estrategias cíclica y aleatoria configurable vía `PROXY_LIST` en `.env`.
 - **Suite de tests**: `python test_buscador.py` 100% en **GREEN**.
 - **Automatización y logs**: Tarea `BuscadorBiciOcasion` activa a las 12:00 diarias con despertar automático (`WakeToRun: True`), ignorando `logs/buscador.log` en el control de versiones.
@@ -624,8 +639,9 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 
 - [x] **TODO 1 — Segmentación de alertas sonoras vs silenciosas en Telegram (`notifier.py`)**: Implementado `disable_notification=True` para ofertas normales y diagnósticos diarios de Heartbeat, reservando la alerta sonora / vibración (`disable_notification=False`) exclusivamente para verdaderos Mega Chollos (nota ≥ 9.0 y dto ≥ 50%), configurable con `TELEGRAM_SILENCIAR_OFERTAS_NORMALES`.
 - [x] **TODO 2 — Centralización pericial `es_mega_chollo(bici, nota)`**: Diseñada una única fuente de verdad reutilizada en orquestador, notificador, peritaje y tests unitarios.
-- [x] **TODO 3 — Suite de pruebas unitarias (`test_buscador.py`)**: Añadido `test_segmentacion_sonora_vs_silenciosa_telegram` cubriendo ofertas normales, Mega Chollos, Heartbeats y overrides manuales (GREEN).
-- [x] **TODO 4 — Documentación y trazabilidad de ingeniería**: Actualizado `README.md` con la sección de ingeniería #14, tabla de dificultades, estado al 17/11/2026 y roadmap.
+- [x] **TODO 3 — Rotación de alternativas en análisis consecutivos con Top 3 idéntico (`main.py`, `db.py`, `notifier.py`)**: Implementada la tabla `analisis_ejecuciones`, eliminación del truncamiento restrictivo en `_recolectar_oportunidades()`, detección de repetición consecutiva, exposición de posiciones 4 a 6 con banner contextual en Telegram y reporte en Heartbeat.
+- [x] **TODO 4 — Suite de pruebas unitarias (`test_buscador.py`)**: Añadido `test_rotacion_consecutiva_top3_y_aviso` y `test_segmentacion_sonora_vs_silenciosa_telegram` (100% GREEN).
+- [x] **TODO 5 — Documentación y trazabilidad de ingeniería**: Actualizado `README.md` con las secciones de ingeniería #14 y #15, tabla de dificultades, estado al 17/11/2026 y roadmap.
 
 ### Plan de trabajo propuesto para mañana (TODOs)
 
@@ -650,6 +666,7 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 | Lógica de filtros, Perito Mecánico Senior, dedup, Telegram | ✅ Verificado (tests GREEN) |
 | Detección de Mega Chollos (dto >= 50% y Nota >= 9.0) | ✅ Implementado en `notifier.py`, `evaluator.py` y `main.py` |
 | Segmentación sonora Telegram (silencioso vs prioritario) | ✅ Implementado (`disable_notification` según Mega Chollo) |
+| Rotación en análisis consecutivos (Top 3 repetido -> 4-6) | ✅ Implementado (`analisis_ejecuciones`, offset rotativo y banner) |
 | Prioridad de modalidad (XC > Light e-MTB > Trail) | ✅ Implementado (`prioridad_modalidad` en `evaluator.py` y `main.py`) |
 | Desambiguación de motores BH (BH 2EXMAG vs Shimano EP801) | ✅ Verificado (BH iLynx Race/Trail fijado a 2EXMAG, iLynx+ a EP801 + batería BH) |
 | Selectores Bike Ocasión | ✅ Verificados en HTML real (`h3.s_title_block a`, badge `Km / <Marca>`, PVP original, 6 páginas, 180+ bicis) |

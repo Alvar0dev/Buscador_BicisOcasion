@@ -309,12 +309,15 @@ def _recolectar_oportunidades(
     respaldo_nuevas.sort(key=clave_orden_respaldo, reverse=True)
     respaldo_conocidas.sort(key=clave_orden_respaldo, reverse=True)
 
-    seleccion = list(estrictas_nuevas)
-    for pool in (estrictas_conocidas, respaldo_nuevas, respaldo_conocidas):
-        if len(seleccion) >= TOP_N_NOTIFICAR:
-            break
-        faltantes = TOP_N_NOTIFICAR - len(seleccion)
-        seleccion.extend(pool[:faltantes])
+    # Devolver todas las candidatas ordenadas por estricta prioridad
+    # (estrictas nuevas -> estrictas conocidas -> respaldo nuevas -> respaldo conocidas)
+    # permitiendo la rotación de Top 3 a siguientes alternativas en ejecuciones consecutivas.
+    seleccion = (
+        list(estrictas_nuevas)
+        + list(estrictas_conocidas)
+        + list(respaldo_nuevas)
+        + list(respaldo_conocidas)
+    )
 
     if telemetria is not None:
         telemetria["conteo_por_portal"] = conteo_por_portal
@@ -467,33 +470,93 @@ def ejecutar_busqueda(forzar_envio: bool = False) -> None:
 
     total_notificadas = 0
     mega_chollos_count = 0
+    aviso_top_repetido = False
+    offset_a_usar = 0
+
     if oportunidades:
         for op in oportunidades:
             b_op, n_op = op[0], op[1]
             if es_mega_chollo(b_op, n_op):
                 mega_chollos_count += 1
 
-        # Seleccionar el Top N (por defecto las 3 más interesantes)
-        a_notificar = oportunidades[:TOP_N_NOTIFICAR]
-        mejor_nota = max(x[1] for x in a_notificar)
-        logger.info(
-            f"[main] Seleccionadas las {len(a_notificar)} bicicletas más interesantes "
-            f"(mejor nota: {mejor_nota}/10 | Mega Chollos: {mega_chollos_count})."
+        top3_actual_ids = [op[0].bici_id for op in oportunidades[:TOP_N_NOTIFICAR]]
+        ultimo_analisis = db.obtener_ultimo_analisis()
+
+        es_mismo_top3 = bool(
+            ultimo_analisis
+            and ultimo_analisis.get("top3_ids") == top3_actual_ids
+            and len(top3_actual_ids) > 0
         )
 
-        for bici, nota, desglose in a_notificar:
+        if es_mismo_top3:
+            total_ops = len(oportunidades)
+            if total_ops > TOP_N_NOTIFICAR:
+                offset_previo = int(ultimo_analisis.get("offset_usado", 0)) if ultimo_analisis else 0
+                nuevo_offset = offset_previo + TOP_N_NOTIFICAR
+                if nuevo_offset < total_ops:
+                    offset_a_usar = nuevo_offset
+                else:
+                    offset_a_usar = TOP_N_NOTIFICAR
+                aviso_top_repetido = True
+                logger.info(
+                    f"[main] Top 3 idéntico al análisis previo ({top3_actual_ids}). "
+                    f"Rotando a siguientes alternativas (offset={offset_a_usar}, ranking #{offset_a_usar+1}-#{offset_a_usar+TOP_N_NOTIFICAR})."
+                )
+            else:
+                logger.info(
+                    f"[main] Top 3 idéntico pero catálogo sin más alternativas ({total_ops} bicis). "
+                    f"Manteniendo Top {TOP_N_NOTIFICAR}."
+                )
+                offset_a_usar = 0
+                aviso_top_repetido = False
+
+        a_notificar = oportunidades[offset_a_usar : offset_a_usar + TOP_N_NOTIFICAR]
+        if not a_notificar:
+            a_notificar = oportunidades[:TOP_N_NOTIFICAR]
+            offset_a_usar = 0
+            aviso_top_repetido = False
+
+        mejor_nota = max(x[1] for x in a_notificar)
+        logger.info(
+            f"[main] Seleccionadas {len(a_notificar)} bicicletas para notificar "
+            f"(offset: {offset_a_usar} | mejor nota: {mejor_nota}/10 | Mega Chollos en pool: {mega_chollos_count} | repetido: {aviso_top_repetido})."
+        )
+
+        for idx, (bici, nota, desglose) in enumerate(a_notificar):
             precio_anterior = db.precio_previo(bici.bici_id)
             seguimiento = db.obtener_seguimiento(bici.bici_id)
             es_mega = es_mega_chollo(bici, nota)
             tag_mega = " [💥 MEGA CHOLLO]" if es_mega else ""
+            pos_ranking = offset_a_usar + idx + 1
 
-            if enviar(bici, nota, desglose, precio_anterior=precio_anterior, seguimiento=seguimiento):
+            if enviar(
+                bici,
+                nota,
+                desglose,
+                precio_anterior=precio_anterior,
+                seguimiento=seguimiento,
+                aviso_top_repetido=aviso_top_repetido,
+                ranking_posicion=pos_ranking,
+            ):
                 db.registrar(bici, nota, precio_anterior=precio_anterior)
                 total_notificadas += 1
-                logger.info(f"  NOTIFICADA: {bici.titulo} ({bici.peso_kg} kg) - Nota {nota}/10{tag_mega}")
+                logger.info(f"  NOTIFICADA #{pos_ranking}: {bici.titulo} ({bici.peso_kg} kg) - Nota {nota}/10{tag_mega}")
+
+        db.registrar_analisis(
+            top3_ids=top3_actual_ids,
+            enviados_ids=[bici.bici_id for bici, _, _ in a_notificar],
+            offset_usado=offset_a_usar,
+            repetido=aviso_top_repetido,
+        )
     else:
         logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
                     "No se encontraron bicis aptas en ninguno de los sitios.\n")
+        db.registrar_analisis(
+            top3_ids=[],
+            enviados_ids=[],
+            offset_usado=0,
+            repetido=False,
+        )
 
     duracion_seg = round(time.time() - t_inicio, 1)
     stats_radar = db.obtener_estadisticas_mercado()
@@ -508,6 +571,8 @@ def ejecutar_busqueda(forzar_envio: bool = False) -> None:
             "candidatas_aptas": len(oportunidades),
             "notificadas": total_notificadas,
             "mega_chollos": mega_chollos_count,
+            "top_repetido": aviso_top_repetido,
+            "offset_usado": offset_a_usar,
             "total_en_catalogo": stats_radar.get("total", 0),
             "total_en_vigilancia": len(stats_radar.get("en_vigilancia", [])),
             "estado": "🟢 Runner operativo" if telemetria_ejecucion.get("total_procesadas", 0) > 0 else "⚠️ Sin bicicletas procesadas",

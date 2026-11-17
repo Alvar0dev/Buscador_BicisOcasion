@@ -61,6 +61,19 @@ class BaseDatos:
                 conn.execute("ALTER TABLE historial_catalogo ADD COLUMN pvp_original REAL")
             except Exception:
                 pass
+
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS analisis_ejecuciones (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    fecha         TEXT NOT NULL DEFAULT (datetime('now')),
+                    top3_ids      TEXT NOT NULL,
+                    enviados_ids  TEXT NOT NULL,
+                    offset_usado  INTEGER NOT NULL DEFAULT 0,
+                    repetido      INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
             conn.commit()
 
     def ya_enviada(self, bici_id: str) -> bool:
@@ -441,3 +454,59 @@ class BaseDatos:
             "en_vigilancia": en_vigilancia,
             "resumen_global": resumen_global,
         }
+
+    # ---------------------------------------------------------------------------
+    # SEGUIMIENTO DE ANÁLISIS CONSECUTIVOS Y ROTACIÓN TOP 3
+    # ---------------------------------------------------------------------------
+
+    def registrar_analisis(
+        self,
+        top3_ids: List[str],
+        enviados_ids: List[str],
+        offset_usado: int = 0,
+        repetido: bool = False,
+    ) -> None:
+        """Registra los resultados y el Top 3 de una pasada de análisis."""
+        import json
+        with self._conectar() as conn:
+            conn.execute(
+                """
+                INSERT INTO analisis_ejecuciones
+                    (top3_ids, enviados_ids, offset_usado, repetido)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    json.dumps(top3_ids),
+                    json.dumps(enviados_ids),
+                    int(offset_usado),
+                    1 if repetido else 0,
+                ),
+            )
+            conn.commit()
+
+    def obtener_ultimo_analisis(self) -> Optional[Dict[str, Any]]:
+        """Devuelve la información de la última pasada de análisis registrada, o None si no hay."""
+        import json
+        with self._conectar() as conn:
+            fila = conn.execute(
+                "SELECT * FROM analisis_ejecuciones ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            if not fila:
+                return None
+            try:
+                top3 = json.loads(fila["top3_ids"])
+            except Exception:
+                top3 = []
+            try:
+                enviados = json.loads(fila["enviados_ids"])
+            except Exception:
+                enviados = []
+            return {
+                "id": fila["id"],
+                "fecha": fila["fecha"],
+                "top3_ids": top3,
+                "enviados_ids": enviados,
+                "offset_usado": fila["offset_usado"],
+                "repetido": bool(fila["repetido"]),
+            }
+

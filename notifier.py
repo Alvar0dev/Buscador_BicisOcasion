@@ -30,12 +30,16 @@ def formatear_mensaje(
     desglose: str,
     precio_anterior: Optional[float] = None,
     seguimiento: Optional[dict] = None,
+    aviso_top_repetido: bool = False,
+    ranking_posicion: Optional[int] = None,
 ) -> str:
     """
     Construye el mensaje Markdown para Telegram (S9).
     Incluye: título, precio (con alerta de bajada si aplica), nota destacada 🔥,
     kilómetros, batería, cuadro, recorrido de suspensión, seguimiento en stock,
     desglose de la nota y enlace directo.
+    Si aviso_top_repetido es True, antepone un aviso claro de que el Top 3 no varió
+    y se expone la siguiente alternativa disponible.
     """
     km = bici.km if bici.km is not None else "no indicado"
     if getattr(bici, "range_extender_wh", None):
@@ -135,7 +139,16 @@ def formatear_mensaje(
         if partes_seg:
             linea_seguimiento = f"📊 Seguimiento: {' | '.join(partes_seg)}\n"
 
+    banner_repetido = ""
+    if aviso_top_repetido:
+        pos_txt = f" #{ranking_posicion}" if ranking_posicion is not None else ""
+        banner_repetido = (
+            f"🔄 *Top 3 sin cambios respecto al análisis anterior*\n"
+            f"💡 _Exponiendo siguiente mejor alternativa{pos_txt} del catálogo:_\n\n"
+        )
+
     mensaje = (
+        f"{banner_repetido}"
         f"{cabecera}\n\n"
         f"*{bici.titulo}*\n"
         f"🏪 Tienda: {bici.sitio}\n"
@@ -165,6 +178,8 @@ def enviar(
     precio_anterior: Optional[float] = None,
     seguimiento: Optional[dict] = None,
     silencioso: Optional[bool] = None,
+    aviso_top_repetido: bool = False,
+    ranking_posicion: Optional[int] = None,
 ) -> bool:
     """
     Envía el mensaje a Telegram. Devuelve True si tuvo éxito.
@@ -183,6 +198,8 @@ def enviar(
         desglose,
         precio_anterior=precio_anterior,
         seguimiento=seguimiento,
+        aviso_top_repetido=aviso_top_repetido,
+        ranking_posicion=ranking_posicion,
     )
 
     es_mega = es_mega_chollo(bici, nota)
@@ -244,6 +261,12 @@ def formatear_heartbeat(resumen: dict) -> str:
 
     linea_mega = f"  • Mega Chollos (>50% dto y Nota >= 9.0): *{mega_chollos}* 💥\n" if mega_chollos > 0 else ""
 
+    linea_rotacion = ""
+    if resumen.get("top_repetido"):
+        off = resumen.get("offset_usado", 3)
+        cant_rot = resumen.get("notificadas", 3)
+        linea_rotacion = f"  • 🔄 Rotación activa: Top 3 idéntico (exponiendo #{off + 1} a #{off + cant_rot})\n"
+
     mensaje = (
         f"💓 *Heartbeat Buscador e-MTB* — Pulso Operativo\n"
         f"📅 `{fecha_hora}` | ⏱️ `{duracion}s`\n\n"
@@ -252,6 +275,7 @@ def formatear_heartbeat(resumen: dict) -> str:
         f"📊 *Diagnóstico del runner*:\n"
         f"  • Candidatas aptas analizadas: *{aptas}*\n"
         f"  • Alertas prioritarias: {texto_notif}\n"
+        f"{linea_rotacion}"
         f"{linea_mega}"
         f"  • Radar activo en seguimiento: *{en_catalogo}* unidades\n"
         f"  • Zona de vigilancia (2.900-3.500 €): *{en_vigilancia}* unidades\n\n"

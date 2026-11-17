@@ -1057,6 +1057,122 @@ def test_segmentacion_sonora_vs_silenciosa_telegram():
         assert payload_hb["disable_notification"] is True, "El Heartbeat debe enviarse en silencio (disable_notification=True)"
 
 
+def test_rotacion_consecutiva_top3_y_aviso():
+    """Valida la rotación al siguiente bloque de alternativas (4-6) y el aviso cuando el Top 3 no varía."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        ruta_db = f.name
+
+    try:
+        db = BaseDatos(ruta=ruta_db)
+
+        # 1. BaseDatos: obtención inicial vacía
+        assert db.obtener_ultimo_analisis() is None
+
+        # 2. Registrar análisis inicial
+        db.registrar_analisis(
+            top3_ids=["id-1", "id-2", "id-3"],
+            enviados_ids=["id-1", "id-2", "id-3"],
+            offset_usado=0,
+            repetido=False,
+        )
+        ult = db.obtener_ultimo_analisis()
+        assert ult is not None
+        assert ult["top3_ids"] == ["id-1", "id-2", "id-3"]
+        assert ult["enviados_ids"] == ["id-1", "id-2", "id-3"]
+        assert ult["offset_usado"] == 0
+        assert ult["repetido"] is False
+
+        # 3. Formateo de mensaje: con aviso_top_repetido=True
+        b_alt = bici_prueba(bici_id="id-4", titulo="Orbea Rise M20 Alternativa", precio=2600.0)
+        msg_repetido = formatear_mensaje(
+            b_alt,
+            8.7,
+            "Desglose de prueba",
+            aviso_top_repetido=True,
+            ranking_posicion=4,
+        )
+        assert "🔄 *Top 3 sin cambios respecto al análisis anterior*" in msg_repetido
+        assert "💡 _Exponiendo siguiente mejor alternativa #4 del catálogo:_" in msg_repetido
+        assert "Orbea Rise M20 Alternativa" in msg_repetido
+
+        # 4. Formateo de mensaje normal: sin aviso
+        msg_normal = formatear_mensaje(b_alt, 8.7, "Desglose de prueba", aviso_top_repetido=False)
+        assert "Top 3 sin cambios" not in msg_normal
+
+        # 5. Heartbeat con rotación activa
+        hb_data = {
+            "fecha_hora": "2026-11-17 12:00:00",
+            "duracion_seg": 20.0,
+            "total_procesadas": 15,
+            "candidatas_aptas": 6,
+            "notificadas": 3,
+            "top_repetido": True,
+            "offset_usado": 3,
+            "estado": "🟢 Runner operativo",
+        }
+        msg_hb = formatear_heartbeat(hb_data)
+        assert "🔄 Rotación activa: Top 3 idéntico (exponiendo #4 a #6)" in msg_hb
+
+        # 6. Simular flujo completo en main.ejecutar_busqueda con Top 3 repetido
+        from main import ejecutar_busqueda
+        oportunidades_simuladas = [
+            (bici_prueba(bici_id=f"sim-{i}", titulo=f"Bici Sim {i}", precio=2400.0 + i * 10), 9.0 - i * 0.2, "Desglose")
+            for i in range(1, 7)
+        ]
+
+        with patch("main.BaseDatos", return_value=db), \
+             patch("main._recolectar_oportunidades", return_value=oportunidades_simuladas), \
+             patch("main.exportar_radar_mercado_md"), \
+             patch("main.enviar", return_value=True) as mock_enviar, \
+             patch("main.enviar_heartbeat"):
+
+            # Primera pasada: Top 3 nuevo (sim-1, sim-2, sim-3)
+            ejecutar_busqueda(forzar_envio=True)
+            assert mock_enviar.call_count == 3
+            llamadas = mock_enviar.call_args_list
+            assert llamadas[0][0][0].bici_id == "sim-1"
+            assert llamadas[0][1]["aviso_top_repetido"] is False
+            assert llamadas[0][1]["ranking_posicion"] == 1
+
+            ult_analisis = db.obtener_ultimo_analisis()
+            assert ult_analisis["top3_ids"] == ["sim-1", "sim-2", "sim-3"]
+            assert ult_analisis["enviados_ids"] == ["sim-1", "sim-2", "sim-3"]
+            assert ult_analisis["offset_usado"] == 0
+            assert ult_analisis["repetido"] is False
+
+            # Segunda pasada consecutiva: mismo catálogo (Top 3 idéntico) -> rota a 4, 5, 6
+            mock_enviar.reset_mock()
+            ejecutar_busqueda(forzar_envio=True)
+
+            assert mock_enviar.call_count == 3
+            llamadas2 = mock_enviar.call_args_list
+            assert llamadas2[0][0][0].bici_id == "sim-4"
+            assert llamadas2[0][1]["aviso_top_repetido"] is True
+            assert llamadas2[0][1]["ranking_posicion"] == 4
+
+            assert llamadas2[1][0][0].bici_id == "sim-5"
+            assert llamadas2[1][1]["aviso_top_repetido"] is True
+            assert llamadas2[1][1]["ranking_posicion"] == 5
+
+            assert llamadas2[2][0][0].bici_id == "sim-6"
+            assert llamadas2[2][1]["aviso_top_repetido"] is True
+            assert llamadas2[2][1]["ranking_posicion"] == 6
+
+            ult_analisis2 = db.obtener_ultimo_analisis()
+            assert ult_analisis2["top3_ids"] == ["sim-1", "sim-2", "sim-3"]
+            assert ult_analisis2["enviados_ids"] == ["sim-4", "sim-5", "sim-6"]
+            assert ult_analisis2["offset_usado"] == 3
+            assert ult_analisis2["repetido"] is True
+
+    finally:
+        # En Windows, SQLite puede mantener el archivo temporal abierto brevemente.
+        try:
+            if os.path.exists(ruta_db):
+                os.unlink(ruta_db)
+        except (PermissionError, OSError):
+            pass
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -1081,4 +1197,5 @@ if __name__ == "__main__":
     test_radar_mercado_metricas_enriquecidas_y_heartbeat()
     test_mega_chollo_alerta_y_formato_telegram()
     test_segmentacion_sonora_vs_silenciosa_telegram()
+    test_rotacion_consecutiva_top3_y_aviso()
     print("Todas las pruebas pasaron (GREEN).")
