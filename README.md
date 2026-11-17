@@ -645,11 +645,18 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 
 ### Plan de trabajo propuesto para mañana (TODOs)
 
-- [ ] **TODO 1 — Scoring de degradación de batería en el evaluador (`evaluator.py`)**
+- [ ] **TODO 1 — Integración de Scraper para Wallapop con geolocalización (Fuenlabrada +50 km)**
+  - **Objetivo**: Diseñar e implementar el scraper `scrapers/wallapop.py` para capturar anuncios de Wallapop de e-MTB doble suspensión que cumplan los filtros del proyecto (Talla M, doble suspensión, batería > 500 Wh, peso < 21 kg / preferible < 19 kg, precio 2.000 € a 3.000 € - máx 3.300 €) en un radio de 50 km alrededor de Fuenlabrada (Madrid: latitud `40.2842`, longitud `-3.7942`, `distance_in_km=50`).
+  - **Arquitectura y desafíos técnicos previstos**:
+    1. *Endpoint / API interna de búsqueda*: Explorar `/api/v3/general/search` de Wallapop con parámetros geográficos (`latitude`, `longitude`, `distance_in_km=50`), categoría Bicicletas (`category_ids=12465`), rango de precio y keywords clave (`e-mtb`, `doble`, `orbea rise`, `turbo levo`, `bh ilynx`, `fuel exe`).
+    2. *Extracción en lenguaje natural (particulares)*: Al no disponer de tablas técnicas de tienda oficial, aprovechar el motor de inferencia de `enriquecedor_web.py` para detectar talla M, capacidad de batería (interna + extender), kilometraje real y año en la descripción libre.
+    3. *Auditoría pericial para compras entre particulares*: Reflejar en la nota pericial y ficha de Telegram que la compra entre particulares carece de garantía comercial de reacondicionado (`garantia_anos=0` vs 1-3 años de los portales actuales).
+    4. *Evasión de bloqueos / firmas anti-bot*: Aplicar `StealthyFetcher` de Scrapling con rotación de User-Agent y soporte de proxies en caso de rate-limiting.
+- [ ] **TODO 2 — Scoring de degradación de batería en el evaluador (`evaluator.py`)**
   - **Objetivo**: Incorporar formalmente en el algoritmo numérico de `evaluator.py` la penalización/bonificación por `bateria_salud_pct` y `bateria_ciclos` cuando estén disponibles, alineándolo con el Perito Mecánico Senior.
-- [ ] **TODO 2 — Dashboard web interactivo o exportación HTML para el Radar de Mercado**
+- [ ] **TODO 3 — Dashboard web interactivo o exportación HTML para el Radar de Mercado**
   - **Objetivo**: Desarrollar un visualizador web ligero (o exportación HTML interactiva) para consultar de forma gráfica la rotación de stock, curvas de permanencia y precios del catálogo SQLite.
-- [ ] **TODO 3 — Detección de chollos por degradación anómala de precio (Delta diario > 300 €)**
+- [ ] **TODO 4 — Detección de chollos por degradación anómala de precio (Delta diario > 300 €)**
   - **Objetivo**: Añadir badge de alerta reactiva cuando una bicicleta sufra un recorte repentino de precio mayor a 300 € en un solo día, independientemente de su PVP original.
 
 ### Dependencias instaladas
