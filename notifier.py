@@ -32,6 +32,8 @@ def formatear_mensaje(
     seguimiento: Optional[dict] = None,
     aviso_top_repetido: bool = False,
     ranking_posicion: Optional[int] = None,
+    es_rotacion_portal: bool = False,
+    aviso_retorno_top1: bool = False,
 ) -> str:
     """
     Construye el mensaje Markdown para Telegram (S9).
@@ -145,11 +147,21 @@ def formatear_mensaje(
             linea_seguimiento = f"📊 Seguimiento: {' | '.join(partes_seg)}\n"
 
     banner_repetido = ""
-    if aviso_top_repetido:
+    if aviso_top_repetido and es_rotacion_portal:
+        banner_repetido = (
+            f"🔄 *#1 de {bici.sitio} sin cambios respecto al análisis anterior*\n"
+            f"💡 _Exponiendo alternativa #2 de {bici.sitio}:_\n\n"
+        )
+    elif aviso_top_repetido:
         pos_txt = f" #{ranking_posicion}" if ranking_posicion is not None else ""
         banner_repetido = (
             f"🔄 *Top 3 sin cambios respecto al análisis anterior*\n"
             f"💡 _Exponiendo siguiente mejor alternativa{pos_txt} del catálogo:_\n\n"
+        )
+    elif aviso_retorno_top1:
+        banner_repetido = (
+            f"🏆 *Confirmada #1 en {bici.sitio}*\n"
+            f"💡 _Vuelve al primer puesto tras alternar al #2 (sigue siendo la mejor opción de {bici.sitio}):_\n\n"
         )
 
     linea_ubicacion = (
@@ -177,7 +189,7 @@ def formatear_mensaje(
         f"🛣️ Kilómetros: {km}\n"
         f"🛡️ Garantía: {garantia_txt}\n"
         f"{linea_seguimiento}\n"
-        f"_Valoración técnica (IA / 5 ejes):_\n{desglose_seguro}\n\n"
+        f"_Valoración técnica (Perito Escéptico / 5 ejes):_\n{desglose_seguro}\n\n"
         f"🔗 [Enlace directo de compra]({bici.url})"
     )
     return mensaje
@@ -192,6 +204,8 @@ def enviar(
     silencioso: Optional[bool] = None,
     aviso_top_repetido: bool = False,
     ranking_posicion: Optional[int] = None,
+    es_rotacion_portal: bool = False,
+    aviso_retorno_top1: bool = False,
 ) -> bool:
     """
     Envía el mensaje a Telegram. Devuelve True si tuvo éxito.
@@ -212,6 +226,8 @@ def enviar(
         seguimiento=seguimiento,
         aviso_top_repetido=aviso_top_repetido,
         ranking_posicion=ranking_posicion,
+        es_rotacion_portal=es_rotacion_portal,
+        aviso_retorno_top1=aviso_retorno_top1,
     )
 
     es_mega = es_mega_chollo(bici, nota)
@@ -274,7 +290,13 @@ def formatear_heartbeat(resumen: dict) -> str:
     linea_mega = f"  • Mega Chollos (>50% dto y Nota >= 9.0): *{mega_chollos}* 💥\n" if mega_chollos > 0 else ""
 
     linea_rotacion = ""
-    if resumen.get("top_repetido"):
+    portales_rot = resumen.get("portales_rotados") or []
+    portales_ret = resumen.get("portales_retorno_top1") or []
+    if portales_rot:
+        linea_rotacion += f"  • 🔄 Alternativa #2 (misma #1): {', '.join(portales_rot)}\n"
+    if portales_ret:
+        linea_rotacion += f"  • 🏆 Retorno a #1 confirmada: {', '.join(portales_ret)}\n"
+    if not linea_rotacion and resumen.get("top_repetido"):
         off = resumen.get("offset_usado", 3)
         cant_rot = resumen.get("notificadas", 3)
         linea_rotacion = f"  • 🔄 Rotación activa: Top 3 idéntico (exponiendo #{off + 1} a #{off + cant_rot})\n"

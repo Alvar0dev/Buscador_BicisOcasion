@@ -383,6 +383,11 @@ class WallapopScraper(BaseScraper):
             or (item.get("is_refurbished") or {}).get("flag")
         )
         garantia_anos = 1 if tiene_garantia_verificada else self.sitio.garantia_anos
+        tl_fact = texto_completo.lower()
+        tiene_factura = bool(
+            re.search(r"\bfactura\b", tl_fact)
+            and not re.search(r"\b(?:sin|no\s+tengo|no\s+hay|no\s+dispongo\s+de)\s+factura\b", tl_fact)
+        )
 
         ciudad = loc.get("city") or ""
         if ciudad and dist_km is not None:
@@ -427,4 +432,5 @@ class WallapopScraper(BaseScraper):
             pvp_original=None,
             ubicacion=ubicacion,
             imagenes=imagenes or None,
+            tiene_factura=tiene_factura,
         )

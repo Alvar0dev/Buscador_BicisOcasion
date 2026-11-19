@@ -113,15 +113,20 @@ class BaseDatos:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS analisis_ejecuciones (
-                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                    fecha         TEXT NOT NULL DEFAULT (datetime('now')),
-                    top3_ids      TEXT NOT NULL,
-                    enviados_ids  TEXT NOT NULL,
-                    offset_usado  INTEGER NOT NULL DEFAULT 0,
-                    repetido      INTEGER NOT NULL DEFAULT 0
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    fecha           TEXT NOT NULL DEFAULT (datetime('now')),
+                    top3_ids        TEXT NOT NULL,
+                    enviados_ids    TEXT NOT NULL,
+                    offset_usado    INTEGER NOT NULL DEFAULT 0,
+                    repetido        INTEGER NOT NULL DEFAULT 0,
+                    estado_portales TEXT
                 )
                 """
             )
+            try:
+                conn.execute("ALTER TABLE analisis_ejecuciones ADD COLUMN estado_portales TEXT")
+            except Exception:
+                pass
             conn.commit()
 
     def ya_enviada(self, bici_id: str) -> bool:
@@ -536,21 +541,23 @@ class BaseDatos:
         enviados_ids: List[str],
         offset_usado: int = 0,
         repetido: bool = False,
+        estado_portales: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Registra los resultados y el Top 3 de una pasada de análisis."""
+        """Registra los resultados, portales rotados y estado por página de una pasada."""
         import json
         with self._conectar() as conn:
             conn.execute(
                 """
                 INSERT INTO analisis_ejecuciones
-                    (top3_ids, enviados_ids, offset_usado, repetido)
-                VALUES (?, ?, ?, ?)
+                    (top3_ids, enviados_ids, offset_usado, repetido, estado_portales)
+                VALUES (?, ?, ?, ?, ?)
                 """,
                 (
                     json.dumps(top3_ids),
                     json.dumps(enviados_ids),
                     int(offset_usado),
                     1 if repetido else 0,
+                    json.dumps(estado_portales or {}),
                 ),
             )
             conn.commit()
@@ -572,6 +579,12 @@ class BaseDatos:
                 enviados = json.loads(fila["enviados_ids"])
             except Exception:
                 enviados = []
+            estado_portales = {}
+            if "estado_portales" in fila.keys() and fila["estado_portales"]:
+                try:
+                    estado_portales = json.loads(fila["estado_portales"])
+                except Exception:
+                    estado_portales = {}
             return {
                 "id": fila["id"],
                 "fecha": fila["fecha"],
@@ -579,5 +592,6 @@ class BaseDatos:
                 "enviados_ids": enviados,
                 "offset_usado": fila["offset_usado"],
                 "repetido": bool(fila["repetido"]),
+                "estado_portales": estado_portales,
             }
 

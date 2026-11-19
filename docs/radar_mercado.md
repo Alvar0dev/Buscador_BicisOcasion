@@ -1,6 +1,6 @@
 # 📡 Radar de Mercado e-MTB de Ocasión
 
-> **Última actualización:** `2026-11-19 18:05:09`  
+> **Última actualización:** `2026-11-19 20:01:48`  
 > **Total en seguimiento activo:** `208` unidades | **Permanencia media global:** `2.2 días`  
 > **Oportunidades con rebaja activa:** `16` unidades (Ahorro medio: `-88 €`) | **Zona de Vigilancia:** `88` unidades
 

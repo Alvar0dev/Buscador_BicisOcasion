@@ -22,7 +22,7 @@ import config as cfg
 from config import SITIOS, HORA_EJECUCION, NOTA_MIN_NOTIFICAR, NOTA_MIN_AGUARDAR, TOP_N_NOTIFICAR
 from db import BaseDatos, titulos_equivalentes_dedup
 from evaluator import evaluar, calcular_nota_oportunidad, pasa_filtros_estrictos, prioridad_modalidad
-from gemini_classifier import enriquecer_y_valorar_bici
+from gemini_classifier import enriquecer_y_valorar_bici, _es_anuncio_generico_sin_modelo
 from notifier import enviar, enviar_heartbeat, es_mega_chollo
 from scrapers.bike_ocasion import BikeOcasionScraper
 from scrapers.buhobike import BuhobikeScraper
@@ -131,23 +131,21 @@ def _enviar_alerta_telegram(texto: str) -> None:
 
 def clave_orden_estrictas(item: tuple) -> tuple:
     """
-    Clave de ordenación para bicicletas que superan los filtros estrictos (< 21 kg):
-      1. Salud mecánica: nota >= 6.0 y km <= 4.000 (las bicis mecánicamente sanas
-         siempre van antes que bicis con desgaste severo de > 4.000 km).
-      2. Sin Línea Roja activa (km <= 6.000 y peso < 21.0 kg).
+    Clave de ordenación por calidad real dentro de bicicletas que pasan filtros estrictos:
+      1. Salud mecánica: nota >= 6.0, km verificado <= 4.000 y modelo identificable.
+      2. Sin Línea Roja activa (km <= 6.000 o no descartada, peso < 21.0 kg y no genérica).
       3. Prioridad de modalidad efectiva (para bicicletas mecánicamente sanas):
          XC / Downcountry (3) > Light e-MTB (2) > Trail (1).
-         Si salud_mecanica == 0 (> 4.000 km o nota < 6.0), prima la Nota Pericial
-         para que un 5.5/10 (4.238 km) supere siempre a un 3.5/10 (5.000 km).
       4. Mayor Nota de Oportunidad del Perito Mecánico.
-      5. Prioridad de modalidad como desempate en desgastadas.
+      5. Prioridad de modalidad como desempate.
       6. Menor peso en kg.
     """
     bici, nota = item[0], item[1]
-    km = bici.km or 0
+    km = bici.km
     peso = bici.peso_kg or 20.0
-    salud_mecanica = 1 if (nota >= 6.0 and km <= 4000) else 0
-    sin_linea_roja = 1 if (km <= 6000 and peso < 21.0) else 0
+    es_generico = bool(nota <= 4.5 and _es_anuncio_generico_sin_modelo(bici))
+    salud_mecanica = 1 if (nota >= 6.0 and km is not None and km <= 4000 and not es_generico) else 0
+    sin_linea_roja = 1 if ((km is None or km <= 6000) and peso < 21.0 and not es_generico) else 0
     mod_prio = prioridad_modalidad(bici)
     return (
         salud_mecanica,
@@ -296,10 +294,8 @@ def _recolectar_oportunidades(
 
     logger.info(f"[IA/Enriquecedor] Analizando y completando {len(candidatas_pre)} candidatas pre-filtradas...")
 
-    estrictas_nuevas = []
-    estrictas_conocidas = []
-    respaldo_nuevas = []
-    respaldo_conocidas = []
+    estrictas_pool = []
+    respaldo_pool = []
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         futuros = {
@@ -334,48 +330,30 @@ def _recolectar_oportunidades(
                 continue
 
             es_nueva = forzar_envio or db.debe_reenviarse(bici, nota)
-            apto_post, motivo_post = pasa_filtros_estrictos(bici)
+            apto_pre, motivo_post = pasa_filtros_estrictos(bici)
 
-            if apto_post:
-                if es_nueva:
-                    estrictas_nuevas.append((bici, nota, desglose))
-                else:
-                    estrictas_conocidas.append((bici, nota, desglose))
+            if apto_pre:
+                estrictas_pool.append((bici, nota, desglose, es_nueva))
             else:
                 logger.info(f"  [Candidata cercana] {bici.titulo}: {motivo_post} (Nota {nota}/10)")
-                if es_nueva:
-                    respaldo_nuevas.append((bici, nota, desglose))
-                else:
-                    respaldo_conocidas.append((bici, nota, desglose))
+                respaldo_pool.append((bici, nota, desglose, es_nueva))
 
-    # Ordenar las estrictas (< 21 kg) priorizando:
-    #   1. Salud mecánica: nota >= 6.0 y km <= 4.000 (evita que una XC muy castigada
-    #      con 5.000 km y nota 3.5/10 supere a bicis sanas de < 2.000 km con 6.5-7.5/10)
-    #   2. Sin Línea Roja activa (km <= 6.000 y peso < 21.0 kg)
-    #   3. Modalidad: XC / Downcountry (3) > Light e-MTB (2) > Trail (1)
-    #   4. Mayor Nota de Oportunidad
-    #   5. Menor peso en kg
-    estrictas_nuevas.sort(key=clave_orden_estrictas, reverse=True)
-    estrictas_conocidas.sort(key=clave_orden_estrictas, reverse=True)
+    # Ordenar estrictas (< 21 kg) por calidad real (novedad solo desempata a igualdad exacta)
+    estrictas_pool.sort(key=lambda x: (clave_orden_estrictas(x[:3]), 1 if x[3] else 0), reverse=True)
 
-    # Ordenar respaldo priorizando XC, menor peso y mayor nota
+    # Ordenar respaldo priorizando modelo identificable, mayor nota, XC y menor peso
     clave_orden_respaldo = lambda x: (
+        1 if not (x[1] <= 4.5 and _es_anuncio_generico_sin_modelo(x[0])) else 0,
+        x[1],
         prioridad_modalidad(x[0]),
         -(x[0].peso_kg or 25.0),
-        x[1],
+        1 if x[3] else 0,
     )
-    respaldo_nuevas.sort(key=clave_orden_respaldo, reverse=True)
-    respaldo_conocidas.sort(key=clave_orden_respaldo, reverse=True)
+    respaldo_pool.sort(key=clave_orden_respaldo, reverse=True)
 
-    # Devolver todas las candidatas ordenadas por estricta prioridad
-    # (estrictas nuevas -> estrictas conocidas -> respaldo nuevas -> respaldo conocidas)
-    # permitiendo la rotación de Top 3 a siguientes alternativas en ejecuciones consecutivas.
-    seleccion = (
-        list(estrictas_nuevas)
-        + list(estrictas_conocidas)
-        + list(respaldo_nuevas)
-        + list(respaldo_conocidas)
-    )
+    seleccion = [
+        (b, n, d) for (b, n, d, _) in (estrictas_pool + respaldo_pool)
+    ]
 
     if telemetria is not None:
         telemetria["conteo_por_portal"] = conteo_por_portal
@@ -511,8 +489,109 @@ def exportar_radar_mercado_md(
     return destino
 
 
+def seleccionar_por_portal(
+    oportunidades: list,
+    ultimo_analisis: Optional[dict] = None,
+) -> Dict[str, Any]:
+    """
+    Selecciona exactamente 1 bicicleta por cada página con candidatas disponibles,
+    aplicando rotación ping-pong diaria por página (#1 -> #2 -> #1) si su #1 no cambió:
+      - Día 1 (o #1 nuevo): envía #1 real de esa página.
+      - Día 2 (misma #1 que ayer y >= 2 candidatas válidas): envía #2 con aviso.
+      - Día 3 (sigue misma #1 tras alternar al #2): vuelve a #1 confirmando liderazgo.
+    """
+    orden_sitios = [s.nombre for s in SITIOS]
+    for b, _, _ in oportunidades:
+        if b.sitio not in orden_sitios:
+            orden_sitios.append(b.sitio)
+
+    estado_previo = (ultimo_analisis or {}).get("estado_portales") or {}
+    nuevo_estado_portales: Dict[str, Dict[str, Any]] = {}
+    seleccionados_raw = []
+    top1_ids_por_portal = []
+
+    for sitio in orden_sitios:
+        vistos_sitio = set()
+        items_sitio = []
+        for op in oportunidades:
+            if op[0].sitio == sitio and op[0].bici_id not in vistos_sitio:
+                vistos_sitio.add(op[0].bici_id)
+                items_sitio.append(op)
+        if not items_sitio:
+            continue
+
+        estrictas_sitio = [op for op in items_sitio if pasa_filtros_estrictos(op[0])[0]]
+        estrictas_no_gen = [
+            op for op in estrictas_sitio
+            if op[1] > 4.5 or not _es_anuncio_generico_sin_modelo(op[0])
+        ]
+        respaldo_sitio = [op for op in items_sitio if not pasa_filtros_estrictos(op[0])[0]]
+
+        if estrictas_no_gen:
+            pool_sitio = estrictas_no_gen
+            es_estricta_pool = True
+        elif estrictas_sitio:
+            pool_sitio = estrictas_sitio[:1]
+            es_estricta_pool = False
+        elif respaldo_sitio:
+            pool_sitio = respaldo_sitio[:1]
+            es_estricta_pool = False
+        else:
+            continue
+
+        top1_item = pool_sitio[0]
+        top1_id = top1_item[0].bici_id
+        top1_ids_por_portal.append(top1_id)
+
+        prev = estado_previo.get(sitio)
+        if prev and prev.get("top1_id") == top1_id:
+            if prev.get("enviado_id") == top1_id and len(pool_sitio) >= 2 and es_estricta_pool:
+                elegido = pool_sitio[1]
+                pos = 2
+                es_rot2 = True
+                retorno_top1 = False
+            else:
+                elegido = top1_item
+                pos = 1
+                es_rot2 = False
+                retorno_top1 = bool(prev.get("enviado_id") != top1_id and len(pool_sitio) >= 2)
+        else:
+            elegido = top1_item
+            pos = 1
+            es_rot2 = False
+            retorno_top1 = False
+
+        nuevo_estado_portales[sitio] = {
+            "top1_id": top1_id,
+            "enviado_id": elegido[0].bici_id,
+            "posicion": pos,
+        }
+        seleccionados_raw.append({
+            "sitio": sitio,
+            "item": elegido,
+            "posicion": pos,
+            "es_rot2": es_rot2,
+            "retorno_top1": retorno_top1,
+            "es_estricta": es_estricta_pool,
+        })
+
+    # Ordenar envíos: portales con opciones válidas <21 kg primero, luego por calidad real
+    seleccionados_raw.sort(
+        key=lambda x: (1 if x["es_estricta"] else 0, clave_orden_estrictas(x["item"])),
+        reverse=True,
+    )
+
+    return {
+        "seleccionados": seleccionados_raw,
+        "estado_portales": nuevo_estado_portales,
+        "top1_ids": top1_ids_por_portal,
+        "portales_rotados": [x["sitio"] for x in seleccionados_raw if x["es_rot2"]],
+        "portales_retorno_top1": [x["sitio"] for x in seleccionados_raw if x["retorno_top1"]],
+    }
+
+
 def ejecutar_busqueda(forzar_envio: bool = False) -> None:
-    """Ejecuta una pasada completa de búsqueda, clasificación IA y notificación Top N."""
+    """Ejecuta una pasada completa de búsqueda, valoración pericial y entrega 1 opción por página."""
     t_inicio = time.time()
     logger.info(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Iniciando búsqueda de e-MTB...")
 
@@ -529,7 +608,11 @@ def ejecutar_busqueda(forzar_envio: bool = False) -> None:
     total_notificadas = 0
     mega_chollos_count = 0
     aviso_top_repetido = False
-    offset_a_usar = 0
+    portales_rotados = []
+    portales_retorno_top1 = []
+
+    ultimo_analisis = db.obtener_ultimo_analisis()
+    estado_portales_previo = (ultimo_analisis or {}).get("estado_portales") or {}
 
     if oportunidades:
         for op in oportunidades:
@@ -537,55 +620,31 @@ def ejecutar_busqueda(forzar_envio: bool = False) -> None:
             if es_mega_chollo(b_op, n_op):
                 mega_chollos_count += 1
 
-        top3_actual_ids = [op[0].bici_id for op in oportunidades[:TOP_N_NOTIFICAR]]
-        ultimo_analisis = db.obtener_ultimo_analisis()
+        plan = seleccionar_por_portal(oportunidades, ultimo_analisis=ultimo_analisis)
+        seleccionados = plan["seleccionados"]
+        nuevo_estado_portales = plan["estado_portales"]
+        top1_ids_por_portal = plan["top1_ids"]
 
-        es_mismo_top3 = bool(
-            ultimo_analisis
-            and ultimo_analisis.get("top3_ids") == top3_actual_ids
-            and len(top3_actual_ids) > 0
-        )
-
-        if es_mismo_top3:
-            total_ops = len(oportunidades)
-            if total_ops > TOP_N_NOTIFICAR:
-                offset_previo = int(ultimo_analisis.get("offset_usado", 0)) if ultimo_analisis else 0
-                nuevo_offset = offset_previo + TOP_N_NOTIFICAR
-                if nuevo_offset < total_ops:
-                    offset_a_usar = nuevo_offset
-                else:
-                    offset_a_usar = TOP_N_NOTIFICAR
-                aviso_top_repetido = True
-                logger.info(
-                    f"[main] Top 3 idéntico al análisis previo ({top3_actual_ids}). "
-                    f"Rotando a siguientes alternativas (offset={offset_a_usar}, ranking #{offset_a_usar+1}-#{offset_a_usar+TOP_N_NOTIFICAR})."
-                )
-            else:
-                logger.info(
-                    f"[main] Top 3 idéntico pero catálogo sin más alternativas ({total_ops} bicis). "
-                    f"Manteniendo Top {TOP_N_NOTIFICAR}."
-                )
-                offset_a_usar = 0
-                aviso_top_repetido = False
-
-        a_notificar = oportunidades[offset_a_usar : offset_a_usar + TOP_N_NOTIFICAR]
-        if not a_notificar:
-            a_notificar = oportunidades[:TOP_N_NOTIFICAR]
-            offset_a_usar = 0
-            aviso_top_repetido = False
-
-        mejor_nota = max(x[1] for x in a_notificar)
+        mejor_nota = max((x["item"][1] for x in seleccionados), default=0.0)
         logger.info(
-            f"[main] Seleccionadas {len(a_notificar)} bicicletas para notificar "
-            f"(offset: {offset_a_usar} | mejor nota: {mejor_nota}/10 | Mega Chollos en pool: {mega_chollos_count} | repetido: {aviso_top_repetido})."
+            f"[main] Seleccionada(s) {len(seleccionados)} bici(s) (1 por página con stock) "
+            f"| mejor nota: {mejor_nota}/10 | Mega Chollos en pool: {mega_chollos_count} "
+            f"| rotación #2 prevista: {plan['portales_rotados'] or 'ninguna'} "
+            f"| retorno #1 previsto: {plan['portales_retorno_top1'] or 'ninguno'}."
         )
 
-        for idx, (bici, nota, desglose) in enumerate(a_notificar):
+        enviados_ids = []
+        estado_portales_confirmado = dict(estado_portales_previo)
+        for entry in seleccionados:
+            sitio_entry = entry["sitio"]
+            bici, nota, desglose = entry["item"]
+            pos_portal = entry["posicion"]
+            es_rot2 = entry["es_rot2"]
+            ret_top1 = entry["retorno_top1"]
             precio_anterior = db.precio_previo(bici.bici_id)
             seguimiento = db.obtener_seguimiento(bici.bici_id)
             es_mega = es_mega_chollo(bici, nota)
             tag_mega = " [💥 MEGA CHOLLO]" if es_mega else ""
-            pos_ranking = offset_a_usar + idx + 1
 
             if enviar(
                 bici,
@@ -593,18 +652,32 @@ def ejecutar_busqueda(forzar_envio: bool = False) -> None:
                 desglose,
                 precio_anterior=precio_anterior,
                 seguimiento=seguimiento,
-                aviso_top_repetido=aviso_top_repetido,
-                ranking_posicion=pos_ranking,
+                aviso_top_repetido=es_rot2,
+                ranking_posicion=pos_portal,
+                es_rotacion_portal=es_rot2,
+                aviso_retorno_top1=ret_top1,
             ):
                 db.registrar(bici, nota, precio_anterior=precio_anterior)
+                enviados_ids.append(bici.bici_id)
+                estado_portales_confirmado[sitio_entry] = nuevo_estado_portales[sitio_entry]
+                if es_rot2:
+                    portales_rotados.append(sitio_entry)
+                elif ret_top1:
+                    portales_retorno_top1.append(sitio_entry)
                 total_notificadas += 1
-                logger.info(f"  NOTIFICADA #{pos_ranking}: {bici.titulo} ({bici.peso_kg} kg) - Nota {nota}/10{tag_mega}")
+                estado_tag = " (rot #2)" if es_rot2 else (" (retorno #1)" if ret_top1 else " (#1)")
+                logger.info(
+                    f"  NOTIFICADA [{bici.sitio}{estado_tag}]: {bici.titulo} "
+                    f"({bici.peso_kg} kg) - Nota {nota}/10{tag_mega}"
+                )
 
+        aviso_top_repetido = bool(portales_rotados)
         db.registrar_analisis(
-            top3_ids=top3_actual_ids,
-            enviados_ids=[bici.bici_id for bici, _, _ in a_notificar],
-            offset_usado=offset_a_usar,
+            top3_ids=top1_ids_por_portal,
+            enviados_ids=enviados_ids,
+            offset_usado=0,
             repetido=aviso_top_repetido,
+            estado_portales=estado_portales_confirmado,
         )
     else:
         logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
@@ -614,6 +687,7 @@ def ejecutar_busqueda(forzar_envio: bool = False) -> None:
             enviados_ids=[],
             offset_usado=0,
             repetido=False,
+            estado_portales=estado_portales_previo,
         )
 
     duracion_seg = round(time.time() - t_inicio, 1)
@@ -630,7 +704,9 @@ def ejecutar_busqueda(forzar_envio: bool = False) -> None:
             "notificadas": total_notificadas,
             "mega_chollos": mega_chollos_count,
             "top_repetido": aviso_top_repetido,
-            "offset_usado": offset_a_usar,
+            "offset_usado": 0,
+            "portales_rotados": portales_rotados,
+            "portales_retorno_top1": portales_retorno_top1,
             "total_en_catalogo": stats_radar.get("total", 0),
             "total_en_vigilancia": len(stats_radar.get("en_vigilancia", [])),
             "estado": "🟢 Runner operativo" if telemetria_ejecucion.get("total_procesadas", 0) > 0 else "⚠️ Sin bicicletas procesadas",

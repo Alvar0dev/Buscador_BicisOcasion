@@ -152,12 +152,14 @@ def test_clasificador_hibrido_catalogo_y_5_ejes():
 
     nota, desglose = valorar_autonomo(b)
     assert nota >= 8.0
-    assert "Diagnóstico motor" in desglose
-    assert "Estado batería" in desglose
+    assert "Auditoría Pericial:" in desglose
+    assert "Motor y Batería:" in desglose
+    assert "Garantía y Vendedor:" in desglose
 
     pts_bosch, txt_bosch = evaluar_documentacion_motor("Bosch Performance Line SX")
-    assert pts_bosch >= 1.9
+    assert pts_bosch < 1.9
     assert "Bosch DiagnosticTool" in txt_bosch
+    assert "app de usuario" in txt_bosch
 
 
 def test_dedup_sqlite():
@@ -232,50 +234,60 @@ def test_extraccion_titulo_sin_dto_y_suspension_rigidez():
 
 
 def test_perito_mecanico_senior_reglas_y_lineas_rojas():
-    """Verifica el cálculo paso a paso del Perito Mecánico Senior y sus Líneas Rojas."""
+    """Verifica la rúbrica matemática de 5 ejes sin bonos positivos y las 5 Líneas Rojas del Perito Escéptico."""
     from gemini_classifier import auditar_perito_mecanico
 
-    # Caso 1: Línea Roja > 6.000 km + BH (-2.0 base sin informe PDF - 1.0 >3000km = -3.0)
-    b_roja_km = bici_prueba(km=8407, peso_kg=16.8, motor="BH 2EXMAG", precio=2768.0)
-    res_km = auditar_perito_mecanico(b_roja_km)
-    assert res_km["nota_final"] <= 4.5, f"Línea roja >6000 km violada: {res_km}"
-    assert res_km["delta_motor"] == -3.0
-
-    # Caso 2: Línea Roja > 21.0 kg (nota máxima 4.0)
-    b_roja_peso = bici_prueba(km=500, peso_kg=22.4, motor="Bosch CX", precio=2500.0)
-    res_peso = auditar_perito_mecanico(b_roja_peso)
-    assert res_peso["nota_final"] <= 4.0, f"Línea roja >21 kg violada: {res_peso}"
-
-    # Caso 3: BH con 1.193 km (-1.0 km) + 18.2 kg (+0.5 peso) - 2.0 (centralita BH sin informe) => 7.5/10
-    b_bh_bajos_km = bici_prueba(km=1193, peso_kg=18.2, motor="BH 2EXMAG", precio=2981.0)
-    res_bh = auditar_perito_mecanico(b_bh_bajos_km)
-    assert res_bh["delta_motor"] == -2.0
-    assert res_bh["nota_final"] == 7.5, f"Esperado 7.5, obtenido: {res_bh}"
-
-    # Caso 4: Precio > 3.000 € y > 2.000 km (-1.5 precio, -2.5 km) con Shimano (-0.0)
-    b_cara_rodada = bici_prueba(km=2500, peso_kg=19.5, motor="Shimano EP8", precio=3150.0)
-    res_cara = auditar_perito_mecanico(b_cara_rodada)
-    assert res_cara["delta_km"] == -2.5
-    assert res_cara["delta_precio"] == -1.5
-    assert res_cara["nota_final"] == 6.0
-
-    # Caso 5: BH aparente chollo (<19 kg, 200 km, >50% dto vs PVP) queda limitada <= 8.5 sin alcanzar Mega Chollo >= 9.0
-    b_bh_chollo = bici_prueba(
+    # Caso 1: Línea Roja > 6.000 km (-4.5, máx 4.5) + BH 2EXMAG > 2000 km (-1.0) + sin SoH > 1500 km (-0.5) = -1.5
+    b_roja_km = bici_prueba(
         titulo="BH iLynx Race Carbon 8.4 LT",
-        km=200,
+        km=8407,
         peso_kg=16.8,
         motor="BH 2EXMAG",
-        precio=2000.0,
-        pvp_original=6000.0,
+        precio=2768.0,
     )
-    res_bh_chollo = auditar_perito_mecanico(b_bh_chollo)
-    assert res_bh_chollo["nota_final"] <= 8.5
-    assert es_mega_chollo(b_bh_chollo, res_bh_chollo["nota_final"]) is False
-    nota_eval_bh, desglose_eval_bh = calcular_nota_oportunidad(b_bh_chollo)
-    assert nota_eval_bh <= 8.5
-    assert "Ajuste BH" in desglose_eval_bh
-    pts_doc_bh, txt_doc_bh = evaluar_documentacion_motor("Shimano EP801", "BH iLynx+ Trail")
-    assert pts_doc_bh == 1.0 and "BH no genera informe PDF" in txt_doc_bh
+    res_km = auditar_perito_mecanico(b_roja_km)
+    assert res_km["nota_final"] <= 4.5, f"Línea roja >6000 km violada: {res_km}"
+    assert res_km["delta_km"] == -4.5
+    assert res_km["delta_motor"] == -1.5
+
+    # Caso 2: Línea Roja > 21.0 kg (nota máxima 4.0)
+    b_roja_peso = bici_prueba(titulo="Trek Rail 9.7 2023", km=500, peso_kg=22.4, motor="Bosch CX", precio=2500.0)
+    res_peso = auditar_perito_mecanico(b_roja_peso)
+    assert res_peso["nota_final"] <= 4.0, f"Línea roja >21 kg violada: {res_peso}"
+    assert res_peso["delta_peso"] == -6.0
+
+    # Caso 3: BH Race 1.193 km (-1.0 km) + 18.2 kg (0.0) - 0.5 (BH 2EXMAG <= 2000 km, <=1500 no extra SoH) => 8.5/10
+    b_bh_bajos_km = bici_prueba(
+        titulo="BH iLynx Race Carbon 8.4 LT",
+        km=1193,
+        peso_kg=18.2,
+        motor="BH 2EXMAG",
+        precio=2981.0,
+    )
+    res_bh = auditar_perito_mecanico(b_bh_bajos_km)
+    assert res_bh["delta_motor"] == -0.5
+    assert res_bh["nota_final"] == 8.5, f"Esperado 8.5, obtenido: {res_bh}"
+
+    # Caso 4: Precio 3.150 € (-0.5) + 2.500 km (-2.5) + 19.5 kg (-0.5) + Shimano sin SoH >1500 km (-0.5) => 6.0/10
+    b_cara_rodada = bici_prueba(
+        titulo="Orbea Rise M10 2023",
+        km=2500,
+        peso_kg=19.5,
+        motor="Shimano EP8",
+        precio=3150.0,
+    )
+    res_cara = auditar_perito_mecanico(b_cara_rodada)
+    assert res_cara["delta_km"] == -2.5
+    assert res_cara["delta_peso"] == -0.5
+    assert res_cara["delta_motor"] == -0.5
+    assert res_cara["delta_precio"] == -0.5
+    assert res_cara["nota_final"] == 6.0
+
+    # Caso 5: BH iLynx+ (Shimano EP801 abierto) vs BH iLynx Race sin '+' (BH 2EXMAG cerrado)
+    pts_doc_plus, txt_doc_plus = evaluar_documentacion_motor("Shimano EP801", "BH iLynx+ Trail Carbon 8.7")
+    assert pts_doc_plus == 1.9 and "abierto" in txt_doc_plus
+    pts_doc_race, txt_doc_race = evaluar_documentacion_motor("Shimano", "BH iLynx Race Carbon 8.4")
+    assert pts_doc_race == 1.0 and "BH no genera informe PDF" in txt_doc_race
 
 
 def test_optimizacion_tarjetas_upway_y_buhobike():
@@ -365,7 +377,7 @@ def test_optimizacion_tarjetas_upway_y_buhobike():
 
     b_plus = bici_prueba(titulo="BH iLynx+ Trail Carbon 8.7 XT", modalidad="Trail", motor="Shimano")
     b_plus = completar_con_catalogo(b_plus)
-    assert "Shimano EP801" in b_plus.motor and "BH" in b_plus.motor
+    assert b_plus.motor == "Shimano EP801"
 
     b_light = bici_prueba(titulo="Orbea Rise H30", modalidad="Light e-MTB / Trail")
     assert prioridad_modalidad(b_xc) > prioridad_modalidad(b_light) > prioridad_modalidad(b_plus)
@@ -532,16 +544,30 @@ def test_salud_bateria_soh_disponibilidad_y_extractores():
     assert apto_res is False
     assert "reservada o agotada" in motivo_res
 
-    # 5. Impacto de SoH % en Perito Mecánico Senior y formato de Telegram
-    b_soh_optimo = bici_prueba(bateria_wh=540, bateria_salud_pct=96, bateria_ciclos=38, km=1200, peso_kg=19.5)
+    # 5. Impacto de SoH % en Perito Mecánico Escéptico y formato de Telegram
+    b_soh_optimo = bici_prueba(
+        titulo="Orbea Rise M20 2023",
+        bateria_wh=540,
+        bateria_salud_pct=96,
+        bateria_ciclos=38,
+        km=1800,
+        peso_kg=19.5,
+    )
     audit_opt = auditar_perito_mecanico(b_soh_optimo)
-    assert audit_opt["delta_bateria"] == 0.5
-    assert "SoH medido: 96%" in audit_opt["txt_bateria"]
-    assert "38 ciclos diagnosticados" in audit_opt["txt_bateria"]
+    assert audit_opt["delta_motor"] == 0.0
+    assert "SoH medido: 96%" in audit_opt["txt_motor"]
+    assert "38 ciclos diagnosticados" in audit_opt["txt_motor"]
 
-    b_soh_malo = bici_prueba(bateria_wh=540, bateria_salud_pct=78, bateria_ciclos=240, km=1200, peso_kg=19.5)
+    b_soh_malo = bici_prueba(
+        titulo="Orbea Rise M20 2023",
+        bateria_wh=540,
+        bateria_salud_pct=78,
+        bateria_ciclos=240,
+        km=1200,
+        peso_kg=19.5,
+    )
     audit_malo = auditar_perito_mecanico(b_soh_malo)
-    assert audit_malo["delta_bateria"] == -2.5
+    assert "ALERTA CRÍTICA" in audit_malo["txt_motor"]
 
     msg_soh = formatear_mensaje(b_soh_optimo, audit_opt["nota_final"], "Desglose")
     assert "540 Wh [SoH: 96% | 38 ciclos]" in msg_soh
@@ -822,15 +848,18 @@ def test_profundizacion_telemetria_bateria_upway_y_mammoth():
     assert bat_m == 625
 
     # 5. Mammoth / Bicicleta nueva a estrenar (km=0 y garantía >= 2 años)
-    bici_nueva = bici_prueba(sitio="Mammoth Bikes", km=0, garantia_anos=3, bateria_wh=625)
+    bici_nueva = bici_prueba(sitio="Mammoth", titulo="Orbea Rise M20 2024", km=0, garantia_anos=3, bateria_wh=625)
     detalle_simulado = {}
     bici_enriquecida = _aplicar_detalle(bici_nueva, detalle_simulado)
     assert bici_enriquecida.bateria_salud_pct == 100
     assert bici_enriquecida.bateria_ciclos == 0
 
-    # Mensaje de Telegram y Perito Mecánico para bici nueva con SoH 100% y 0 ciclos
+    # Mensaje de Telegram y Perito Mecánico Escéptico para bici nueva con SoH 100% y 0 ciclos (sin bono positivo)
     audit_nueva = auditar_perito_mecanico(bici_enriquecida)
-    assert audit_nueva["delta_bateria"] == 0.5
+    assert audit_nueva["delta_motor"] == 0.0
+    assert audit_nueva["delta_garantia"] == 0.0
+    assert "SoH medido: 100%" in audit_nueva["txt_motor"]
+    assert "0 ciclos diagnosticados" in audit_nueva["txt_motor"]
     msg_nueva = formatear_mensaje(bici_enriquecida, audit_nueva["nota_final"], "Desglose")
     assert "625 Wh [SoH: 100% | 0 ciclos]" in msg_nueva
 
@@ -1076,111 +1105,135 @@ def test_segmentacion_sonora_vs_silenciosa_telegram():
 
 
 def test_rotacion_consecutiva_top3_y_aviso():
-    """Valida la rotación al siguiente bloque de alternativas (4-6) y el aviso cuando el Top 3 no varía."""
+    """Valida entrega de 1 mejor bici por página y rotación ping-pong #1 -> #2 -> #1."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         ruta_db = f.name
 
     try:
         db = BaseDatos(ruta=ruta_db)
 
-        # 1. BaseDatos: obtención inicial vacía
+        # 1. BaseDatos: obtención inicial vacía y registro con estado_portales
         assert db.obtener_ultimo_analisis() is None
 
-        # 2. Registrar análisis inicial
         db.registrar_analisis(
-            top3_ids=["id-1", "id-2", "id-3"],
-            enviados_ids=["id-1", "id-2", "id-3"],
+            top3_ids=["u-1", "w-1"],
+            enviados_ids=["u-1", "w-1"],
             offset_usado=0,
             repetido=False,
+            estado_portales={
+                "Upway": {"top1_id": "u-1", "enviado_id": "u-1", "posicion": 1},
+                "Wallapop": {"top1_id": "w-1", "enviado_id": "w-1", "posicion": 1},
+            },
         )
         ult = db.obtener_ultimo_analisis()
         assert ult is not None
-        assert ult["top3_ids"] == ["id-1", "id-2", "id-3"]
-        assert ult["enviados_ids"] == ["id-1", "id-2", "id-3"]
-        assert ult["offset_usado"] == 0
-        assert ult["repetido"] is False
+        assert ult["estado_portales"]["Upway"]["enviado_id"] == "u-1"
+        assert ult["estado_portales"]["Wallapop"]["posicion"] == 1
 
-        # 3. Formateo de mensaje: con aviso_top_repetido=True
-        b_alt = bici_prueba(bici_id="id-4", titulo="Orbea Rise M20 Alternativa", precio=2600.0)
-        msg_repetido = formatear_mensaje(
+        # 2. Formateo de mensajes de rotación por portal (#2) y retorno a #1
+        b_alt = bici_prueba(sitio="Upway", bici_id="u-2", titulo="Orbea Rise M20 Alternativa", precio=2600.0)
+        msg_rot2 = formatear_mensaje(
             b_alt,
             8.7,
             "Desglose de prueba",
             aviso_top_repetido=True,
-            ranking_posicion=4,
+            ranking_posicion=2,
+            es_rotacion_portal=True,
         )
-        assert "🔄 *Top 3 sin cambios respecto al análisis anterior*" in msg_repetido
-        assert "💡 _Exponiendo siguiente mejor alternativa #4 del catálogo:_" in msg_repetido
-        assert "Orbea Rise M20 Alternativa" in msg_repetido
+        assert "🔄 *#1 de Upway sin cambios respecto al análisis anterior*" in msg_rot2
+        assert "💡 _Exponiendo alternativa #2 de Upway:_" in msg_rot2
 
-        # 4. Formateo de mensaje normal: sin aviso
+        msg_ret1 = formatear_mensaje(
+            b_alt,
+            9.0,
+            "Desglose de prueba",
+            aviso_top_repetido=False,
+            ranking_posicion=1,
+            aviso_retorno_top1=True,
+        )
+        assert "🏆 *Confirmada #1 en Upway*" in msg_ret1
+
         msg_normal = formatear_mensaje(b_alt, 8.7, "Desglose de prueba", aviso_top_repetido=False)
-        assert "Top 3 sin cambios" not in msg_normal
+        assert "sin cambios" not in msg_normal
+        assert "Confirmada #1" not in msg_normal
 
-        # 5. Heartbeat con rotación activa
+        # 3. Heartbeat con rotación por portal activa
         hb_data = {
-            "fecha_hora": "2026-11-17 12:00:00",
+            "fecha_hora": "2026-11-19 12:00:00",
             "duracion_seg": 20.0,
             "total_procesadas": 15,
             "candidatas_aptas": 6,
             "notificadas": 3,
             "top_repetido": True,
-            "offset_usado": 3,
+            "portales_rotados": ["Upway", "Wallapop"],
+            "portales_retorno_top1": ["Bike Ocasión"],
             "estado": "🟢 Runner operativo",
         }
         msg_hb = formatear_heartbeat(hb_data)
-        assert "🔄 Rotación activa: Top 3 idéntico (exponiendo #4 a #6)" in msg_hb
+        assert "🔄 Alternativa #2 (misma #1): Upway, Wallapop" in msg_hb
+        assert "🏆 Retorno a #1 confirmada: Bike Ocasión" in msg_hb
 
-        # 6. Simular flujo completo en main.ejecutar_busqueda con Top 3 repetido
+        # 4. Simular 3 pasadas consecutivas en main.ejecutar_busqueda con 4 portales
         from main import ejecutar_busqueda
-        oportunidades_simuladas = [
-            (bici_prueba(bici_id=f"sim-{i}", titulo=f"Bici Sim {i}", precio=2400.0 + i * 10), 9.0 - i * 0.2, "Desglose")
-            for i in range(1, 7)
-        ]
+        db2_fd, ruta_db2 = tempfile.mkstemp(suffix=".db")
+        os.close(db2_fd)
+        try:
+            db2 = BaseDatos(ruta=ruta_db2)
+            oportunidades_4_portales = [
+                # Upway (2 válidas <21 kg)
+                (bici_prueba(sitio="Upway", bici_id="u-1", titulo="Orbea Rise M20 2023", precio=2500.0, peso_kg=18.5), 9.0, "D"),
+                (bici_prueba(sitio="Upway", bici_id="u-2", titulo="BH iLynx Race 8.4", precio=2600.0, peso_kg=17.8), 8.5, "D"),
+                # Bike Ocasión (2 válidas <21 kg)
+                (bici_prueba(sitio="Bike Ocasión", bici_id="bo-1", titulo="Specialized Levo SL", precio=2700.0, peso_kg=18.0), 8.8, "D"),
+                (bici_prueba(sitio="Bike Ocasión", bici_id="bo-2", titulo="Trek Fuel EXe 9.5", precio=2800.0, peso_kg=19.2), 8.0, "D"),
+                # Wallapop (2 válidas <21 kg)
+                (bici_prueba(sitio="Wallapop", bici_id="w-1", titulo="Orbea Rise M10 2023", precio=2400.0, peso_kg=18.3, garantia_anos=0), 8.0, "D"),
+                (bici_prueba(sitio="Wallapop", bici_id="w-2", titulo="Orbea Rise H10 2023", precio=2200.0, peso_kg=20.5, garantia_anos=0), 7.0, "D"),
+                # Mammoth (solo 1 respaldo >=21 kg -> siempre entrega su mejor opción y no rompe si repite)
+                (bici_prueba(sitio="Mammoth", bici_id="m-1", titulo="Cannondale Moterra Neo 3", precio=3100.0, peso_kg=23.5), 4.0, "D"),
+            ]
 
-        with patch("main.BaseDatos", return_value=db), \
-             patch("main._recolectar_oportunidades", return_value=oportunidades_simuladas), \
-             patch("main.exportar_radar_mercado_md"), \
-             patch("main.enviar", return_value=True) as mock_enviar, \
-             patch("main.enviar_heartbeat"):
+            with patch("main.BaseDatos", return_value=db2), \
+                 patch("main._recolectar_oportunidades", return_value=oportunidades_4_portales), \
+                 patch("main.exportar_radar_mercado_md"), \
+                 patch("main.enviar", return_value=True) as mock_enviar, \
+                 patch("main.enviar_heartbeat"):
 
-            # Primera pasada: Top 3 nuevo (sim-1, sim-2, sim-3)
-            ejecutar_busqueda(forzar_envio=True)
-            assert mock_enviar.call_count == 3
-            llamadas = mock_enviar.call_args_list
-            assert llamadas[0][0][0].bici_id == "sim-1"
-            assert llamadas[0][1]["aviso_top_repetido"] is False
-            assert llamadas[0][1]["ranking_posicion"] == 1
+                # Día 1: #1 de cada página (u-1, bo-1, w-1, m-1)
+                ejecutar_busqueda(forzar_envio=True)
+                ids_dia1 = [c[0][0].bici_id for c in mock_enviar.call_args_list]
+                assert set(ids_dia1) == {"u-1", "bo-1", "w-1", "m-1"}
+                assert len(ids_dia1) == 4
+                assert all(c[1]["aviso_top_repetido"] is False for c in mock_enviar.call_args_list)
 
-            ult_analisis = db.obtener_ultimo_analisis()
-            assert ult_analisis["top3_ids"] == ["sim-1", "sim-2", "sim-3"]
-            assert ult_analisis["enviados_ids"] == ["sim-1", "sim-2", "sim-3"]
-            assert ult_analisis["offset_usado"] == 0
-            assert ult_analisis["repetido"] is False
+                # Día 2 (mismo catálogo): las páginas con >=2 válidas rotan a #2 (u-2, bo-2, w-2), Mammoth sigue en m-1
+                mock_enviar.reset_mock()
+                ejecutar_busqueda(forzar_envio=True)
+                por_sitio_d2 = {c[0][0].sitio: c for c in mock_enviar.call_args_list}
+                assert por_sitio_d2["Upway"][0][0].bici_id == "u-2"
+                assert por_sitio_d2["Upway"][1]["aviso_top_repetido"] is True
+                assert por_sitio_d2["Upway"][1]["es_rotacion_portal"] is True
+                assert por_sitio_d2["Upway"][1]["ranking_posicion"] == 2
+                assert por_sitio_d2["Bike Ocasión"][0][0].bici_id == "bo-2"
+                assert por_sitio_d2["Wallapop"][0][0].bici_id == "w-2"
+                assert por_sitio_d2["Mammoth"][0][0].bici_id == "m-1"
 
-            # Segunda pasada consecutiva: mismo catálogo (Top 3 idéntico) -> rota a 4, 5, 6
-            mock_enviar.reset_mock()
-            ejecutar_busqueda(forzar_envio=True)
-
-            assert mock_enviar.call_count == 3
-            llamadas2 = mock_enviar.call_args_list
-            assert llamadas2[0][0][0].bici_id == "sim-4"
-            assert llamadas2[0][1]["aviso_top_repetido"] is True
-            assert llamadas2[0][1]["ranking_posicion"] == 4
-
-            assert llamadas2[1][0][0].bici_id == "sim-5"
-            assert llamadas2[1][1]["aviso_top_repetido"] is True
-            assert llamadas2[1][1]["ranking_posicion"] == 5
-
-            assert llamadas2[2][0][0].bici_id == "sim-6"
-            assert llamadas2[2][1]["aviso_top_repetido"] is True
-            assert llamadas2[2][1]["ranking_posicion"] == 6
-
-            ult_analisis2 = db.obtener_ultimo_analisis()
-            assert ult_analisis2["top3_ids"] == ["sim-1", "sim-2", "sim-3"]
-            assert ult_analisis2["enviados_ids"] == ["sim-4", "sim-5", "sim-6"]
-            assert ult_analisis2["offset_usado"] == 3
-            assert ult_analisis2["repetido"] is True
+                # Día 3 (mismo catálogo): vuelve a #1 (u-1, bo-1, w-1) con aviso_retorno_top1=True
+                mock_enviar.reset_mock()
+                ejecutar_busqueda(forzar_envio=True)
+                por_sitio_d3 = {c[0][0].sitio: c for c in mock_enviar.call_args_list}
+                assert por_sitio_d3["Upway"][0][0].bici_id == "u-1"
+                assert por_sitio_d3["Upway"][1]["aviso_top_repetido"] is False
+                assert por_sitio_d3["Upway"][1]["aviso_retorno_top1"] is True
+                assert por_sitio_d3["Bike Ocasión"][0][0].bici_id == "bo-1"
+                assert por_sitio_d3["Wallapop"][0][0].bici_id == "w-1"
+                assert por_sitio_d3["Mammoth"][0][0].bici_id == "m-1"
+        finally:
+            try:
+                if os.path.exists(ruta_db2):
+                    os.unlink(ruta_db2)
+            except (PermissionError, OSError):
+                pass
 
     finally:
         # En Windows, SQLite puede mantener el archivo temporal abierto brevemente.
@@ -1728,6 +1781,268 @@ def test_todo2_edge_cases_y_regresion():
         assert mock_ddg_f.call_count == 2
 
 
+def test_perito_esceptico_v2_y_seleccion_por_portal():
+    """Valida reglas anti-alucinación, física Full Power, contradicción NUEVA, genéricas, garantía/componentes y selección por portal."""
+    from gemini_classifier import (
+        auditar_perito_mecanico,
+        valorar_autonomo,
+        enriquecer_y_valorar_bici,
+        _es_anuncio_generico_sin_modelo,
+    )
+    from main import _recolectar_oportunidades, seleccionar_por_portal
+    from scrapers.wallapop import WallapopScraper
+
+    # 1. Anuncios genéricos sin marca+modelo: Línea Roja <= 4.5 (DESCARTADA)
+    b_gen_carbon = bici_prueba(
+        sitio="Wallapop",
+        titulo="BICI MONTAÑA ELECTRICA DOBLE CARBONO NUEVA Talla M",
+        precio=2360.0,
+        peso_kg=20.8,
+        km=None,
+        garantia_anos=0,
+        componentes=None,
+    )
+    assert _es_anuncio_generico_sin_modelo(b_gen_carbon) is True
+    aud_gen = auditar_perito_mecanico(b_gen_carbon)
+    assert aud_gen["nota_final"] <= 4.5
+    assert "Cap Línea Roja: Sí" in aud_gen["formula_str"]
+
+    # Contradicción NUEVA + >50 km y marca sin modelo ("BH 237 km Esta nueva")
+    b_contra = bici_prueba(
+        sitio="Wallapop",
+        titulo="Bicicleta Eléctrica BH 237 km. Esta nueva!!",
+        km=237,
+        peso_kg=19.0,
+        garantia_anos=0,
+    )
+    assert _es_anuncio_generico_sin_modelo(b_contra) is True
+    aud_contra = auditar_perito_mecanico(b_contra)
+    assert aud_contra["delta_km"] == -2.0
+    assert "CONTRADICCIÓN" in aud_contra["txt_km"]
+    assert aud_contra["nota_final"] <= 4.5
+
+    # Red Lines: Talla != M -> 0.0; Batería < 500 Wh -> <= 4.0
+    b_talla_l = bici_prueba(titulo="Orbea Rise M20 2023", talla="L", km=500, peso_kg=18.5)
+    assert auditar_perito_mecanico(b_talla_l)["nota_final"] == 0.0
+
+    b_bat_360 = bici_prueba(titulo="Orbea Rise M20 2022", bateria_wh=360, km=500, peso_kg=18.5)
+    assert auditar_perito_mecanico(b_bat_360)["nota_final"] <= 4.0
+
+    # 2. Física anti-optimismo Full Power >= 625Wh vs excepciones ligeras y blindaje post-Gemini
+    b_full_sin_modelo = Bicicleta(
+        sitio="Wallapop",
+        bici_id="w-fp-1",
+        titulo="Bicicleta Eléctrica MTB Carbono Bosch CX 750Wh",
+        precio=2800.0,
+        url="https://es.wallapop.com/item/fp1",
+        talla="M",
+        bateria_wh=750,
+        motor="Bosch Performance Line CX",
+        cuadro_material="Carbono",
+    )
+    b_full_res = completar_con_catalogo(b_full_sin_modelo, aplicar_heuristica_peso=True)
+    assert b_full_res.peso_kg >= 23.5
+
+    # Blindaje post-Gemini si Gemini devuelve peso irreal <22.5 kg en Full Power 750Wh no excepción
+    b_gem_fp = Bicicleta(
+        sitio="Wallapop",
+        bici_id="w-fp-gem",
+        titulo="Lapierre Overvolt TestX 750Wh Carbono",
+        precio=2750.0,
+        url="https://es.wallapop.com/item/fpgem",
+        talla="M",
+        bateria_wh=750,
+        motor="Bosch Performance Line CX",
+        suspension_trasera="si",
+        km=900,
+        componentes="XT 12v, Fox 36",
+    )
+    resp_gem_halluc = {
+        "peso_kg": 19.2,
+        "cuadro_material": "Carbono",
+        "modalidad": "Trail",
+        "ano": 2023,
+    }
+    with patch("gemini_classifier.enriquecer_bici", side_effect=lambda b, **kw: b), \
+         patch("gemini_classifier.completar_desde_duckduckgo", side_effect=lambda b: b), \
+         patch("gemini_classifier._cargar_cache_ia", return_value={}), \
+         patch("gemini_classifier._guardar_entrada_cache_ia"), \
+         patch("gemini_classifier._llamar_gemini_api", return_value=resp_gem_halluc):
+        b_gem_out, nota_gem_out, _ = enriquecer_y_valorar_bici(b_gem_fp)
+        assert b_gem_out.peso_kg >= 22.5
+        assert nota_gem_out <= 4.0
+
+    # Excepciones ligeras y corrección de año Orbea Rise
+    b_rise_21 = completar_con_catalogo(bici_prueba(titulo="Orbea Rise M20", ano=2021, motor=None))
+    assert b_rise_21.motor == "Shimano EP8-RS"
+    b_rise_25 = completar_con_catalogo(bici_prueba(titulo="Orbea Rise LT M10", ano=2025, bateria_wh=630, peso_kg=None, motor=None))
+    assert b_rise_25.motor == "Shimano EP801-RS Gen2"
+    b_amflow = completar_con_catalogo(Bicicleta(sitio="Mammoth", bici_id="amf1", titulo="Amflow PL Carbon 600Wh", precio=2990.0, url="https://m.es/amf", talla="M"))
+    assert b_amflow.peso_kg < 21.0
+
+    # 3. Eje Garantía (particular con factura -1.0 vs sin factura -1.5; Wallapop NLP factura) + Eje Precio/Comp
+    scraper_wp = WallapopScraper(cfg.SITIOS[4])
+    pagina_fact = {
+        "data": {
+            "section": {
+                "payload": {
+                    "items": [
+                        {
+                            "id": "fact1",
+                            "category_id": 17000,
+                            "title": "Orbea Rise M20 Talla M",
+                            "description": "Cuadro carbono, XT 12v, Fox 34, 800 km, doble suspensión. Entrego factura de compra 2025.",
+                            "price": {"amount": 2800.0},
+                            "reserved": {"flag": False},
+                            "has_warranty": {"flag": False},
+                            "is_refurbished": {"flag": False},
+                            "location": {"latitude": 40.2842, "longitude": -3.7942, "city": "Fuenlabrada"},
+                            "web_slug": "rise-fact",
+                        }
+                    ]
+                }
+            }
+        },
+        "meta": {"next_page": None},
+    }
+    with patch.object(scraper_wp, "_obtener_pagina_api", return_value=pagina_fact):
+        b_wp_fact = scraper_wp.extraer_bicicletas()[0]
+    assert b_wp_fact.tiene_factura is True
+    assert auditar_perito_mecanico(b_wp_fact)["delta_garantia"] == -1.0
+
+    b_sin_fact = bici_prueba(sitio="Wallapop", titulo="Orbea Rise M20 2023", garantia_anos=0, tiene_factura=False, km=500, peso_kg=18.5)
+    assert auditar_perito_mecanico(b_sin_fact)["delta_garantia"] == -1.5
+
+    b_comp_basic = bici_prueba(titulo="Orbea Rise H30 2023", precio=2600.0, km=500, peso_kg=20.0, componentes="Deore 11v, frenos MT200, horquilla Judy Silver")
+    assert auditar_perito_mecanico(b_comp_basic)["delta_precio"] == -1.0
+
+    b_comp_none = bici_prueba(titulo="Orbea Rise M20 2023", precio=2600.0, km=500, peso_kg=18.5, componentes=None)
+    assert auditar_perito_mecanico(b_comp_none)["delta_precio"] == -1.5
+
+    _, fmt_v2 = valorar_autonomo(b_sin_fact)
+    assert "🧮 Auditoría Pericial: Base 10.0" in fmt_v2
+    assert "Cap Línea Roja:" in fmt_v2
+    assert "• 🛣️ Km:" in fmt_v2
+    assert "• ⚖️ Peso:" in fmt_v2
+    assert "• 🔍 Motor y Batería:" in fmt_v2
+    assert "• 🛡️ Garantía y Vendedor:" in fmt_v2
+    assert "• 💰 Precio/Componentes:" in fmt_v2
+
+    # 4. Ranking real sin degradar una 8.0 conocida frente a una 6.5 nueva + exclusión de genérica del Día 2
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f_ord:
+        ruta_db_ord = f_ord.name
+    try:
+        db_ord = BaseDatos(ruta=ruta_db_ord)
+        b_upway_conocida = bici_prueba(sitio="Upway", bici_id="u-conocida", titulo="Orbea Rise M20 2023", precio=2600.0, peso_kg=18.6, km=800)
+        db_ord.registrar(b_upway_conocida, 9.5)  # Ya notificada antes -> 'conocida'
+        b_wala_flojita = bici_prueba(sitio="Wallapop", bici_id="w-flojita", titulo="Orbea Rise H30 2023", precio=2700.0, peso_kg=20.5, km=1800, garantia_anos=0)
+        b_wala_gen = bici_prueba(sitio="Wallapop", bici_id="w-gen", titulo="BICI MONTAÑA ELECTRICA DOBLE CARBONO", precio=2300.0, peso_kg=20.5, km=200, garantia_anos=0)
+
+        def _scrap_ord(sitio):
+            if sitio.nombre == "Upway":
+                return [b_upway_conocida]
+            if sitio.nombre == "Wallapop":
+                return [b_wala_flojita, b_wala_gen]
+            return []
+
+        def _val_ord(b):
+            if b.bici_id == "u-conocida":
+                return b, 9.5, "OK"
+            if b.bici_id == "w-flojita":
+                return b, 6.5, "Media"
+            return b, 4.5, "Genérica"
+
+        with patch("main._scrapear_sitio", side_effect=_scrap_ord), \
+             patch("main.enriquecer_y_valorar_bici", side_effect=_val_ord):
+            ops = _recolectar_oportunidades(db_ord, forzar_envio=False)
+
+        assert [x[0].bici_id for x in ops] == ["u-conocida", "w-flojita", "w-gen"]
+
+        # Con w-flojita y w-gen en Wallapop: Día 2 NO debe degradar Wallapop a w-gen (genérica <=4.5)
+        plan_d1 = seleccionar_por_portal(ops, ultimo_analisis=None)
+        assert {x["item"][0].bici_id for x in plan_d1["seleccionados"]} == {"u-conocida", "w-flojita"}
+        plan_d2 = seleccionar_por_portal(ops, ultimo_analisis={"estado_portales": plan_d1["estado_portales"]})
+        por_sitio_d2 = {x["sitio"]: x["item"][0].bici_id for x in plan_d2["seleccionados"]}
+        assert por_sitio_d2["Wallapop"] == "w-flojita", "No debe rotar hacia un anuncio genérico descartado"
+    finally:
+        try:
+            if os.path.exists(ruta_db_ord):
+                os.unlink(ruta_db_ord)
+        except (PermissionError, OSError):
+            pass
+
+    # 5. Regresiones de auditoría adversaria:
+    #    - Contradicción NUEVA con 5000 km conserva -3.5 (nunca suaviza a -2.0)
+    b_liar_5000 = bici_prueba(titulo="Orbea Rise M20 NUEVA 5000 km", km=5000, peso_kg=18.5)
+    aud_liar = auditar_perito_mecanico(b_liar_5000)
+    assert aud_liar["delta_km"] == -3.5
+    assert "CONTRADICCIÓN" in aud_liar["txt_km"]
+
+    #    - Post-Gemini con Full Power (Shimano EP6 / Specialized 2.2) y bateria_wh=None también bloquea <22.5 kg
+    b_ep6_none = Bicicleta(
+        sitio="Wallapop",
+        bici_id="w-ep6",
+        titulo="Merida eOne-Forty TestEP6",
+        precio=2700.0,
+        url="https://es.wallapop.com/item/ep6",
+        talla="M",
+        motor="Shimano EP6",
+        km=800,
+        componentes="Deore 12v",
+    )
+    with patch("gemini_classifier.enriquecer_bici", side_effect=lambda b, **kw: b), \
+         patch("gemini_classifier.completar_desde_duckduckgo", side_effect=lambda b: b), \
+         patch("gemini_classifier._cargar_cache_ia", return_value={}), \
+         patch("gemini_classifier._guardar_entrada_cache_ia"), \
+         patch("gemini_classifier._llamar_gemini_api", return_value={"peso_kg": 19.5, "modalidad": "Trail"}):
+        b_ep6_out, _, _ = enriquecer_y_valorar_bici(b_ep6_none)
+        assert b_ep6_out.peso_kg >= 22.5
+
+    #    - Unknown km (None) XC 6.0 NO supera a Trail 500 km 9.5 en clave_orden_estrictas
+    from main import clave_orden_estrictas, ejecutar_busqueda
+    op_unk_km = (bici_prueba(titulo="BH iLynx Race Carbon 8.4", km=None, peso_kg=16.8, modalidad="XC"), 6.0, "U")
+    op_ver_trail = (bici_prueba(titulo="Specialized Turbo Levo SL", km=500, peso_kg=17.9, modalidad="Trail"), 9.5, "V")
+    assert clave_orden_estrictas(op_ver_trail) > clave_orden_estrictas(op_unk_km)
+
+    #    - Fallo de enviar() en un portal no avanza ping-pong y corrida vacía preserva estado_portales
+    fd_fail, ruta_fail = tempfile.mkstemp(suffix=".db")
+    os.close(fd_fail)
+    try:
+        db_fail = BaseDatos(ruta=ruta_fail)
+        ops_fail = [
+            (bici_prueba(sitio="Upway", bici_id="u-f1", titulo="Orbea Rise M20 2023", peso_kg=18.5, km=500), 9.0, "D"),
+            (bici_prueba(sitio="Upway", bici_id="u-f2", titulo="BH iLynx Race 8.4", peso_kg=17.8, km=500), 8.5, "D"),
+            (bici_prueba(sitio="Wallapop", bici_id="w-f1", titulo="Orbea Rise M10 2023", peso_kg=18.3, km=500), 8.5, "D"),
+        ]
+
+        # Envío falla en Upway y acierta en Wallapop -> Upway no debe avanzar a u-f2
+        with patch("main.BaseDatos", return_value=db_fail), \
+             patch("main._recolectar_oportunidades", return_value=ops_fail), \
+             patch("main.exportar_radar_mercado_md"), \
+             patch("main.enviar", side_effect=lambda b, *a, **kw: b.sitio != "Upway"), \
+             patch("main.enviar_heartbeat"):
+            ejecutar_busqueda(forzar_envio=True)
+
+        ult_fail = db_fail.obtener_ultimo_analisis()
+        assert "Upway" not in ult_fail["estado_portales"]
+        assert ult_fail["estado_portales"]["Wallapop"]["enviado_id"] == "w-f1"
+
+        # Corrida vacía conserva estado_portales previo (Wallapop)
+        with patch("main.BaseDatos", return_value=db_fail), \
+             patch("main._recolectar_oportunidades", return_value=[]), \
+             patch("main.exportar_radar_mercado_md"), \
+             patch("main.enviar_heartbeat"):
+            ejecutar_busqueda(forzar_envio=True)
+        ult_vacio = db_fail.obtener_ultimo_analisis()
+        assert ult_vacio["estado_portales"]["Wallapop"]["enviado_id"] == "w-f1"
+    finally:
+        try:
+            if os.path.exists(ruta_fail):
+                os.unlink(ruta_fail)
+        except (PermissionError, OSError):
+            pass
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -1756,4 +2071,5 @@ if __name__ == "__main__":
     test_wallapop_geolocalizado_y_filtros()
     test_todo2_dedup_interportal_wallapop_estricto_y_cache_ddg()
     test_todo2_edge_cases_y_regresion()
+    test_perito_esceptico_v2_y_seleccion_por_portal()
     print("Todas las pruebas pasaron (GREEN).")
