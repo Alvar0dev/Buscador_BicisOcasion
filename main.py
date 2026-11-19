@@ -16,7 +16,7 @@ import logging
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import config as cfg
 from config import SITIOS, HORA_EJECUCION, NOTA_MIN_NOTIFICAR, NOTA_MIN_AGUARDAR, TOP_N_NOTIFICAR
@@ -28,6 +28,7 @@ from scrapers.bike_ocasion import BikeOcasionScraper
 from scrapers.buhobike import BuhobikeScraper
 from scrapers.upway import UpwayScraper
 from scrapers.mammoth import MammothScraper
+from scrapers.wallapop import WallapopScraper
 from scrapers.enriquecedor_web import enriquecer_bici, _extraer_range_extender
 
 # Mapa sitio -> clase scraper
@@ -36,6 +37,7 @@ SCRAPERS = {
     "Buhobike": BuhobikeScraper,
     "Upway": UpwayScraper,
     "Mammoth": MammothScraper,
+    "Wallapop": WallapopScraper,
 }
 
 # ---------------------------------------------------------------------------

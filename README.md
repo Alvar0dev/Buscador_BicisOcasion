@@ -29,12 +29,13 @@ Cuando encuentra una bicicleta con **Nota de Oportunidad ≥ 8.0/10**, la notifi
 
 ## ¿Qué hace este proyecto?
 
-Este script rastrea diariamente las secciones de e-MTB doble suspensión de cuatro tiendas profesionales de bicicletas con garantía oficial:
+Este script rastrea diariamente las secciones de e-MTB doble suspensión de cuatro tiendas profesionales de bicicletas con garantía oficial y los anuncios geolocalizados de Wallapop (radio de 50 km desde Fuenlabrada, Madrid):
 
 - **Bike Ocasión** (bike-ocasion.com)
 - **Buhobike** (buhobike.com)
 - **Upway** (upway.es)
 - **Mammoth Bikes** (mammothbikes.com)
+- **Wallapop** (es.wallapop.com — radio 50 km desde Fuenlabrada)
 
 Para cada bicicleta encontrada aplica una serie de filtros estrictos y, si pasa, le asigna una **Nota de Oportunidad del 0 al 10**. Solo las bicicletas con nota **≥ 8.0** se guardan en una base de datos local SQLite y se envían por Telegram para evitar alertas duplicadas (salvo que bajen de precio).
 
@@ -81,8 +82,8 @@ El sistema opera bajo la **Regla Maestra del Perito Mecánico Senior**: **NUNCA*
   * **SoH 80% a 84%**: -1.0 pt (Degradación apreciable de autonomía).
   * **SoH < 80%**: -2.5 pts (Fatiga química severa de celdas).
   * **> 250 ciclos de carga** (sin SoH explícito): -1.0 pt por desgaste acumulado de celdas.
-* **Bicicletas BH (iLynx, AtomX, BH 2EXMAG)**: -1.0 pt directo por centralita con software propietario y opaco que impide al comprador extraer un informe veraz en PDF de salud de celdas (SoH) y ciclos.
-* **BH 2EXMAG o Brose con > 3.000 km**: -1.5 pts extra acumulativos (total -2.5 pts en motor) por kilometraje elevado a ciegas sin diagnóstico abierto.
+* **Bicicletas BH (iLynx, AtomX, Xtep, BH 2EXMAG)**: -2.0 pts base en Perito (-1.0 en evaluador heurístico) y **LÍNEA PREVENTIVA (nota máxima 8.5/10)** porque impiden extraer un informe pericial verificable en PDF y pueden ocultar desgaste mecánico/batería mayor al aparente aunque parezcan un chollo.
+* **BH con > 3.000 km**: -3.0 pts acumulativos en motor; **Brose > 3.000 km**: -1.5 pts extra por kilometraje elevado sin diagnóstico abierto.
 
 ### 4. Precio frente a Kilometraje
 * **Rango base 2.000 € a 3.000 €**: -0.0 pts.
@@ -582,6 +583,14 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
     ```
   * **Diagnóstico en Heartbeat**: El pulso operativo diario de Telegram reporta la rotación activa con el rango de posiciones expuestas (`🔄 Rotación activa: Top 3 idéntico (exponiendo #4 a #6)`).
 
+### 16. Integración de Wallapop Geolocalizado (Fuenlabrada +50 km) y Peritaje Honesto de Particulares
+* **Por qué**: Ampliar el alcance más allá de las 4 tiendas profesionales permite detectar e-MTB de gama alta puestas a la venta por particulares en el entorno cercano (50 km alrededor de Fuenlabrada) a precios muy competitivos (ej. `BH iLynx Race Carbon` por 2.000 €), conservando exactamente los filtros estrictos (`Talla M`, doble suspensión, `> 500 Wh`, `< 21 kg`, `2.000-3.300 €`) sin mezclar envíos lejanos ni ofertas urbanas.
+* **Cómo se construyó**:
+  * **API de búsqueda por subcategoría (`scrapers/wallapop.py`)**: Consulta `/api/v3/search` con `source="quick_filters"`, `category_id="17000"`, `subcategory_ids="10215"` (Bicicletas eléctricas), coordenadas de Fuenlabrada (`40.2842, -3.7942`), `distance_in_km=50` y rango `2.000-3.500 €` (cubre también la Zona de Vigilancia).
+  * **Guardia geográfica Haversine**: Descarta cualquier ítem cuya coordenada supere los `50.0 km` reales aunque Wallapop lo inyecte con promoción nacional (`bump: country`).
+  * **NLP sobre descripción libre + Visión IA sin SPA**: Reutiliza los extractores de `enriquecedor_web.py` (mejorados para `t.M`, `size M`, Specialized `S3`, `M/L -> ML`, `540w`, `extender 160w`) sobre título y descripción. Si falta `km`, `enriquecer_bici` inspecciona directamente las URLs de `bici.imagenes` mediante Gemini Vision sin intentar scrapear el HTML Next.js vacío de `es.wallapop.com/item/...`.
+  * **Transparencia de garantía (`garantia_anos=0`)**: Distingue vendedores particulares (`has_warranty=False`, `is_refurbished=False` -> `garantia_anos=0`) de tiendas verificadas en Wallapop (`1` año), reflejando `"Sin garantía comercial (particular)"` y la ubicación exacta (`📍 Ubicación: Ciudad (X.X km)`) en `notifier.py` y en `gemini_classifier.py`.
+
 ---
 
 ## Proceso de desarrollo y dificultades encontradas
@@ -617,19 +626,21 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 | **Falsos positivos de "Mega Chollo" en bicis desgastadas (nota < 9.0)** | Notificador / Orquestador | Un descuento >50% vs PVP original en una bicicleta con alto kilometraje o batería mermada (ej. nota 3.5 o 5.5/10) activaba la cabecera `💥 ¡MEGA CHOLLO!`, generando falso FOMO cuando en realidad se trataba de un precio de liquidación acorde a su desgaste. | Se aplicó una regla bicondicional estricta: `descuento_pvp >= 50%` Y `nota >= 9.0`. Si la nota es inferior a 9.0, se degrada a oferta normal mostrando el PVP original a título informativo sin cabecera alarmista. |
 | **Fatiga de alertas y ruido sonoro diario en Telegram** | Notificador / UX de usuario | Si el bot activa timbre y vibración en el móvil todos los días a las 12:00 para ofertas rutinarias o heartbeats de diagnóstico, el usuario silencia el canal y se desensibiliza, ignorando alertas críticas. | Segmentación acústica nativa en Telegram Bot API: `disable_notification=True` para ofertas estándar y Heartbeat diario, reservando el timbre sonoro y vibración exclusivamente para verdaderos Mega Chollos (`nota >= 9.0` y `dto >= 50%`). |
 | **Repetición estéril del Top 3 en análisis consecutivos** | Orquestador / Base de datos / Notificador | Al ejecutar búsquedas consecutivas o en períodos sin cambios de catálogo, notificar el mismo Top 3 no aporta valor, mientras que silenciarlo oculta alternativas viables. Además `_recolectar_oportunidades()` truncaba el pool a 3 unidades impidiendo acceder a puestos inferiores. | Refactorizado `_recolectar_oportunidades()` para preservar todo el catálogo apto; persistencia de la huella en tabla `analisis_ejecuciones` y rotación automática con offset cíclico (#4-#6) con cabecera de aviso contextual en Telegram (`🔄 Top 3 sin cambios respecto al análisis anterior`). |
+| **Paginación híbrida de Wallapop (`items=[]` con `next_page=True`) y parámetros de categoría** | Wallapop (`scrapers/wallapop.py`) | Consultar `/api/v3/search` sin keywords con `category_ids=17000` devolvía coches (`category_id=100`); además el motor de blending de Wallapop devuelve páginas intermedias vacías (`items=[]` en la pág. 3) manteniendo `meta.next_page`, lo que cortaba la extracción en solo 5 ítems. | Migrado a `source="quick_filters"` + `category_id="17000"` + `subcategory_ids="10215"` (Bicicletas eléctricas), paginando hasta agotar `next_page` (24 páginas / 592 anuncios en vivo) con guarda Haversine `<= 50 km` contra anuncios `bump: country`. |
+| **HTML SPA sin hidratar y falsos negativos en NLP libre de Wallapop** | Wallapop / `enriquecedor_web.py` | La ficha web `es.wallapop.com/item/...` es Next.js SPA (`imgs=0` en Scrapling estático); además anuncios reales incluían `"t.M"`, `"Talla S3"`, `"M/L"`, `"540w"`, `"3000km ... cadena a estrenar"` (bloqueado por ventana `-65/+65` de `'cadena'`) o `"batería interna 320Wh + extender 160w incluido"` (capturando `320` en lugar de `160`). | En Wallapop `enriquecer_bici` lee directamente `bici.imagenes` mediante Gemini Vision sin scrapear el SPA HTML; `_extraer_talla` soporta `t.M`, `S1-S6` y compuestas (`M/L -> ML`); `_extraer_range_extender` ignora capacidades precedidas por `interna/principal`; `_extraer_km` refina la lista de bloqueo de mantenimiento de cadena. |
 
 ---
 
 ## Estado actual y próximos pasos
 
-### Fotografía del estado actual (17/11/2026)
-- **Rendimiento de búsqueda**: Los 4 portales oficiales (**Bike Ocasión**, **Buhobike**, **Upway** y **Mammoth Bikes**) se rastrean en paralelo y se enriquecen con Perito Mecánico en **~37s** totales en corrida en vivo.
+### Fotografía del estado actual (18/11/2026)
+- **Rendimiento de búsqueda multi-portal (5 fuentes)**: **Wallapop** (~592 anuncios en ~14s), **Bike Ocasión** (180 bicis), **Mammoth Bikes** (66 bicis), **Buhobike** (48 bicis) y **Upway** (21 bicis) — **119 candidatas aptas** evaluadas tras endurecer extractores y filtros, con **Top 3** notificado a Telegram (`Bici eléctrica BERRIA MAKO HYBRID 6 A ESTRENAR` 2.999 €, `Orbea Rise M20` 2.599 €, `Orbea Rise H30 t.M` 2.673 €; tras `BH Ilynx race carbono` 2.000 € en la pasada previa).
+- **Integración de Wallapop geolocalizado (Fuenlabrada +50 km)**: Operativo `WallapopScraper` con verificación Haversine (`<= 50 km`), exclusión de reservas/no-eMTB, extracción de odómetros en fotos de vendedores vía Gemini Vision, ubicación exacta en Telegram y advertencia honesta de compra entre particulares (`garantia_anos=0`, `"Sin garantía comercial (particular)"`).
 - **Calidad de filtrado y telemetría**: Operativos los filtros estrictos `S0` (en stock, sin reservadas) a `S6`, detección de Range Extenders incluidos, lectura de odómetros en fotos con Gemini Vision en lote, telemetría real de batería (`SoH %` y ciclos de carga) para baterías originales y sustituidas, y clasificación matemática por milímetros de recorrido de suspensión (`≤130 mm` XC > `140 mm` Trail Ligero > `150-160 mm` All-Mountain).
 - **Detección de Mega Chollos y contraste PVP**: Detección estricta de Mega Chollos (`Nota >= 9.0` y `Descuento >= 50% vs PVP nuevo`) con badges de Telegram, bonificación pericial en calidad-precio (+0.5) y reporte informativo de PVP original nuevo para ofertas normales con ahorro masivo.
 - **Segmentación acústica en Telegram**: Notificaciones estándar y Heartbeat despachadas en silencio (`disable_notification=True`), reservando el timbre/vibración sonora (`disable_notification=False`) exclusivamente para verdaderos Mega Chollos, configurable con `TELEGRAM_SILENCIAR_OFERTAS_NORMALES`.
 - **Rotación inteligente de alternativas en análisis consecutivos**: Detección de Top 3 idéntico en `analisis_ejecuciones`, rotando dinámicamente a las siguientes 3 alternativas del catálogo (#4, #5 y #6) con aviso contextual claro en el mensaje de Telegram.
-- **Historial de catálogo, permanencia y ahorro**: Tabla SQLite `historial_catalogo` registrando evolución diaria de precios, días de permanencia en stock por portal, rebajas acumuladas, PVP original de fábrica y alertas prioritarias de Zona de Vigilancia (2.900–3.500 €).
-- **Radar de mercado y reportes**: Generación automática de `docs/radar_mercado.md` en cada corrida (71 unidades activas en seguimiento, 12 rebajas acumuladas) y modo CLI `python main.py --stats`.
+- **Radar de mercado y reportes**: Generación automática de `docs/radar_mercado.md` en cada corrida (**197 unidades activas** en seguimiento, **13 rebajas activas**, **87 unidades en Zona de Vigilancia**) y modo CLI `python main.py --stats`.
 - **Heartbeat operativo en Telegram**: Diagnóstico automático del runner diario vía Telegram (`TELEGRAM_HEARTBEAT` en `config.py` o comando CLI `python main.py --heartbeat`), confirmando salud de corrida, desglose por tienda, Mega Chollos analizados, rotación activa y pulso de vigilancia.
 - **Resiliencia de red**: Integrado `ProxyRotator` nativo en `scraper_base.py` y `enriquecedor_web.py` con estrategias cíclica y aleatoria configurable vía `PROXY_LIST` en `.env`.
 - **Suite de tests**: `python test_buscador.py` 100% en **GREEN**.
@@ -637,23 +648,17 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 
 ### Tareas completadas en esta sesión
 
-- [x] **TODO 1 — Segmentación de alertas sonoras vs silenciosas en Telegram (`notifier.py`)**: Implementado `disable_notification=True` para ofertas normales y diagnósticos diarios de Heartbeat, reservando la alerta sonora / vibración (`disable_notification=False`) exclusivamente para verdaderos Mega Chollos (nota ≥ 9.0 y dto ≥ 50%), configurable con `TELEGRAM_SILENCIAR_OFERTAS_NORMALES`.
-- [x] **TODO 2 — Centralización pericial `es_mega_chollo(bici, nota)`**: Diseñada una única fuente de verdad reutilizada en orquestador, notificador, peritaje y tests unitarios.
-- [x] **TODO 3 — Rotación de alternativas en análisis consecutivos con Top 3 idéntico (`main.py`, `db.py`, `notifier.py`)**: Implementada la tabla `analisis_ejecuciones`, eliminación del truncamiento restrictivo en `_recolectar_oportunidades()`, detección de repetición consecutiva, exposición de posiciones 4 a 6 con banner contextual en Telegram y reporte en Heartbeat.
-- [x] **TODO 4 — Suite de pruebas unitarias (`test_buscador.py`)**: Añadido `test_rotacion_consecutiva_top3_y_aviso` y `test_segmentacion_sonora_vs_silenciosa_telegram` (100% GREEN).
-- [x] **TODO 5 — Documentación y trazabilidad de ingeniería**: Actualizado `README.md` con las secciones de ingeniería #14 y #15, tabla de dificultades, estado al 17/11/2026 y roadmap.
+- [x] **TODO 1 — Integración de Scraper para Wallapop con geolocalización (Fuenlabrada +50 km)**: Implementado `scrapers/wallapop.py`, campos `ubicacion` e `imagenes` en `models.py`, configuración `WALLAPOP_*` en `config.py`, soporte sin SPA en `scrapers/enriquecedor_web.py`, ajuste honesto de `garantia_anos=0` en `gemini_classifier.py` y `notifier.py`, y registro en `main.py` (`SCRAPERS["Wallapop"]`).
+- [x] **TODO 2 — Refinamiento de extractores NLP (`t.M`, `S3`, `M/L`, `540w`, extender `160w`, bloqueo `cadena`)**: Validados frente a descripciones reales de Wallapop.
+- [x] **TODO 3 — Suite de pruebas unitarias (`test_buscador.py`) y búsqueda en vivo**: Añadido `test_wallapop_geolocalizado_y_filtros()` (GREEN) y corrida en vivo sobre los 5 portales enviada a Telegram (`Top 3` detectando ofertas locales de Wallapop desde 2.000 €).
+- [x] **TODO 4 — Endurecimiento preventivo de nota para bicicletas BH (`evaluator.py`, `gemini_classifier.py`)**: Deducción ampliada (-2.0 pts base / -3.0 pts > 3.000 km en peritaje, -1.0 pt en evaluador heurístico) y tope preventivo `8.5/10` (`TECHO_NOTA_BH`) para que ninguna BH sin informe pericial PDF alcance `Mega Chollo >= 9.0` pese a aparentar gran rebaja.
 
 ### Plan de trabajo propuesto para mañana (TODOs)
 
-- [ ] **TODO 1 — Integración de Scraper para Wallapop con geolocalización (Fuenlabrada +50 km)**
-  - **Objetivo**: Diseñar e implementar el scraper `scrapers/wallapop.py` para capturar anuncios de Wallapop de e-MTB doble suspensión que cumplan los filtros del proyecto (Talla M, doble suspensión, batería > 500 Wh, peso < 21 kg / preferible < 19 kg, precio 2.000 € a 3.000 € - máx 3.300 €) en un radio de 50 km alrededor de Fuenlabrada (Madrid: latitud `40.2842`, longitud `-3.7942`, `distance_in_km=50`).
-  - **Arquitectura y desafíos técnicos previstos**:
-    1. *Endpoint / API interna de búsqueda*: Explorar `/api/v3/general/search` de Wallapop con parámetros geográficos (`latitude`, `longitude`, `distance_in_km=50`), categoría Bicicletas (`category_ids=12465`), rango de precio y keywords clave (`e-mtb`, `doble`, `orbea rise`, `turbo levo`, `bh ilynx`, `fuel exe`).
-    2. *Extracción en lenguaje natural (particulares)*: Al no disponer de tablas técnicas de tienda oficial, aprovechar el motor de inferencia de `enriquecedor_web.py` para detectar talla M, capacidad de batería (interna + extender), kilometraje real y año en la descripción libre.
-    3. *Auditoría pericial para compras entre particulares*: Reflejar en la nota pericial y ficha de Telegram que la compra entre particulares carece de garantía comercial de reacondicionado (`garantia_anos=0` vs 1-3 años de los portales actuales).
-    4. *Evasión de bloqueos / firmas anti-bot*: Aplicar `StealthyFetcher` de Scrapling con rotación de User-Agent y soporte de proxies en caso de rate-limiting.
-- [ ] **TODO 2 — Scoring de degradación de batería en el evaluador (`evaluator.py`)**
+- [ ] **TODO 1 — Scoring de degradación de batería en el evaluador (`evaluator.py`)**
   - **Objetivo**: Incorporar formalmente en el algoritmo numérico de `evaluator.py` la penalización/bonificación por `bateria_salud_pct` y `bateria_ciclos` cuando estén disponibles, alineándolo con el Perito Mecánico Senior.
+- [ ] **TODO 2 — Deduplicación cruzada inter-portal, filtros estrictos Wallapop y caché de DuckDuckGo**
+  - **Objetivo**: Detectar anuncios duplicados entre tienda oficial (ej. Buhobike/Bike Ocasión) y su cuenta de Wallapop por modelo/precio/batería, exigir confirmación de doble suspensión/modelo cuando el título de particular sea genérico, y cachear o acotar el fallback de DuckDuckGo en Wallapop para bajar el tiempo total de ~580s a <60s.
 - [ ] **TODO 3 — Dashboard web interactivo o exportación HTML para el Radar de Mercado**
   - **Objetivo**: Desarrollar un visualizador web ligero (o exportación HTML interactiva) para consultar de forma gráfica la rotación de stock, curvas de permanencia y precios del catálogo SQLite.
 - [ ] **TODO 4 — Detección de chollos por degradación anómala de precio (Delta diario > 300 €)**
@@ -674,6 +679,7 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 | Detección de Mega Chollos (dto >= 50% y Nota >= 9.0) | ✅ Implementado en `notifier.py`, `evaluator.py` y `main.py` |
 | Segmentación sonora Telegram (silencioso vs prioritario) | ✅ Implementado (`disable_notification` según Mega Chollo) |
 | Rotación en análisis consecutivos (Top 3 repetido -> 4-6) | ✅ Implementado (`analisis_ejecuciones`, offset rotativo y banner) |
+| Scraper Wallapop geolocalizado (Fuenlabrada +50 km) | ✅ Verificado en vivo (592 anuncios escaneados, Haversine <= 50 km, peritaje `garantia_anos=0`) |
 | Prioridad de modalidad (XC > Light e-MTB > Trail) | ✅ Implementado (`prioridad_modalidad` en `evaluator.py` y `main.py`) |
 | Desambiguación de motores BH (BH 2EXMAG vs Shimano EP801) | ✅ Verificado (BH iLynx Race/Trail fijado a 2EXMAG, iLynx+ a EP801 + batería BH) |
 | Selectores Bike Ocasión | ✅ Verificados en HTML real (`h3.s_title_block a`, badge `Km / <Marca>`, PVP original, 6 páginas, 180+ bicis) |

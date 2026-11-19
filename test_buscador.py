@@ -235,22 +235,22 @@ def test_perito_mecanico_senior_reglas_y_lineas_rojas():
     """Verifica el cálculo paso a paso del Perito Mecánico Senior y sus Líneas Rojas."""
     from gemini_classifier import auditar_perito_mecanico
 
-    # Caso 1: Línea Roja > 6.000 km + BH (-1.0 base centralita -1.5 >3000km = -2.5)
+    # Caso 1: Línea Roja > 6.000 km + BH (-2.0 base sin informe PDF - 1.0 >3000km = -3.0)
     b_roja_km = bici_prueba(km=8407, peso_kg=16.8, motor="BH 2EXMAG", precio=2768.0)
     res_km = auditar_perito_mecanico(b_roja_km)
     assert res_km["nota_final"] <= 4.5, f"Línea roja >6000 km violada: {res_km}"
-    assert res_km["delta_motor"] == -2.5
+    assert res_km["delta_motor"] == -3.0
 
     # Caso 2: Línea Roja > 21.0 kg (nota máxima 4.0)
     b_roja_peso = bici_prueba(km=500, peso_kg=22.4, motor="Bosch CX", precio=2500.0)
     res_peso = auditar_perito_mecanico(b_roja_peso)
     assert res_peso["nota_final"] <= 4.0, f"Línea roja >21 kg violada: {res_peso}"
 
-    # Caso 3: BH con 1.193 km (-1.0 km) + 18.2 kg (+0.5 peso) - 1.0 (centralita BH) => 8.5/10
+    # Caso 3: BH con 1.193 km (-1.0 km) + 18.2 kg (+0.5 peso) - 2.0 (centralita BH sin informe) => 7.5/10
     b_bh_bajos_km = bici_prueba(km=1193, peso_kg=18.2, motor="BH 2EXMAG", precio=2981.0)
     res_bh = auditar_perito_mecanico(b_bh_bajos_km)
-    assert res_bh["delta_motor"] == -1.0
-    assert res_bh["nota_final"] == 8.5, f"Esperado 8.5, obtenido: {res_bh}"
+    assert res_bh["delta_motor"] == -2.0
+    assert res_bh["nota_final"] == 7.5, f"Esperado 7.5, obtenido: {res_bh}"
 
     # Caso 4: Precio > 3.000 € y > 2.000 km (-1.5 precio, -2.5 km) con Shimano (-0.0)
     b_cara_rodada = bici_prueba(km=2500, peso_kg=19.5, motor="Shimano EP8", precio=3150.0)
@@ -258,6 +258,24 @@ def test_perito_mecanico_senior_reglas_y_lineas_rojas():
     assert res_cara["delta_km"] == -2.5
     assert res_cara["delta_precio"] == -1.5
     assert res_cara["nota_final"] == 6.0
+
+    # Caso 5: BH aparente chollo (<19 kg, 200 km, >50% dto vs PVP) queda limitada <= 8.5 sin alcanzar Mega Chollo >= 9.0
+    b_bh_chollo = bici_prueba(
+        titulo="BH iLynx Race Carbon 8.4 LT",
+        km=200,
+        peso_kg=16.8,
+        motor="BH 2EXMAG",
+        precio=2000.0,
+        pvp_original=6000.0,
+    )
+    res_bh_chollo = auditar_perito_mecanico(b_bh_chollo)
+    assert res_bh_chollo["nota_final"] <= 8.5
+    assert es_mega_chollo(b_bh_chollo, res_bh_chollo["nota_final"]) is False
+    nota_eval_bh, desglose_eval_bh = calcular_nota_oportunidad(b_bh_chollo)
+    assert nota_eval_bh <= 8.5
+    assert "Ajuste BH" in desglose_eval_bh
+    pts_doc_bh, txt_doc_bh = evaluar_documentacion_motor("Shimano EP801", "BH iLynx+ Trail")
+    assert pts_doc_bh == 1.0 and "BH no genera informe PDF" in txt_doc_bh
 
 
 def test_optimizacion_tarjetas_upway_y_buhobike():
@@ -1173,6 +1191,209 @@ def test_rotacion_consecutiva_top3_y_aviso():
             pass
 
 
+def test_wallapop_geolocalizado_y_filtros():
+    """Valida WallapopScraper: geo-filtro 50 km Fuenlabrada, NLP, garantía particular y enriquecedor sin SPA."""
+    from scrapers.wallapop import WallapopScraper, distancia_haversine_km
+    from scrapers.enriquecedor_web import enriquecer_bici
+
+    # 1. Config preserva índices 0..3 y registra Wallapop en el índice 4 con radio 50 km desde Fuenlabrada
+    assert cfg.SITIOS[0].nombre == "Bike Ocasión"
+    assert cfg.SITIOS[3].nombre == "Mammoth"
+    assert cfg.SITIOS[4].nombre == "Wallapop"
+    assert cfg.SITIOS[4].garantia_anos == 0
+    assert cfg.WALLAPOP_RADIO_KM == 50
+
+    dist_getafe = distancia_haversine_km(cfg.WALLAPOP_LAT, cfg.WALLAPOP_LON, 40.3057, -3.7329)
+    assert 3.0 <= dist_getafe <= 10.0
+
+    scraper = WallapopScraper(cfg.SITIOS[4])
+
+    pagina_mock = {
+        "data": {
+            "section": {
+                "payload": {
+                    "items": [
+                        {
+                            "id": "abc111",
+                            "category_id": 17000,
+                            "title": "Orbea Rise H10 Talla M + incluye cargador",
+                            "description": "Bicicleta doble suspensión, bateria 540w, 3000km, cadena a estrenar, cuadro carbono, motor Shimano EP8 RS.",
+                            "price": {"amount": 2650.0, "currency": "EUR"},
+                            "reserved": {"flag": False},
+                            "has_warranty": {"flag": False},
+                            "is_refurbished": {"flag": False},
+                            "location": {"latitude": 40.3057, "longitude": -3.7329, "city": "Getafe"},
+                            "web_slug": "orbea-rise-h10-abc111",
+                            "images": [
+                                {"urls": {"big": "https://cdn.wallapop.com/images/test1.jpg"}},
+                            ],
+                        },
+                        {
+                            "id": "lejos222",
+                            "category_id": 17000,
+                            "title": "Specialized Turbo Levo Talla M chollo",
+                            "description": "Doble suspensión 700Wh 500 km.",
+                            "price": {"amount": 2500.0, "currency": "EUR"},
+                            "reserved": {"flag": False},
+                            "location": {"latitude": 41.3851, "longitude": 2.1734, "city": "Barcelona"},
+                            "bump": {"type": "country"},
+                            "web_slug": "turbo-levo-bcn",
+                        },
+                        {
+                            "id": "res333",
+                            "category_id": 17000,
+                            "title": "BH iLynx Trail t.M",
+                            "description": "Doble suspensión 540Wh.",
+                            "price": {"amount": 2400.0, "currency": "EUR"},
+                            "reserved": {"flag": True},
+                            "location": {"latitude": 40.2842, "longitude": -3.7942, "city": "Fuenlabrada"},
+                            "web_slug": "bh-res",
+                        },
+                        {
+                            "id": "grav444",
+                            "category_id": 17000,
+                            "title": "Orbea Gravel Eléctrica Talla M",
+                            "description": "Ideal pistas.",
+                            "price": {"amount": 2400.0, "currency": "EUR"},
+                            "reserved": {"flag": False},
+                            "location": {"latitude": 40.2842, "longitude": -3.7942, "city": "Fuenlabrada"},
+                            "web_slug": "gravel-fuenla",
+                        },
+                        {
+                            "id": "sintalla555",
+                            "category_id": 17000,
+                            "title": "Pivot Shuttle SL Talla M/L",
+                            "description": "Doble suspensión.",
+                            "price": {"amount": 2990.0, "currency": "EUR"},
+                            "reserved": {"flag": False},
+                            "location": {"latitude": 40.3200, "longitude": -3.7600, "city": "Leganés"},
+                            "web_slug": "pivot-ml",
+                        },
+                        {
+                            "id": "refurb666",
+                            "category_id": 17000,
+                            "title": "Kenevo SL + extender original 160w Talla S3",
+                            "description": "Doble suspensión batería interna 320Wh + extender 160w incluido.",
+                            "price": {"amount": 2900.0, "currency": "EUR"},
+                            "reserved": {"flag": False},
+                            "has_warranty": {"flag": True},
+                            "is_refurbished": {"flag": True},
+                            "location": {"latitude": 40.3300, "longitude": -3.7600, "city": "Leganés"},
+                            "web_slug": "kenevo-s3",
+                        },
+                    ]
+                }
+            }
+        },
+        "meta": {"next_page": None},
+    }
+
+    with patch.object(scraper, "_obtener_pagina_api", return_value=pagina_mock):
+        bicis = scraper.extraer_bicicletas()
+
+    ids = [b.bici_id for b in bicis]
+    assert "wallapop-abc111" in ids
+    assert "wallapop-lejos222" not in ids, "Anuncios remotos > 50 km deben bloquearse aunque tengan bump country"
+    assert "wallapop-res333" not in ids, "Anuncios reservados deben descartarse (S0)"
+    assert "wallapop-grav444" not in ids, "Bicis Gravel/Urbanas deben descartarse"
+    assert "wallapop-refurb666" in ids
+
+    b_priv = next(b for b in bicis if b.bici_id == "wallapop-abc111")
+    assert b_priv.talla == "M"
+    assert b_priv.bateria_wh == 540
+    assert b_priv.km == 3000, f"Debía extraer 3000 km pese a mencionar 'cadena a estrenar', obtuvo {b_priv.km}"
+    assert b_priv.suspension_trasera == "si"
+    assert b_priv.garantia_anos == 0
+    assert "Getafe" in (b_priv.ubicacion or "")
+    assert b_priv.imagenes == ["https://cdn.wallapop.com/images/test1.jpg"]
+
+    b_ml = next(b for b in bicis if b.bici_id == "wallapop-sintalla555")
+    assert b_ml.talla == "ML"
+    apto_ml, _ = pasa_filtros_estrictos(b_ml)
+    assert apto_ml is False, "Talla M/L no debe pasar el filtro estricto de Talla M"
+
+    b_ref = next(b for b in bicis if b.bici_id == "wallapop-refurb666")
+    assert b_ref.talla == "M", f"Specialized S3 equivale a talla M, obtuvo {b_ref.talla}"
+    assert b_ref.range_extender_wh == 160
+    assert b_ref.garantia_anos == 1
+
+    # 2. Auditoría pericial y Telegram en particulares (garantia_anos=0) sin mentir sobre garantía profesional
+    audit_priv = auditar_perito_mecanico(b_priv)
+    assert "1 año de garantía" not in audit_priv["txt_motor"]
+    assert "1 año de garantía" not in audit_priv["txt_bateria"]
+    nota_priv, desglose_priv = valorar_autonomo(b_priv)
+    assert "1 año de garantía" not in desglose_priv
+    msg_priv = formatear_mensaje(b_priv, nota_priv, desglose_priv)
+    assert "Sin garantía comercial (particular)" in msg_priv
+    assert "📍 Ubicación: Getafe" in msg_priv
+
+    # 3. Enriquecedor Wallapop usa galería de imágenes pre-cargada sin scrapear HTML SPA
+    b_sin_km = bici_prueba(
+        sitio="Wallapop",
+        bici_id="wallapop-vis999",
+        url="https://es.wallapop.com/item/wallapop-vis999",
+        km=None,
+        garantia_anos=0,
+        peso_kg=18.5,
+        ano=2023,
+        suspension_trasera="si",
+        imagenes=["https://cdn.wallapop.com/images/odo.jpg"],
+    )
+    with patch("scrapers.enriquecedor_web._buscar_en_cache", return_value=None), \
+         patch("scrapers.enriquecedor_web._guardar_en_cache"), \
+         patch("scrapers.enriquecedor_web._extraer_desde_ficha_sitio") as mock_ficha, \
+         patch("scrapers.enriquecedor_web._extraer_km_de_imagenes", return_value=1420) as mock_vis, \
+         patch.object(cfg, "GEMINI_API_KEY", "fake_key"):
+        b_enr = enriquecer_bici(b_sin_km, url_ficha=b_sin_km.url)
+        assert mock_ficha.called is False, "No debe intentar scrapear HTML SPA de Wallapop"
+        assert mock_vis.called is True
+        assert b_enr.km == 1420
+
+    # 4. Casos borde adversariales: M-Team, 170-180 mm, motor 600W/750W, extender separado, JSON nulo, sin coords
+    from scrapers.wallapop import _extraer_talla_wallapop
+    assert _extraer_talla_wallapop("Orbea Rise M-Team 2023", "Horquilla 170-180 mm") == "No indicada"
+    assert _extraer_range_extender("batería interna de 360Wh + extender 252Wh incluido") == 252
+    assert _extraer_range_extender("Orbea Rise + extender incluido, motor 250w") == 252
+
+    pagina_borde = {
+        "data": {
+            "section": {
+                "payload": {
+                    "items": [
+                        {
+                            "id": "sincoords",
+                            "category_id": 17000,
+                            "title": "Orbea Rise Talla M",
+                            "price": {"amount": 2500.0},
+                            "reserved": None,
+                            "location": {},
+                        },
+                        {
+                            "id": "motorw",
+                            "category_id": 17000,
+                            "title": "Orbea Rise M-Team 2023",
+                            "description": "Bosch SX 600W y batería 360Wh. Extender 252w se vende por separado. 170-180 mm",
+                            "price": {"amount": 2500.0},
+                            "reserved": None,
+                            "location": {"latitude": 40.2842, "longitude": -3.7942, "city": "Fuenlabrada"},
+                            "web_slug": "motorw",
+                        },
+                        "item_corrupto_no_dict",
+                    ]
+                }
+            }
+        },
+        "meta": None,
+    }
+    with patch.object(scraper, "_obtener_pagina_api", return_value=pagina_borde):
+        bicis_borde = scraper.extraer_bicicletas()
+    assert [b.bici_id for b in bicis_borde] == ["wallapop-motorw"]
+    bm = bicis_borde[0]
+    assert bm.talla == "No indicada"
+    assert bm.bateria_wh == 360
+    assert bm.range_extender_wh is None
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -1198,4 +1419,5 @@ if __name__ == "__main__":
     test_mega_chollo_alerta_y_formato_telegram()
     test_segmentacion_sonora_vs_silenciosa_telegram()
     test_rotacion_consecutiva_top3_y_aviso()
+    test_wallapop_geolocalizado_y_filtros()
     print("Todas las pruebas pasaron (GREEN).")

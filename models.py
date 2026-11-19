@@ -4,7 +4,7 @@ Modelo de datos de una bicicleta encontrada.
 """
 
 from dataclasses import dataclass, asdict
-from typing import Optional
+from typing import Optional, List
 
 
 @dataclass
@@ -31,6 +31,8 @@ class Bicicleta:
     garantia_anos: Optional[int] = None
     disponible: bool = True                  # False si figura reservada, agotada o sin stock
     pvp_original: Optional[float] = None     # PVP original de fábrica / nuevo (referencia de catálogo)
+    ubicacion: Optional[str] = None          # Municipio / distancia (ej. "Getafe (4.1 km)" en Wallapop)
+    imagenes: Optional[List[str]] = None     # URLs de galería pre-cargadas (APIs estructuradas como Wallapop)
 
     def to_dict(self) -> dict:
         return asdict(self)

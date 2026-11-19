@@ -30,6 +30,7 @@ from typing import Dict, Optional, Tuple
 import requests
 
 import config as cfg
+from evaluator import TECHO_NOTA_BH, es_bici_bh
 from models import Bicicleta
 from scrapers.enriquecedor_web import (
     enriquecer_bici,
@@ -379,13 +380,34 @@ CATALOGO_EMTB = [
 # ---------------------------------------------------------------------------
 # Base de conocimiento sobre documentación/diagnóstico fiable por motor
 # ---------------------------------------------------------------------------
-def evaluar_documentacion_motor(motor_str: Optional[str], titulo: str = "") -> Tuple[float, str]:
+def evaluar_documentacion_motor(
+    motor_str: Optional[str],
+    titulo: str = "",
+    garantia_anos: Optional[int] = None,
+) -> Tuple[float, str]:
     """
     Evalúa la viabilidad de extraer un informe oficial de diagnóstico del motor y batería.
     Devuelve (puntos sobre 2.0, explicación técnica).
     """
     texto = f"{motor_str or ''} {titulo}".lower()
+    sin_garantia_tienda = garantia_anos == 0
+    sufijo_bh = (
+        "venta entre particulares sin garantía de tienda (exigir factura e informe oficial previo)"
+        if sin_garantia_tienda
+        else "respaldado por 1 año de garantía mecánica de tienda"
+    )
+    sufijo_otro = (
+        "venta entre particulares sin garantía mecánica de tienda"
+        if sin_garantia_tienda
+        else "cubierta por 1 año de garantía mecánica de la tienda profesional"
+    )
 
+    if es_bici_bh(Bicicleta(sitio="", bici_id="", titulo=titulo, precio=0.0, url="", motor=motor_str)):
+        return (
+            1.0,
+            f"Baja-Media (BH no genera informe PDF oficial verificable de odómetro real, "
+            f"ciclos ni SoH de batería; alto riesgo de desgaste oculto aunque aparente chollo; {sufijo_bh})",
+        )
     if "bosch" in texto:
         return (
             2.0,
@@ -416,16 +438,9 @@ def evaluar_documentacion_motor(motor_str: Optional[str], titulo: str = "") -> T
             "Media-Alta (Giant RideControl / diagnóstico Yamaha en taller oficial verifica "
             "salud de EnergyPak, ciclos de carga y odómetro)",
         )
-    if "bh" in texto or "2exmag" in texto or "2esmag" in texto or "ilynx" in texto:
-        return (
-            1.5,
-            "Media (diagnóstico en servicio oficial BH Core/2EXMAG verifica estado de celdas "
-            "y odómetro; respaldado por 1 año de garantía mecánica de tienda)",
-        )
     return (
         1.2,
-        "Media (requiere lectura de taller multimarca; cubierta por 1 año de garantía "
-        "mecánica de la tienda profesional)",
+        f"Media (requiere lectura de taller multimarca; {sufijo_otro})",
     )
 
 
@@ -637,31 +652,31 @@ def auditar_perito_mecanico(bici: Bicicleta) -> dict:
     # 3. EVALUACIÓN DE MOTOR, CENTRALITA Y DIAGNÓSTICO
     motor_lower = (bici.motor or "").lower()
     titulo_lower = bici.titulo.lower()
-    es_marca_bh = (
-        any(k in titulo_lower for k in ["bh ", "ilynx", "atomx"])
-        or any(k in motor_lower for k in ["2exmag", "2esmag", "bh"])
-    )
+    es_marca_bh = es_bici_bh(bici)
     es_brose = "brose" in motor_lower
     es_shimano_o_bosch = not es_marca_bh and not es_brose and (
         any(k in motor_lower for k in ["shimano", "ep8", "ep6", "bosch"])
         or any(k in titulo_lower for k in ["ep8", "ep6", "bosch", "orbea rise"])
     )
 
+    garantia_bici = getattr(bici, "garantia_anos", None)
     if es_marca_bh:
+        techo = min(techo, TECHO_NOTA_BH)
+        lineas_rojas.append(f"LÍNEA PREVENTIVA BH (sin informe PDF, máx {TECHO_NOTA_BH})")
         if (km or 0) > 3000:
-            delta_motor = -2.5
+            delta_motor = -3.0
             txt_motor = (
                 f"Centralita/Motor BH ({bici.motor or 'BH 2EXMAG'}) con {km} km "
-                f"(-1.0 pt por centralita BH con software propietario y opaco sin informe PDF veraz "
-                f"-1.5 pts extra por superar 3.000 km a ciegas = -2.5 pts): Riesgo alto al no poder "
-                f"auditar ciclos reales ni SoH de celdas mediante informe oficial."
+                f"(-2.0 pts sin informe pericial PDF verificable "
+                f"-1.0 pt extra por superar 3.000 km a ciegas = -3.0 pts, máx {TECHO_NOTA_BH}): "
+                f"Riesgo alto de desgaste oculto al no poder auditar km reales, ciclos ni SoH en informe oficial."
             )
         else:
-            delta_motor = -1.0
+            delta_motor = -2.0
             txt_motor = (
-                f"Centralita/Motor BH ({bici.motor or 'BH'}) (-1.0 pt): Penalización directa porque "
-                f"BH utiliza una centralita con software propietario y opaco que impide extraer un "
-                f"informe pericial veraz en PDF sobre ciclos y salud real de la batería."
+                f"Centralita/Motor BH ({bici.motor or 'BH'}) (-2.0 pts, máx {TECHO_NOTA_BH}): "
+                f"Aunque aparente ser un chollo, BH impide extraer un informe pericial PDF oficial "
+                f"de km reales, ciclos y salud de celdas, aumentando el riesgo de desgaste oculto."
             )
     elif es_brose and (km or 0) > 3000:
         delta_motor = -1.5
@@ -671,11 +686,11 @@ def auditar_perito_mecanico(bici: Bicicleta) -> dict:
         )
     elif es_shimano_o_bosch:
         delta_motor = 0.0
-        _, doc_ref = evaluar_documentacion_motor(bici.motor, bici.titulo)
+        _, doc_ref = evaluar_documentacion_motor(bici.motor, bici.titulo, garantia_anos=garantia_bici)
         txt_motor = f"{bici.motor or 'Shimano/Bosch'} (-0.0 pts): {doc_ref}."
     else:
         delta_motor = 0.0
-        _, doc_ref = evaluar_documentacion_motor(bici.motor, bici.titulo)
+        _, doc_ref = evaluar_documentacion_motor(bici.motor, bici.titulo, garantia_anos=garantia_bici)
         txt_motor = (
             f"{bici.motor or 'Motor de serie'} (-0.0 pts, km <=3.000): {doc_ref}."
         )
@@ -730,9 +745,14 @@ def auditar_perito_mecanico(bici: Bicicleta) -> dict:
             f"(SoH estimado 84-89%); verificar equilibrio de celdas en diagnóstico."
         )
     else:
+        txt_garantia_bat = (
+            "venta entre particulares sin garantía comercial de tienda (verificar factura y test SoH en persona)."
+            if garantia_bici == 0
+            else "respaldada por 1 año de garantía profesional."
+        )
         txt_bateria = (
             f"{bat} Wh{extender_str} ({ciclos_txt}): Salud óptima de celdas "
-            f"(SoH estimado 93-99%) respaldada por 1 año de garantía profesional."
+            f"(SoH estimado 93-99%), {txt_garantia_bat}"
         )
 
     # 5. PRECIO FRENTE A COMPONENTES
@@ -885,8 +905,9 @@ def enriquecer_y_valorar_bici(bici: Bicicleta) -> Tuple[Bicicleta, float, str]:
     # 2. Enriquecimiento desde catálogo técnico de modelos e-MTB
     bici = completar_con_catalogo(bici, aplicar_heuristica_peso=False)
 
-    # Verificar caché de valoración IA (versión v3 perito con penalización BH -1.0) para esta bici y precio
-    cache_key = f"perito_v3:{bici.sitio}:{bici.bici_id}:{int(bici.precio)}"
+    # Verificar caché de valoración IA (v4 específico para ajuste estricto BH -2.0 / máx 8.5)
+    cache_version = "perito_v4" if es_bici_bh(bici) else "perito_v3"
+    cache_key = f"{cache_version}:{bici.sitio}:{bici.bici_id}:{int(bici.precio)}"
     cache_ia = _cargar_cache_ia()
     if cache_key in cache_ia:
         entry = cache_ia[cache_key]
@@ -928,8 +949,8 @@ REGLA MAESTRA: NUNCA hagas una media optimista. La evaluación parte de una nota
 
 3. EVALUACIÓN DE MOTOR, CENTRALITA Y DIAGNÓSTICO:
 - Motor Shimano (EP8/EP8-RS) o Bosch (CX) en marcas con diagnóstico abierto: -0.0 puntos (Permiten informe PDF pericial oficial, máxima transparencia).
-- Bicicletas BH (iLynx, AtomX, BH 2EXMAG): Resta SIEMPRE -1.0 punto base porque no se le puede sacar un informe veraz en PDF de su centralita al tener un software propietario y opaco.
-- Además, en BH 2EXMAG o Brose con más de 3.000 km: resta -1.5 puntos extra por la imposibilidad de verificar salud de batería y ciclos sin software cerrado de la marca (total -2.5 pts en BH >3.000 km).
+- Bicicletas BH (iLynx, AtomX, Xtep, BH 2EXMAG): Resta SIEMPRE -2.0 puntos base y aplica LÍNEA PREVENTIVA (nota máxima 8.5/10), porque no disponen de informe pericial verificable en PDF y pueden ocultar desgaste mecánico/batería superior al aparente aunque parezcan un chollo.
+- En BH con más de 3.000 km: resta -3.0 puntos totales por desgaste a ciegas; en Brose >3.000 km: resta -1.5 puntos extra.
 
 4. PRECIO FRENTE A COMPONENTES:
 - Rango base: 2.000 € a 3.000 €.
@@ -949,6 +970,7 @@ Datos extraídos de la bicicleta ({bici.sitio}):
 - Kilómetros: {bici.km if bici.km is not None else 'no declarados'}
 - Año: {bici.ano if bici.ano is not None else 'desconocido'}
 - Componentes: {bici.componentes or 'de serie'}
+- Garantía: {'Sin garantía comercial de tienda (particular)' if getattr(bici, 'garantia_anos', None) == 0 else f"{getattr(bici, 'garantia_anos', None) if getattr(bici, 'garantia_anos', None) is not None else 1} año(s)"}
 - Cálculo aritmético preliminar: {audit_pre['formula_str']}
 
 PROCEDIMIENTO DE SALIDA (CHAIN OF THOUGHT):
@@ -969,7 +991,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido con esta estructura exacta:
   "nota": numero_float_de_0_a_10,
   "km_analisis": "justificación matemática de la resta por km y costes ocultos (retenes, transmisión, rodamientos)",
   "peso_analisis": "justificación matemática por peso (+/- puntos o línea roja) y comportamiento dinámico",
-  "motor_doc_analisis": "justificación matemática del motor (-0.0 o -1.5 pts) y viabilidad de informe pericial PDF",
+  "motor_doc_analisis": "justificación matemática del motor (-0.0, -1.5, -2.0 o -3.0 pts) y viabilidad de informe pericial PDF",
   "bateria_analisis": "auditoría crítica de degradación de celdas, ciclos estimados y riesgo fuera de garantía",
   "componentes_analisis": "justificación matemática del precio (-0.0 o -1.5 pts) frente a los componentes equipados"
 }}"""

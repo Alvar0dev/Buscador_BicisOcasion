@@ -75,6 +75,11 @@ def formatear_mensaje(
         if bici.garantia_anos is not None
         else cfg.SITIOS[0].garantia_anos
     )
+    garantia_txt = (
+        "Sin garantía comercial (particular)"
+        if garantia == 0
+        else f"{garantia} año(s)"
+    )
 
     desglose_seguro = (
         str(desglose)
@@ -147,11 +152,18 @@ def formatear_mensaje(
             f"💡 _Exponiendo siguiente mejor alternativa{pos_txt} del catálogo:_\n\n"
         )
 
+    linea_ubicacion = (
+        f"📍 Ubicación: {bici.ubicacion}\n"
+        if getattr(bici, "ubicacion", None)
+        else ""
+    )
+
     mensaje = (
         f"{banner_repetido}"
         f"{cabecera}\n\n"
         f"*{bici.titulo}*\n"
         f"🏪 Tienda: {bici.sitio}\n"
+        f"{linea_ubicacion}"
         f"{linea_precio}\n"
         f"{linea_pvp}"
         f"🔥 Nota de Oportunidad: *{nota}/10*\n\n"
@@ -163,7 +175,7 @@ def formatear_mensaje(
         f"⚡ Motor: {motor}\n"
         f"📅 Año: {ano}\n"
         f"🛣️ Kilómetros: {km}\n"
-        f"🛡️ Garantía: {garantia} año(s)\n"
+        f"🛡️ Garantía: {garantia_txt}\n"
         f"{linea_seguimiento}\n"
         f"_Valoración técnica (IA / 5 ejes):_\n{desglose_seguro}\n\n"
         f"🔗 [Enlace directo de compra]({bici.url})"

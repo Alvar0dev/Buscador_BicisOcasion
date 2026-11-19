@@ -25,10 +25,14 @@ class SitioObjetivo:
 
 
 # ---------------------------------------------------------------------------
-# SITIOS OBJETIVO (S14)
-# Solo tiendas profesionales de reacondicionado con garantía mecánica ≥ 1 año.
-# Bajo ningún concepto añadir Wallapop, Milanuncios ni foros de particulares.
+# SITIOS OBJETIVO (S14 + Wallapop geolocalizado)
+# Tiendas profesionales de reacondicionado (índices 0..3) y anuncios de Wallapop
+# geolocalizados en un radio configurable alrededor de Fuenlabrada (índice 4).
 # ---------------------------------------------------------------------------
+WALLAPOP_LAT: float = float(os.getenv("WALLAPOP_LAT", "40.2842"))
+WALLAPOP_LON: float = float(os.getenv("WALLAPOP_LON", "-3.7942"))
+WALLAPOP_RADIO_KM: int = int(os.getenv("WALLAPOP_RADIO_KM", "50"))
+
 SITIOS: List[SitioObjetivo] = [
     SitioObjetivo(
         nombre="Bike Ocasión",
@@ -50,6 +54,12 @@ SITIOS: List[SitioObjetivo] = [
         base_url="https://www.mammothbikes.com",
         seccion_emtb="https://www.mammothbikes.com/bicicletas-electricas-mtb-dobles-rally-xc/c-3104",
         garantia_anos=3,
+    ),
+    SitioObjetivo(
+        nombre="Wallapop",
+        base_url="https://es.wallapop.com",
+        seccion_emtb="https://api.wallapop.com/api/v3/search",
+        garantia_anos=0,  # Particulares por defecto (1 si is_refurbished / has_warranty)
     ),
 ]
 

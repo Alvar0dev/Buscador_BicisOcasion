@@ -556,7 +556,9 @@ def _extraer_bateria(texto: str) -> Optional[int]:
     for match in re.finditer(r"(\d+)\s*wh\b", texto_norm, re.IGNORECASE):
         ini = max(0, match.start() - 50)
         fin = min(len(texto_norm), match.end() + 50)
-        ctx = texto_norm[ini:fin].lower()
+        pref_ctx = re.split(r"(?<!\d)\.(?!\d)|[;\n]", texto_norm[ini:match.start()])[-1]
+        suf_ctx = re.split(r"(?<!\d)\.(?!\d)|[;\n]", texto_norm[match.end():fin])[0]
+        ctx = f"{pref_ctx} {match.group(0)} {suf_ctx}".lower()
         if any(exc in ctx for exc in palabras_extender_opcional):
             continue
         try:
@@ -666,6 +668,15 @@ def _extraer_disponibilidad_ficha(soup: BeautifulSoup, texto_completo: str) -> b
     return True
 
 
+PALABRAS_EXCLUSION_EXTENDER = (
+    "compatible con", "compatibilidad con", "extender compatible",
+    "opcional", "opción de", "opcion de",
+    "posibilidad de", "admite", "preparado para", "preparada para",
+    "no incluye", "no incluido", "no incluida", "se vende por separado",
+    "se adquiere por separado", "sin extender", "sin batería adicional",
+)
+
+
 def _extraer_range_extender(texto: str) -> Optional[int]:
     """
     Detecta si una bicicleta incluye un Range Extender o segunda batería externa.
@@ -689,12 +700,7 @@ def _extraer_range_extender(texto: str) -> Optional[int]:
     if not any(t in texto_lower for t in terminos_extender):
         return None
 
-    palabras_exclusion = (
-        "compatible con", "compatibilidad con", "opcional", "opción de", "opcion de",
-        "posibilidad de", "admite", "preparado para", "preparada para",
-        "no incluye", "no incluido", "no incluida", "se vende por separado",
-        "se adquiere por separado", "sin extender", "sin batería adicional",
-    )
+    palabras_exclusion = PALABRAS_EXCLUSION_EXTENDER
 
     termino_bateria = (
         r"(?:range\s*extender|extender|"
@@ -703,28 +709,43 @@ def _extraer_range_extender(texto: str) -> Optional[int]:
         r"x-?pro|powermore)"
     )
 
-    # 1. Patrón con Wh explícito (ej. "+ Batería XPro 180Wh", "incluye range extender de 252Wh")
-    patron_con_wh = re.finditer(
-        rf"(?:(?:\+|con|incluye|incluido|incluida|regalo|segunda|extra|pack)\s+[^.]{{0,40}}?"
+    # 1a. Rama directa con Wh/W explícito tras el término del extender (misma cláusula, sin cruzar comas ni 'motor')
+    patron_directo = re.finditer(
+        rf"(?:\+|con|incluye|incluido|incluida|regalo|segunda|extra|pack)\s+[^.,;\n]{{0,35}}?"
         rf"{termino_bateria}"
-        rf"[^.]{{0,30}}?(\d{{3}})\s*wh\b)"
-        rf"|"
-        rf"(?:(\d{{3}})\s*wh\b[^.]{{0,30}}?"
-        rf"{termino_bateria}"
-        rf"[^.]{{0,40}}?(?:incluid[oa]|de\s+regalo|\+))",
+        rf"[^.,;\n]{{0,25}}?(\d{{3}})\s*wh?\b",
         texto_norm,
         re.IGNORECASE,
     )
-
-    for m in patron_con_wh:
+    for m in patron_directo:
         fragmento = m.group(0).lower()
         if any(exc in fragmento for exc in palabras_exclusion):
             continue
-        match_wh = re.search(r"(\d{3})\s*wh", fragmento)
-        if match_wh:
-            val = int(match_wh.group(1))
-            if 140 <= val <= 380:
-                return val
+        if re.search(r"\b(?:motor|potencia|pico)\b", fragmento):
+            continue
+        val = int(m.group(1))
+        if 140 <= val <= 380:
+            return val
+
+    # 1b. Rama inversa ("252Wh range extender incluido"), descartando baterías internas previas
+    patron_inverso = re.finditer(
+        rf"(\d{{3}})\s*wh\b[^.,;\n]{{0,25}}?"
+        rf"{termino_bateria}"
+        rf"[^.,;\n]{{0,35}}?(?:incluid[oa]|de\s+regalo|\+)",
+        texto_norm,
+        re.IGNORECASE,
+    )
+    for m in patron_inverso:
+        inicio = max(0, m.start() - 30)
+        ctx_previo = texto_norm[inicio:m.start()].lower()
+        if any(b_int in ctx_previo for b_int in ("interna", "principal", "integrada", "batería", "bateria")):
+            continue
+        fragmento = m.group(0).lower()
+        if any(exc in fragmento for exc in palabras_exclusion):
+            continue
+        val = int(m.group(1))
+        if 140 <= val <= 380:
+            return val
 
     # 2. Patrón de inclusión nominal sin Wh explícito -> inferir por marca/modelo
     patrones_inclusion = (
@@ -960,9 +981,9 @@ def _extraer_km(texto: str) -> Optional[int]:
         contexto_total = f"{contexto_previo} {contexto_posterior}"
 
         palabras_bloqueadas = (
-            "engrasar", "engrase", "cera", "cadena", "mantenimiento",
-            "cambies la cadena", "cambiar la cadena", "después de la compra",
-            "tras la compra", "autonomía", "autonomia", "alcance",
+            "engrasar", "engrase", "engrasado", "cera", "mantenimiento",
+            "cambies la cadena", "cambiar la cadena", "cambiar cadena", "cambio de cadena",
+            "después de la compra", "tras la compra", "autonomía", "autonomia", "alcance",
             "radio", "distancia", "radio de", "a menos de", "garantía de",
         )
         if any(p in contexto_total for p in palabras_bloqueadas):
@@ -1007,15 +1028,58 @@ def _extraer_motor(texto: str) -> Optional[str]:
 
 
 def _extraer_talla(texto: str) -> Optional[str]:
-    match = re.search(r"\btalla\s*:\s*([A-Za-z]+)\b", texto, re.IGNORECASE)
-    if match:
-        t = match.group(1).upper()
-        if t in ("XS", "S", "M", "L", "XL", "XXL", "SM", "ML"):
-            return t
-    # Buscar patrones como "Talla M" o "T-M"
-    match2 = re.search(r"\b(?:Talla|T)[\s\-]+(XS|S|M|L|XL|SM|ML)\b", texto, re.IGNORECASE)
-    if match2:
-        return match2.group(1).upper()
+    # 0. Tallas compuestas explícitas (ej. "Talla M/L", "Size S/M") antes que letra suelta
+    m_comp = re.search(
+        r"\b(?:Talla|Size|T)\s*[:.\-]?\s*(S\s*/\s*M|M\s*/\s*L|L\s*/\s*XL)\b",
+        texto,
+        re.IGNORECASE,
+    )
+    if m_comp:
+        return re.sub(r"[\s/]+", "", m_comp.group(1)).upper()
+
+    patrones_directos = [
+        r"\btalla\s*:\s*([A-Za-z0-9]+)\b",
+        r"\b(?:Talla|Size)\s*[:.\-]?\s*(XXL|XL|XS|SM|ML|S|M|L)\b",
+        r"(?<!\w)[tT]\.(?!\d)\s*(XXL|XL|XS|SM|ML|S|M|L)\b",
+        r"\b(?:Talla|T)[\s\-]+(XXL|XL|XS|SM|ML|S|M|L)\b",
+    ]
+    for p in patrones_directos:
+        m = re.search(p, texto, re.IGNORECASE)
+        if m:
+            t = m.group(1).upper()
+            if t in ("XS", "S", "M", "L", "XL", "XXL", "SM", "ML"):
+                return t
+            if t in ("50", "51", "52", "53", "54", "55", "56", "57", "58", "59", "60", "61", "62", "17", "18", "19", "20", "21"):
+                m_eq = re.search(r"\b(?:5\d|1\d)\s*\(\s*(XS|S|M|L|XL)\b", texto, re.IGNORECASE)
+                if m_eq:
+                    return m_eq.group(1).upper()
+                return t
+
+    m_spec = re.search(
+        r"\b(?:Talla|Size|Cuadro)\s*[:.\-]?\s*S([1-6])\b(?:\s*\(\s*(XS|S|M|L|XL|XXL)\s*\))?",
+        texto,
+        re.IGNORECASE,
+    )
+    if m_spec:
+        if m_spec.group(2):
+            return m_spec.group(2).upper()
+        mapa_spec = {"1": "XS", "2": "S", "3": "M", "4": "L", "5": "XL", "6": "XXL"}
+        return mapa_spec.get(m_spec.group(1))
+
+    m_word = re.search(
+        r"\b(?:Talla|Size)\s*[:.\-]?\s*(PEQUE[NÑ]A|SMALL|MEDIANA|MEDIUM|GRANDE|LARGE)\b",
+        texto,
+        re.IGNORECASE,
+    )
+    if m_word:
+        w = m_word.group(1).upper()
+        if w in ("PEQUEÑA", "PEQUENA", "SMALL"):
+            return "S"
+        if w in ("MEDIANA", "MEDIUM"):
+            return "M"
+        if w in ("GRANDE", "LARGE"):
+            return "L"
+
     return None
 
 
@@ -1033,6 +1097,8 @@ def _detectar_suspension_trasera(texto: str) -> Optional[bool]:
     ]
     if any(k in texto_lower for k in positivos):
         return True
+    if re.search(r"\br[ií]gid[ao]\b", texto_lower):
+        return False
     return None
 
 
@@ -1158,8 +1224,36 @@ def enriquecer_bici(bici: Bicicleta, url_ficha: Optional[str] = None) -> Bicicle
     if not faltan:
         return bici
 
-    # Paso 1: ficha del propio sitio (mas fiable)
-    if url_ficha and SCRAPLING_AVAILABLE:
+    es_wallapop = bici.sitio.lower() == "wallapop" or (
+        bool(url_ficha) and "wallapop.com" in str(url_ficha).lower()
+    )
+
+    # Paso 1: ficha del propio sitio (mas fiable) o galería pre-cargada en Wallapop
+    if es_wallapop:
+        clave_cache = url_ficha or bici.url
+        cache_hit = _buscar_en_cache(clave_cache) if clave_cache else None
+        if bici.km is None and cache_hit and _normalizar_km_existente(cache_hit.get("km")) is not None:
+            bici.km = _normalizar_km_existente(cache_hit.get("km"))
+        elif (
+            bici.km is None
+            and getattr(bici, "imagenes", None)
+            and cfg.GEMINI_API_KEY
+            and not (cache_hit and cache_hit.get("km_vision_checked"))
+        ):
+            try:
+                km_vis = _extraer_km_de_imagenes(img_urls=list(bici.imagenes)[:6])
+                if clave_cache:
+                    datos_cache = dict(cache_hit) if cache_hit else {}
+                    datos_cache["km_vision_checked"] = True
+                    if km_vis is not None:
+                        datos_cache["km"] = km_vis
+                    _guardar_en_cache(clave_cache, datos_cache)
+                if km_vis is not None:
+                    bici.km = km_vis
+                    log.info(f"[Enriquecedor/Wallapop] Odómetro en imagen para {bici.titulo}: {km_vis} km")
+            except Exception as e:
+                log.warning(f"[Enriquecedor/Wallapop] Error en Visión IA para {bici.titulo}: {e}")
+    elif url_ficha and SCRAPLING_AVAILABLE:
         try:
             detalle = _extraer_desde_ficha_sitio(
                 url_ficha,
@@ -1181,7 +1275,8 @@ def enriquecer_bici(bici: Bicicleta, url_ficha: Optional[str] = None) -> Bicicle
     )
     if faltan_criticos:
         try:
-            consulta = f"{bici.sitio} {bici.titulo} especificaciones peso kg año"
+            prefijo = "" if es_wallapop else f"{bici.sitio} "
+            consulta = f"{prefijo}{bici.titulo} especificaciones peso kg año".strip()
             html = _buscar_duckduckgo(consulta)
             if html:
                 soup = BeautifulSoup(html, "html.parser")

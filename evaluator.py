@@ -6,9 +6,20 @@ Cada bicicleta que pase los filtros estrictos recibe una nota del 0 al 10.
 Solo las que obtengan >= 8.0 se guardan y notifican (S8).
 """
 
+import re
 from typing import Tuple, List
 from models import Bicicleta
 import config as cfg
+
+TECHO_NOTA_BH: float = 8.5
+
+
+def es_bici_bh(bici: Bicicleta) -> bool:
+    """Detecta si la bicicleta pertenece a la marca BH (centralita cerrada sin informe pericial PDF)."""
+    texto = f"{bici.titulo or ''} {bici.motor or ''}".lower()
+    if any(k in texto for k in ("ilynx", "atomx", "xtep", "2exmag", "2esmag")):
+        return True
+    return bool(re.search(r"\bbh\b", texto))
 
 
 # ---------------------------------------------------------------------------
@@ -188,16 +199,26 @@ def _puntuacion_calidad_precio(bici: Bicicleta) -> Tuple[float, str]:
 def _puntuacion_motor(bici: Bicicleta) -> Tuple[float, str]:
     """
     Desgaste de motor: mayor puntuación si marca con diagnóstico claro
-    (Shimano EP8/EP801) o muy pocos kilómetros.
+    (Shimano EP8/EP801, Bosch) o muy pocos kilómetros.
+    Las bicicletas BH pierden la bonificación de diagnóstico transparente por usar
+    centralita propietaria sin informe PDF oficial verificable.
     Devuelve (puntos 0-2.5, justificación).
     """
     texto = f"{bici.motor or ''} {bici.titulo or ''}".lower()
+    es_bh = es_bici_bh(bici)
     puntos = 0.0
     partes: List[str] = []
 
-    if any(m.lower() in texto for m in cfg.MOTORES_LIGEROS):
+    if es_bh:
+        if any(m.lower() in texto for m in cfg.MOTORES_LIGEROS):
+            puntos += 0.5
+            partes.append("motor ligero BH sin informe PDF oficial: +0.5")
+        else:
+            partes.append("centralita BH sin informe pericial oficial: +0.0")
+    elif any(m.lower() in texto for m in cfg.MOTORES_LIGEROS):
         puntos += 1.5
         partes.append("motor ligero/diagnóstico claro: +1.5")
+
     if bici.km is not None and bici.km < 1000:
         puntos += 1.0
         partes.append("pocos km en motor: +1.0")
@@ -233,6 +254,8 @@ def calcular_nota_oportunidad(bici: Bicicleta) -> Tuple[float, str]:
       - Calidad-precio:        3.0
       - Motor / diagnóstico:   2.5
       - Precio excepcional:    2.0
+    Aplica deducción preventiva (-1.0 pt) y techo (máx 8.5) a bicis BH
+    por carecer de informe pericial verificable de desgaste y batería.
     Total máximo: 10.0
     """
     p_km, j_km = _puntuacion_km(bici.km)
@@ -240,14 +263,19 @@ def calcular_nota_oportunidad(bici: Bicicleta) -> Tuple[float, str]:
     p_motor, j_motor = _puntuacion_motor(bici)
     p_precio, j_precio = _puntuacion_precio_excepcional(bici)
 
-    nota = round(p_km + p_cp + p_motor + p_precio, 2)
-    nota = max(0.0, min(10.0, nota))
+    nota = p_km + p_cp + p_motor + p_precio
+    sufijo_bh = ""
+    if es_bici_bh(bici):
+        nota = min(nota - 1.0, TECHO_NOTA_BH)
+        sufijo_bh = f" | Ajuste BH (sin informe pericial PDF): -1.0 (máx {TECHO_NOTA_BH})"
+
+    nota = round(max(0.0, min(10.0, nota)), 2)
 
     desglose = (
         f"Kilometraje: {j_km} | "
         f"Calidad-precio: {j_cp} | "
         f"Motor: {j_motor} | "
-        f"Precio: {j_precio}"
+        f"Precio: {j_precio}{sufijo_bh}"
     )
     return nota, desglose
 
