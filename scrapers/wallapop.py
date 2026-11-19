@@ -79,11 +79,36 @@ _PATRONES_NO_EMTB_TITULO = (
     "axis eride",
     "rayvolt",
     "exploro",
+    "riese muller",
+    "riese & muller",
+    "charger 4",
+    "turbo tero",
+    "orbea diem",
+    "e-teru",
+    "2 bicicletas",
+    "dos bicicletas",
     "alquiler",
     "se alquila",
     "busco ",
     "compro ",
     "despiece",
+)
+
+_MODELOS_DOBLE_RE = re.compile(
+    r"\b(?:"
+    r"doble\b(?!\s+(?:pared|plato|altura|bater[ií]a|piso|capa|junta)\b)"
+    r"|full[\s\-]+suspension"
+    r"|rise|wild|i?lynx|atomx|xtep|levo|kenevo"
+    r"|fuel[\s\-]+ex(?:[\-\s]*e)?|rail|stereo[\s\-]+hybrid"
+    r"|crafty|dusk|neat|trance|reign|stance"
+    r"|moterra|habit[\s\-]+neo|lumen|strike|patron"
+    r"|jam\s*2|thron(?:\s*2)?|vam\s*2|sam\s*2"
+    r"|allmtn|alltrail|e[\-\s]?zesty|zesty|overvolt"
+    r"|spectral|neuron|mako|e[\-\s]?asx|e[\-\s]?riot|riot[\s\-]+am"
+    r"|meta[\s\-]+power|e[\-\s]?feel|niner[\s\-]+rip|e[\-\s]?stream|sonic[\s\-]+evo"
+    r"|powerplay|samedi|intrigue|t[\-\s]?tronik|kapoho|shuttle"
+    r"|heckler|bullit|lt2|fullseven"
+    r")\b"
 )
 
 _PATRONES_DESPIECE_TITULO = re.compile(
@@ -345,6 +370,13 @@ class WallapopScraper(BaseScraper):
 
         susp = _detectar_suspension_trasera(texto_completo)
         suspension_trasera = "si" if susp is True else ("no" if susp is False else None)
+
+        # Exigir doble suspensión explícita o mención de gama e-MTB doble conocida
+        # para evitar títulos ambiguos de particulares (ej. 'Bicicleta Eléctrica BH 237 km').
+        if suspension_trasera != "si":
+            tl_comp = texto_completo.lower().replace("²", "2")
+            if not _MODELOS_DOBLE_RE.search(tl_comp):
+                return None
 
         tiene_garantia_verificada = bool(
             (item.get("has_warranty") or {}).get("flag")

@@ -1394,6 +1394,340 @@ def test_wallapop_geolocalizado_y_filtros():
     assert bm.range_extender_wh is None
 
 
+def test_todo2_dedup_interportal_wallapop_estricto_y_cache_ddg():
+    """Valida deduplicación cruzada inter-portal, filtros estrictos Wallapop/cuadro AL y caché DuckDuckGo."""
+    from db import titulos_equivalentes_dedup
+    from main import deduplicar_inter_portal
+    from scrapers.wallapop import WallapopScraper
+    from scrapers.enriquecedor_web import completar_desde_duckduckgo
+
+    # 1. Deduplicación cruzada inter-portal en corrida y contra bicis_enviadas
+    b_buho = bici_prueba(
+        sitio="Buhobike",
+        bici_id="24839",
+        titulo="ORBEA RISE H10 T-M 2022 BICICLETA SEGUNDA MANO",
+        precio=2599.0,
+    )
+    b_wala_clon = bici_prueba(
+        sitio="Wallapop",
+        bici_id="wallapop-clon-rise",
+        titulo="ORBEA RISE H10 T-M 2022 BICICLETA SEGUNDA MANO - Talla: M",
+        precio=2599.0,
+        garantia_anos=0,
+    )
+    b_wala_barata = bici_prueba(
+        sitio="Wallapop",
+        bici_id="wallapop-barata",
+        titulo="Orbea Rise H10 2023/24 540w Talla M",
+        precio=2200.0,
+        garantia_anos=0,
+    )
+    assert titulos_equivalentes_dedup(b_buho.titulo, b_wala_clon.titulo) is True
+    assert titulos_equivalentes_dedup(b_buho.titulo, b_wala_barata.titulo) is False
+
+    dedup = deduplicar_inter_portal([b_wala_clon, b_wala_barata, b_buho])
+    ids_dedup = [b.bici_id for b in dedup]
+    assert "24839" in ids_dedup
+    assert "wallapop-clon-rise" not in ids_dedup, "El clon de Wallapop debe omitirse frente a la tienda oficial"
+    assert "wallapop-barata" in ids_dedup
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        ruta_db = f.name
+    try:
+        db = BaseDatos(ruta=ruta_db)
+        db.registrar(b_buho, 7.5)
+        assert db.fue_enviada_equivalente(b_wala_clon) is True
+        assert db.fue_enviada_equivalente(b_wala_barata) is False
+    finally:
+        try:
+            if os.path.exists(ruta_db):
+                os.unlink(ruta_db)
+        except (PermissionError, OSError):
+            pass
+
+    # 2. Ghost E-ASX 160 Advanced AL y heurística conservadora de peso/cuadro
+    b_ghost = Bicicleta(
+        sitio="Wallapop",
+        bici_id="wallapop-ghost",
+        titulo="Ghost E-ASX 160 Advanced AL Shimano XT 2023",
+        precio=2849.0,
+        url="https://es.wallapop.com/item/ghost",
+        talla="M",
+    )
+    b_ghost = completar_con_catalogo(b_ghost, aplicar_heuristica_peso=True)
+    assert b_ghost.cuadro_material == "Aluminio"
+    assert b_ghost.peso_kg >= 21.0
+    apto_g, _ = pasa_filtros_estrictos(b_ghost)
+    assert apto_g is False, "Ghost E-ASX 160 Advanced AL (>=21 kg) debe descartarse en filtro S3"
+
+    b_desconocida = Bicicleta(
+        sitio="Wallapop",
+        bici_id="wallapop-unk",
+        titulo="MTB Trail Carbon X12",
+        precio=2500.0,
+        url="https://es.wallapop.com/item/unk",
+        talla="M",
+    )
+    b_desconocida = completar_con_catalogo(b_desconocida, aplicar_heuristica_peso=True)
+    assert b_desconocida.cuadro_material == "Carbono"
+    assert b_desconocida.peso_kg >= 19.0, "Sin batería/peso verificados nunca debe inferir peso pluma <19 kg"
+
+    # 3. Filtros estrictos Wallapop: rechazar urbanas y anuncios genéricos sin modelo doble ni amortiguador
+    scraper = WallapopScraper(cfg.SITIOS[4])
+    pagina_estricta = {
+        "data": {
+            "section": {
+                "payload": {
+                    "items": [
+                        {
+                            "id": "generica1",
+                            "category_id": 17000,
+                            "title": "Bicicleta Eléctrica BH 237 km. Esta nueva!!",
+                            "description": "Cuadro de carbono, horquilla Fox Rhythm, Talla M.",
+                            "price": {"amount": 2100.0},
+                            "reserved": {"flag": False},
+                            "location": {"latitude": 40.2842, "longitude": -3.7942, "city": "Fuenlabrada"},
+                            "web_slug": "bh-gen",
+                        },
+                        {
+                            "id": "urbana2",
+                            "category_id": 17000,
+                            "title": "Bicicleta Orbea Diem 10 t.M Reacondicionada",
+                            "description": "Correa carbono.",
+                            "price": {"amount": 3055.0},
+                            "reserved": {"flag": False},
+                            "location": {"latitude": 40.2842, "longitude": -3.7942, "city": "Fuenlabrada"},
+                            "web_slug": "diem-10",
+                        },
+                    ]
+                }
+            }
+        },
+        "meta": {"next_page": None},
+    }
+    with patch.object(scraper, "_obtener_pagina_api", return_value=pagina_estricta):
+        assert scraper.extraer_bicicletas() == []
+
+    # 4. Caché DuckDuckGo y omisión de títulos genéricos
+    b_gen_ddg = bici_prueba(sitio="Wallapop", titulo="Bicicleta eléctrica", peso_kg=None, ano=None, suspension_trasera=None)
+    with patch("scrapers.enriquecedor_web._buscar_duckduckgo") as mock_ddg:
+        completar_desde_duckduckgo(b_gen_ddg)
+        assert mock_ddg.called is False, "Títulos genéricos no deben disparar consultas DuckDuckGo"
+
+    b_concreta = bici_prueba(sitio="Wallapop", titulo="Lapierre Overvolt TestX 2023", peso_kg=None, ano=None, suspension_trasera=None)
+    cache_ddg_mem = {}
+
+    def _fake_get_cache(k):
+        return cache_ddg_mem.get(k)
+
+    def _fake_set_cache(k, v):
+        cache_ddg_mem[k] = v
+
+    html_ddg = '<div class="result"><a class="result__a">TestX 2023</a><span class="result__snippet">Peso 19,2 kg doble suspensión</span></div>'
+    with patch("scrapers.enriquecedor_web._buscar_en_cache", side_effect=_fake_get_cache), \
+         patch("scrapers.enriquecedor_web._guardar_en_cache", side_effect=_fake_set_cache), \
+         patch("scrapers.enriquecedor_web._buscar_duckduckgo", return_value=html_ddg) as mock_ddg2:
+        b_out1 = completar_desde_duckduckgo(b_concreta)
+        assert mock_ddg2.call_count == 1
+        assert b_out1.peso_kg == 19.2
+        assert b_out1.suspension_trasera == "si"
+
+        b_concreta2 = bici_prueba(sitio="Wallapop", titulo="Lapierre Overvolt TestX 2023", peso_kg=None, ano=None, suspension_trasera=None)
+        b_out2 = completar_desde_duckduckgo(b_concreta2)
+        assert mock_ddg2.call_count == 1, "La segunda consulta debe resolverse desde caché en disco"
+        assert b_out2.peso_kg == 19.2
+
+
+def test_todo2_edge_cases_y_regresion():
+    """Valida regresión de filtros materiales, fronteras regex Wallapop, dedup y caché DDG."""
+    from db import titulos_equivalentes_dedup
+    from main import deduplicar_inter_portal, _recolectar_oportunidades
+    from scrapers.wallapop import WallapopScraper
+    from scrapers.enriquecedor_web import completar_desde_duckduckgo
+
+    # 1. Versiones numéricas de modelo distintas no deben colapsar en dedup (8.4 vs 8.6)
+    assert titulos_equivalentes_dedup(
+        "Lapierre Overvolt AM 8.4 2023",
+        "Lapierre Overvolt AM 8.6 2023",
+    ) is False
+    assert titulos_equivalentes_dedup(
+        "ORBEA RISE H10 T-M 2022",
+        "ORBEA RISE H10 2022 Talla M",
+    ) is True
+
+    # 2. Oficial talla L no debe suprimir clon Wallapop talla M ni en dedup ni en flujo completo
+    b_buho_L = bici_prueba(
+        sitio="Buhobike",
+        bici_id="24840",
+        titulo="ORBEA RISE H10 2022 BICICLETA SEGUNDA MANO",
+        precio=2599.0,
+        talla="L",
+    )
+    b_wala_M = bici_prueba(
+        sitio="Wallapop",
+        bici_id="wala-m-rise",
+        titulo="ORBEA RISE H10 2022 BICICLETA SEGUNDA MANO - Talla: M",
+        precio=2599.0,
+        talla="M",
+        garantia_anos=0,
+    )
+    dedup_tallas = deduplicar_inter_portal([b_buho_L, b_wala_M])
+    assert {b.bici_id for b in dedup_tallas} == {"24840", "wala-m-rise"}
+
+    # 3. _recolectar_oportunidades: clon ya notificado en BD no entra ni en conocidas;
+    #    y telemetría se rellena incluso cuando candidatas_pre queda vacío.
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        ruta_db = f.name
+    try:
+        db = BaseDatos(ruta=ruta_db)
+        b_oficial_enviada = bici_prueba(
+            sitio="Buhobike",
+            bici_id="ofi-99",
+            titulo="MONDRAKER DUSK R 2023 BICICLETA ELECTRICA",
+            precio=2799.0,
+            talla="M",
+        )
+        db.registrar(b_oficial_enviada, 8.2)
+        b_wala_clon_env = bici_prueba(
+            sitio="Wallapop",
+            bici_id="wala-dusk-clon",
+            titulo="MONDRAKER DUSK R 2023 BICICLETA ELECTRICA",
+            precio=2799.0,
+            talla="M",
+            garantia_anos=0,
+        )
+
+        def _fake_scrap_clon(sitio):
+            if sitio.nombre == "Wallapop":
+                return [b_wala_clon_env]
+            if sitio.nombre == "Buhobike":
+                return [b_buho_L]  # Talla L -> rechazada en pre-filtro
+            return []
+
+        with patch("main._scrapear_sitio", side_effect=_fake_scrap_clon), \
+             patch("main.enriquecer_y_valorar_bici", side_effect=lambda b: (b, 8.3, {})):
+            res_clon = _recolectar_oportunidades(db, forzar_envio=False)
+            assert res_clon == [], "Un clon Wallapop equivalente a una enviada no debe aparecer ni como conocida"
+
+        # Flujo con Wallapop M sobreviviendo frente a Buhobike L
+        def _fake_scrap_sobrevive(sitio):
+            if sitio.nombre == "Wallapop":
+                return [b_wala_M]
+            if sitio.nombre == "Buhobike":
+                return [b_buho_L]
+            return []
+
+        with patch("main._scrapear_sitio", side_effect=_fake_scrap_sobrevive), \
+             patch("main.enriquecer_y_valorar_bici", side_effect=lambda b: (b, 8.4, {})):
+            res_sobrevive = _recolectar_oportunidades(db, forzar_envio=False)
+            assert [b.bici_id for b, _, _ in res_sobrevive] == ["wala-m-rise"]
+
+        # Telemetría con candidatas_pre vacía
+        tel_vacia = {}
+        with patch("main._scrapear_sitio", side_effect=lambda s: [b_buho_L] if s.nombre == "Buhobike" else []):
+            res_vacia = _recolectar_oportunidades(db, forzar_envio=False, telemetria=tel_vacia)
+            assert res_vacia == []
+            assert tel_vacia.get("total_procesadas") == 1
+            assert tel_vacia.get("candidatas_pre") == 0
+            assert tel_vacia.get("candidatas_aptas") == 0
+            assert tel_vacia.get("conteo_por_portal", {}).get("Buhobike") == 1
+    finally:
+        try:
+            if os.path.exists(ruta_db):
+                os.unlink(ruta_db)
+        except (PermissionError, OSError):
+            pass
+
+    # 4. Cuadro material y Orbea Rise Motor (sin falsos positivos en 'al' ni 'rise m')
+    b_carb_al98 = Bicicleta(
+        sitio="Wallapop",
+        bici_id="w-carb-al98",
+        titulo="e-MTB Trail Carbon al 98% de estado, al día",
+        precio=2600.0,
+        url="https://es.wallapop.com/item/carb",
+        talla="M",
+        bateria_wh=600,
+    )
+    b_carb_al98 = completar_con_catalogo(b_carb_al98, aplicar_heuristica_peso=True)
+    assert b_carb_al98.cuadro_material == "Carbono", "El español 'al 98%' no debe clasificar el cuadro como Aluminio"
+
+    b_rise_motor = Bicicleta(
+        sitio="Wallapop",
+        bici_id="w-rise-motor",
+        titulo="Orbea Rise Motor Shimano EP801 2023",
+        precio=2600.0,
+        url="https://es.wallapop.com/item/risem",
+        talla="M",
+    )
+    b_rise_motor = completar_con_catalogo(b_rise_motor, aplicar_heuristica_peso=False)
+    assert b_rise_motor.peso_kg != 18.3, "'Orbea Rise Motor' no debe casar con el patrón 'orbea rise m'"
+
+    # 5. Wallapop: fronteras de palabra + superíndice ² (JAM²) vs falsos positivos en español
+    scraper = WallapopScraper(cfg.SITIOS[4])
+    items_wp = {
+        "data": {
+            "section": {
+                "payload": {
+                    "items": [
+                        {
+                            "id": "jam2-ok",
+                            "category_id": 17000,
+                            "title": "Focus JAM² 6.8 Talla M 2023",
+                            "description": "Motor Bosch 750Wh.",
+                            "price": {"amount": 2800.0},
+                            "reserved": {"flag": False},
+                            "location": {"latitude": 40.2842, "longitude": -3.7942, "city": "Fuenlabrada"},
+                            "web_slug": "jam2-ok",
+                        },
+                        {
+                            "id": "falso-trail",
+                            "category_id": 17000,
+                            "title": "Conor E-Trail 29 Talla M",
+                            "description": "Llantas doble pared, manillar riser, llevo luz led y gran volumen.",
+                            "price": {"amount": 2100.0},
+                            "reserved": {"flag": False},
+                            "location": {"latitude": 40.2842, "longitude": -3.7942, "city": "Fuenlabrada"},
+                            "web_slug": "falso-trail",
+                        },
+                    ]
+                }
+            }
+        },
+        "meta": {"next_page": None},
+    }
+    with patch.object(scraper, "_obtener_pagina_api", return_value=items_wp):
+        bicis_wp = scraper.extraer_bicicletas()
+    assert [b.bici_id for b in bicis_wp] == ["wallapop-jam2-ok"]
+
+    # 6. DDG: extracción completa sin envenenar caché parcial y sin cachear fallos HTTP ("")
+    cache_mem = {}
+    html_full = (
+        '<div class="result"><a class="result__a">X-Model 2023</a>'
+        '<span class="result__snippet">Año del modelo: 2023. Peso 19,4 kg, doble suspensión</span></div>'
+    )
+    b_p1 = bici_prueba(sitio="Wallapop", titulo="Lapierre TestParcial Z9 2023", peso_kg=None, ano=2023, suspension_trasera="si")
+    b_p2 = bici_prueba(sitio="Wallapop", titulo="Lapierre TestParcial Z9 2023", peso_kg=19.4, ano=None, suspension_trasera=None)
+    with patch("scrapers.enriquecedor_web._buscar_en_cache", side_effect=lambda k: cache_mem.get(k)), \
+         patch("scrapers.enriquecedor_web._guardar_en_cache", side_effect=lambda k, v: cache_mem.__setitem__(k, v)), \
+         patch("scrapers.enriquecedor_web._buscar_duckduckgo", return_value=html_full) as mock_ddg_p:
+        b_p1 = completar_desde_duckduckgo(b_p1)
+        b_p2 = completar_desde_duckduckgo(b_p2)
+        assert mock_ddg_p.call_count == 1
+        assert b_p1.peso_kg == 19.4
+        assert b_p2.ano == 2023
+        assert b_p2.suspension_trasera == "si"
+
+    cache_fail = {}
+    b_fail = bici_prueba(sitio="Wallapop", titulo="Mondraker RetryFallo R5", peso_kg=None, ano=None, suspension_trasera=None)
+    with patch("scrapers.enriquecedor_web._buscar_en_cache", side_effect=lambda k: cache_fail.get(k)), \
+         patch("scrapers.enriquecedor_web._guardar_en_cache", side_effect=lambda k, v: cache_fail.__setitem__(k, v)), \
+         patch("scrapers.enriquecedor_web._buscar_duckduckgo", return_value="") as mock_ddg_f:
+        completar_desde_duckduckgo(b_fail)
+        assert cache_fail == {}, "Un fallo HTTP/red ('') no debe cachearse 7 días"
+        completar_desde_duckduckgo(b_fail)
+        assert mock_ddg_f.call_count == 2
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -1420,4 +1754,6 @@ if __name__ == "__main__":
     test_segmentacion_sonora_vs_silenciosa_telegram()
     test_rotacion_consecutiva_top3_y_aviso()
     test_wallapop_geolocalizado_y_filtros()
+    test_todo2_dedup_interportal_wallapop_estricto_y_cache_ddg()
+    test_todo2_edge_cases_y_regresion()
     print("Todas las pruebas pasaron (GREEN).")

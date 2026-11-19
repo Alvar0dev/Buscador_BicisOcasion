@@ -33,6 +33,7 @@ import config as cfg
 from evaluator import TECHO_NOTA_BH, es_bici_bh
 from models import Bicicleta
 from scrapers.enriquecedor_web import (
+    completar_desde_duckduckgo,
     enriquecer_bici,
     _buscar_en_cache,
     _extraer_range_extender,
@@ -96,7 +97,10 @@ CATALOGO_EMTB = [
         "modalidad": "Light e-MTB / Trail",
     },
     {
-        "patrones": ["orbea rise m", "orbea rise m10", "orbea rise m20", "orbea rise m-team", "orbea rise m-ltd"],
+        "patrones": [
+            "orbea rise m10", "orbea rise m20", "orbea rise m-team", "orbea rise m-ltd",
+            "orbea rise sl m10", "orbea rise lt m10", "orbea rise m-pro", "orbea rise carbon",
+        ],
         "peso_kg": 18.3,
         "bateria_wh_default": 540,
         "motor": "Shimano EP801 RS",
@@ -374,6 +378,69 @@ CATALOGO_EMTB = [
         "suspension_trasera": "si",
         "modalidad": "Trail",
     },
+    {
+        "patrones": ["specialized turbo kenevo sl", "kenevo sl"],
+        "peso_kg": 19.4,
+        "bateria_wh_default": 320,
+        "motor": "Specialized SL 1.1 / 1.2",
+        "cuadro_material": "Carbono",
+        "suspension_trasera": "si",
+        "modalidad": "Trail / Enduro",
+    },
+    {
+        "patrones": ["ghost e-asx"],
+        "peso_kg": 24.2,
+        "bateria_wh_default": 750,
+        "motor": "Bosch Performance Line CX",
+        "cuadro_material": "Aluminio",
+        "suspension_trasera": "si",
+        "modalidad": "Trail / Enduro",
+    },
+    {
+        "patrones": ["ghost e-riot", "ghost riot am"],
+        "peso_kg": 23.5,
+        "bateria_wh_default": 750,
+        "motor": "Bosch Performance Line CX",
+        "cuadro_material": "Carbono",
+        "suspension_trasera": "si",
+        "modalidad": "Enduro / Trail",
+    },
+    {
+        "patrones": ["bh xtep"],
+        "peso_kg": 22.8,
+        "bateria_wh_default": 720,
+        "motor": "Shimano EP8",
+        "cuadro_material": "Aluminio",
+        "suspension_trasera": "si",
+        "modalidad": "Trail",
+    },
+    {
+        "patrones": ["berria mako hybrid"],
+        "peso_kg": 21.2,
+        "bateria_wh_default": 720,
+        "motor": "Polini / Bosch",
+        "cuadro_material": "Carbono",
+        "suspension_trasera": "si",
+        "modalidad": "Trail",
+    },
+    {
+        "patrones": ["mondraker dusk"],
+        "peso_kg": 23.5,
+        "bateria_wh_default": 630,
+        "motor": "Shimano EP8",
+        "cuadro_material": "Aluminio",
+        "suspension_trasera": "si",
+        "modalidad": "Trail / Enduro",
+    },
+    {
+        "patrones": ["husqvarna mc", "mountain cross"],
+        "peso_kg": 23.5,
+        "bateria_wh_default": 630,
+        "motor": "Shimano EP8",
+        "cuadro_material": "Aluminio",
+        "suspension_trasera": "si",
+        "modalidad": "Trail / All Mountain",
+    },
 ]
 
 
@@ -530,25 +597,37 @@ def completar_con_catalogo(bici: Bicicleta, aplicar_heuristica_peso: bool = True
             bici.peso_kg = 20.4
         bici.modalidad = "Trail (160mm)"
 
-    # Inferencia adicional por heurística técnica si el modelo no está en la tabla exacta
+    # Inferencia adicional por heurística técnica si el modelo no está en la tabla exacta.
+    # Evaluar Aluminio ANTES que Carbono y evitar que 'Advanced AL' se clasifique como Carbono.
     if not bici.cuadro_material:
-        if any(k in texto for k in ["carbon", "carbono", " m10", " m20", " m-team", "advanced", "cf "]):
-            bici.cuadro_material = "Carbono"
-        elif any(k in texto for k in ["aluminio", "alloy", "alu", " h10", " h20", " h30"]):
+        texto_raw_material = f"{bici.titulo or ''} {bici.componentes or ''}"
+        if (
+            re.search(r"\b(?:aluminio|aluminium|aluminum|alloy|alu)\b|\bh[123]0\b", texto)
+            or re.search(
+                r"\bAL\b(?!\s+(?:D[IÍ]A|CORRIENTE|100|MEJOR|PRECIO|TENER|SER|NO|QUE|CON|DE|LA|EL|LOS|LAS|UN|UNA)\b)",
+                texto_raw_material,
+            )
+        ):
             bici.cuadro_material = "Aluminio"
+        elif re.search(r"\b(?:carbon|carbono|cf|m10|m20|m-team)\b", texto):
+            bici.cuadro_material = "Carbono"
 
     if aplicar_heuristica_peso and bici.peso_kg is None:
-        # Estimación conservadora basada en material de cuadro y capacidad de batería
+        # Estimación conservadora: nunca asumir peso pluma <19 kg ni batería <=540 Wh si no constan.
         es_carbono = (bici.cuadro_material or "").lower() == "carbono"
-        bat = bici.bateria_wh or 540
-        if es_carbono and bat <= 560:
-            bici.peso_kg = 18.6
-        elif not es_carbono and bat <= 540:
-            bici.peso_kg = 20.4
-        elif es_carbono and bat <= 630:
+        motor_ligero = any(
+            k in (bici.motor or "").lower()
+            for k in ("ep8 rs", "ep801 rs", "tq", "fazua", "mahle", "specialized sl", "2exmag")
+        )
+        bat = bici.bateria_wh
+        if es_carbono and ((bat is not None and bat <= 560) or motor_ligero):
+            bici.peso_kg = 19.4
+        elif not es_carbono and bat is not None and bat <= 540:
+            bici.peso_kg = 20.6
+        elif es_carbono and bat is not None and bat <= 630:
             bici.peso_kg = 20.8
         else:
-            bici.peso_kg = 22.8
+            bici.peso_kg = 22.5
 
     if not bici.modalidad and bici.peso_kg is not None:
         if bici.peso_kg < 21.0:
@@ -896,14 +975,20 @@ def enriquecer_y_valorar_bici(bici: Bicicleta) -> Tuple[Bicicleta, float, str]:
          matemáticamente para impedir medias optimistas.
       4. Si Gemini no está disponible o falla, usa el motor pericial autónomo local.
     """
-    # 1. Enriquecimiento desde la ficha HTML del sitio (con caché local)
+    # 1. Enriquecimiento desde la ficha HTML del sitio (o galería Wallapop sin DuckDuckGo aún)
     try:
-        bici = enriquecer_bici(bici, url_ficha=bici.url)
+        bici = enriquecer_bici(bici, url_ficha=bici.url, usar_duckduckgo=False)
     except Exception as e:
         log.warning(f"[IA] Error en enriquecer_bici para {bici.titulo}: {e}")
 
-    # 2. Enriquecimiento desde catálogo técnico de modelos e-MTB
+    # 2. Enriquecimiento desde catálogo técnico local antes de consultar DuckDuckGo
     bici = completar_con_catalogo(bici, aplicar_heuristica_peso=False)
+
+    # 2b. Fallback DuckDuckGo cacheado solo si el catálogo tampoco cubrió peso/suspensión/año
+    try:
+        bici = completar_desde_duckduckgo(bici)
+    except Exception as e:
+        log.warning(f"[IA] Error en DuckDuckGo para {bici.titulo}: {e}")
 
     # Verificar caché de valoración IA (v4 específico para ajuste estricto BH -2.0 / máx 8.5)
     cache_version = "perito_v4" if es_bici_bh(bici) else "perito_v3"
@@ -912,7 +997,8 @@ def enriquecer_y_valorar_bici(bici: Bicicleta) -> Tuple[Bicicleta, float, str]:
     if cache_key in cache_ia:
         entry = cache_ia[cache_key]
         km_nuevo_descubierto = (bici.km is not None and entry.get("km") != bici.km)
-        if not km_nuevo_descubierto:
+        peso_corregido = (bici.peso_kg is not None and entry.get("peso_kg") != bici.peso_kg)
+        if not km_nuevo_descubierto and not peso_corregido:
             for campo in ("talla", "modalidad", "peso_kg", "bateria_wh", "range_extender_wh",
                           "bateria_salud_pct", "bateria_ciclos", "cuadro_material",
                           "motor", "km", "ano", "componentes", "suspension_trasera", "recorrido_mm"):

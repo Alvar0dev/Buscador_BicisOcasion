@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import base64
+import time
 from urllib.parse import urljoin
 import requests
 from typing import Optional, Dict, Tuple, List, Any
@@ -434,12 +435,50 @@ def _buscar_duckduckgo(consulta: str) -> str:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                           "Chrome/124.0.0.0 Safari/537.36",
             "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-        }, timeout=20)
+        }, timeout=6)
         if resp.status_code == 200:
             return resp.text
     except Exception:
         pass
     return ""
+
+
+_STOPWORDS_DDG = {
+    "bicicleta", "bici", "electrica", "ebike", "e-bike", "mtb", "emtb", "e-mtb",
+    "montana", "doble", "suspension", "talla", "nueva", "nuevo",
+    "estrenar", "reacondicionada", "segunda", "mano", "vendo", "oferta", "chollo",
+    "carbono", "aluminio", "shimano", "bosch", "specialized", "orbea", "bh",
+    "con", "sin", "para", "del", "las", "los", "una", "uno", "como", "esta",
+}
+
+
+def _es_consulta_web_especifica(titulo: str) -> bool:
+    """Evita consultar DuckDuckGo en títulos genéricos sin nombre concreto de modelo."""
+    import unicodedata
+    sin_tildes = "".join(
+        c for c in unicodedata.normalize("NFD", (titulo or "").lower())
+        if unicodedata.category(c) != "Mn"
+    )
+    tokens = [
+        t for t in re.findall(r"[a-z0-9\-]+", sin_tildes)
+        if len(t) >= 2 and t not in _STOPWORDS_DDG and not t.isdigit()
+    ]
+    return len(tokens) >= 2
+
+
+DDG_CACHE_TTL_SEG = 7 * 24 * 3600
+_DDG_KEY_LOCKS: Dict[str, threading.Lock] = {}
+_DDG_KEY_LOCKS_GUARD = threading.Lock()
+
+
+def _obtener_lock_ddg(cache_key: str) -> threading.Lock:
+    """Devuelve un lock dedicado por clave de consulta para evitar carreras en DDG."""
+    with _DDG_KEY_LOCKS_GUARD:
+        lock = _DDG_KEY_LOCKS.get(cache_key)
+        if lock is None:
+            lock = threading.Lock()
+            _DDG_KEY_LOCKS[cache_key] = lock
+        return lock
 
 
 # ---------------------------------------------------------------------------
@@ -1198,13 +1237,89 @@ def _extraer_modalidad(texto: str) -> Optional[str]:
 # API principal
 # ---------------------------------------------------------------------------
 
-def enriquecer_bici(bici: Bicicleta, url_ficha: Optional[str] = None) -> Bicicleta:
+def completar_desde_duckduckgo(bici: Bicicleta) -> Bicicleta:
+    """
+    Completa campos críticos faltantes (peso_kg, suspension_trasera, ano) consultando
+    DuckDuckGo HTML con caché en disco (TTL 7 días), bloqueo por clave y sin
+    envenenamiento por campos parciales ni cacheo de errores HTTP/red.
+    """
+    faltan_criticos = (
+        bici.peso_kg is None or bici.suspension_trasera is None or bici.ano is None
+    )
+    if not faltan_criticos or not _es_consulta_web_especifica(bici.titulo):
+        return bici
+
+    es_wallapop = bici.sitio.lower() == "wallapop"
+    prefijo = "" if es_wallapop else f"{bici.sitio} "
+    consulta = f"{prefijo}{bici.titulo} especificaciones peso kg año".strip()
+    cache_key = f"ddg_v2:{consulta.lower()}"
+
+    with _obtener_lock_ddg(cache_key):
+        cache_hit = _buscar_en_cache(cache_key)
+        ahora = time.time()
+        if cache_hit and (ahora - float(cache_hit.get("ts", 0))) < DDG_CACHE_TTL_SEG:
+            detalle_cache = cache_hit.get("detalle") or {}
+            if detalle_cache:
+                bici = _aplicar_detalle(bici, detalle_cache)
+            return bici
+
+        try:
+            html = _buscar_duckduckgo(consulta)
+            if not html or "anomaly-modal" in html or "bots use duckduckgo" in html.lower():
+                log.debug(f"[Enriquecedor] DuckDuckGo sin respuesta cacheable para {bici.titulo}")
+                return bici
+
+            soup = BeautifulSoup(html, "html.parser")
+            fragmentos = []
+            for res in soup.select(".result")[:5]:
+                titulo_el = res.select_one(".result__a")
+                snippet_el = res.select_one(".result__snippet")
+                texto = ""
+                if titulo_el:
+                    texto += titulo_el.get_text(" ", strip=True) + " "
+                if snippet_el:
+                    texto += snippet_el.get_text(" ", strip=True) + " "
+                fragmentos.append(texto)
+
+            detalle: dict = {}
+            texto_completo = " ".join(fragmentos)
+            if texto_completo:
+                # Extraer siempre todos los campos soportados para evitar cache parcial
+                peso = _extraer_peso(texto_completo)
+                if peso is not None:
+                    detalle["peso_kg"] = peso
+                ano = _extraer_ano(texto_completo)
+                if ano is not None:
+                    detalle["ano"] = ano
+                susp = _detectar_suspension_trasera(texto_completo)
+                if susp is not None:
+                    detalle["suspension_trasera"] = "si" if susp else "no"
+
+            if detalle or not (cache_hit and cache_hit.get("detalle")):
+                _guardar_en_cache(cache_key, {"ts": ahora, "detalle": detalle})
+            if detalle:
+                bici = _aplicar_detalle(bici, detalle)
+                log.info(
+                    f"[Enriquecedor] {bici.titulo} completado desde DuckDuckGo: "
+                    f"{list(detalle.keys())}"
+                )
+        except Exception as e:
+            log.warning(f"[Enriquecedor] DuckDuckGo fallo para {bici.titulo}: {e}")
+
+    return bici
+
+
+def enriquecer_bici(
+    bici: Bicicleta,
+    url_ficha: Optional[str] = None,
+    usar_duckduckgo: bool = True,
+) -> Bicicleta:
     """
     Intenta completar datos faltantes de una bici.
 
     Orden:
       1. Ficha del producto del propio sitio (Scrapling) - si se pasa url_ficha.
-      2. DuckDuckGo HTML - fallback general.
+      2. DuckDuckGo HTML cacheado - fallback general si usar_duckduckgo=True.
 
     Solo busca los campos que faltan: peso_kg, suspension_trasera, ano, km,
     talla, bateria_wh, motor, cuadro_material, componentes, modalidad, recorrido_mm.
@@ -1269,52 +1384,9 @@ def enriquecer_bici(bici: Bicicleta, url_ficha: Optional[str] = None) -> Bicicle
         except Exception as e:
             log.warning(f"[Enriquecedor] Ficha del sitio fallo para {bici.titulo}: {e}")
 
-    # Si faltan campos críticos, intentar DuckDuckGo como fallback
-    faltan_criticos = (
-        bici.peso_kg is None or bici.suspension_trasera is None or bici.ano is None
-    )
-    if faltan_criticos:
-        try:
-            prefijo = "" if es_wallapop else f"{bici.sitio} "
-            consulta = f"{prefijo}{bici.titulo} especificaciones peso kg año".strip()
-            html = _buscar_duckduckgo(consulta)
-            if html:
-                soup = BeautifulSoup(html, "html.parser")
-                fragmentos = []
-                for res in soup.select(".result")[:5]:
-                    titulo_el = res.select_one(".result__a")
-                    snippet_el = res.select_one(".result__snippet")
-                    texto = ""
-                    if titulo_el:
-                        texto += titulo_el.get_text(" ", strip=True) + " "
-                    if snippet_el:
-                        texto += snippet_el.get_text(" ", strip=True) + " "
-                    fragmentos.append(texto)
-
-                texto_completo = " ".join(fragmentos)
-                if texto_completo:
-                    detalle = {}
-                    if bici.peso_kg is None:
-                        peso = _extraer_peso(texto_completo)
-                        if peso is not None:
-                            detalle["peso_kg"] = peso
-                    if bici.ano is None:
-                        ano = _extraer_ano(texto_completo)
-                        if ano is not None:
-                            detalle["ano"] = ano
-                    if bici.suspension_trasera is None:
-                        susp = _detectar_suspension_trasera(texto_completo)
-                        if susp is not None:
-                            detalle["suspension_trasera"] = "si" if susp else "no"
-
-                    if detalle:
-                        bici = _aplicar_detalle(bici, detalle)
-                        log.info(
-                            f"[Enriquecedor] {bici.titulo} completado desde DuckDuckGo: "
-                            f"{list(detalle.keys())}"
-                        )
-        except Exception as e:
-            log.warning(f"[Enriquecedor] DuckDuckGo fallo para {bici.titulo}: {e}")
+    # Paso 2 opcional: DuckDuckGo como fallback con caché
+    if usar_duckduckgo:
+        bici = completar_desde_duckduckgo(bici)
 
     return bici
 

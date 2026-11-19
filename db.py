@@ -5,11 +5,59 @@ y mantener el historial de precios y tiempo en stock de todo el catálogo pre-fi
 Garantiza que no lleguen alertas duplicadas en días consecutivos, salvo que bajen de precio (S12).
 """
 
+import json
+import re
 import sqlite3
+import unicodedata
 from datetime import datetime, date
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Optional, Tuple, Dict, Any, List, Set
 import config as cfg
 from models import Bicicleta
+
+
+_RUIDO_TITULO_RE = re.compile(
+    r"\b(?:promo|bicicleta|bici|el[eé]ctrica|electrica|e-?bike|ebike|mtb|emtb|e-?mtb|"
+    r"de\s+monta[nñ]a|monta[nñ]a|doble\s+suspensi[oó]n|segunda\s+mano|reacondicionada|"
+    r"reestreno|km\.?\s*0|talla|size|t\.?[sml]|t[\-\s][sml]|xxl|xl|xs|sm|ml|"
+    r"a\s+estrenar|nueva|seminueva)\b",
+    re.IGNORECASE,
+)
+
+
+def _sin_tildes(texto: str) -> str:
+    return "".join(
+        c for c in unicodedata.normalize("NFD", texto)
+        if unicodedata.category(c) != "Mn"
+    )
+
+
+def tokens_titulo_dedup(titulo: str) -> Set[str]:
+    """Extrae el conjunto de tokens de modelo/marca normalizados para deduplicación inter-portal."""
+    limpio = _sin_tildes((titulo or "").lower())
+    # Eliminar menciones explícitas de talla antes de retirar la palabra 'talla'
+    limpio = re.sub(r"\b(?:talla|size)\s*[:.]?\s*(?:s[1-6]|xxl|xl|xs|sm|ml|[sml]|\d{2})\b", " ", limpio)
+    limpio = _RUIDO_TITULO_RE.sub(" ", limpio)
+    tokens = {
+        tok
+        for tok in re.findall(r"[a-z0-9]+", limpio)
+        if len(tok) >= 2 or tok.isdigit() or tok in ("r", "x")
+    }
+    tokens -= {"t", "m", "s", "l"}
+    return tokens
+
+
+def titulos_equivalentes_dedup(titulo_a: str, titulo_b: str) -> bool:
+    """Devuelve True si dos títulos representan exactamente el mismo modelo/anuncio entre portales."""
+    ta = tokens_titulo_dedup(titulo_a)
+    tb = tokens_titulo_dedup(titulo_b)
+    if len(ta) < 2 or len(tb) < 2:
+        return False
+    inter = ta & tb
+    union = ta | tb
+    if not union:
+        return False
+    sim = len(inter) / len(union)
+    return len(inter) >= 3 and sim >= 0.75
 
 
 class BaseDatos:
@@ -126,6 +174,29 @@ class BaseDatos:
         if previo is None:
             return False
         return bici.precio < previo
+
+    def fue_enviada_equivalente(self, bici: Bicicleta, tolerancia_eur: float = 25.0) -> bool:
+        """
+        Detecta si un anuncio equivalente (mismo modelo normalizado y precio dentro de tolerancia)
+        ya fue notificado previamente desde otro portal distinto (ej. Buhobike vs su clon en Wallapop).
+        """
+        with self._conectar() as conn:
+            filas = conn.execute(
+                "SELECT sitio, titulo, precio FROM bicis_enviadas WHERE bici_id != ?",
+                (bici.bici_id,),
+            ).fetchall()
+        for fila in filas:
+            if (fila["sitio"] or "").lower() == (bici.sitio or "").lower():
+                continue
+            try:
+                precio_env = float(fila["precio"])
+            except (TypeError, ValueError):
+                continue
+            if abs(precio_env - float(bici.precio)) <= tolerancia_eur and titulos_equivalentes_dedup(
+                fila["titulo"], bici.titulo
+            ):
+                return True
+        return False
 
     # ---------------------------------------------------------------------------
     # HISTORIAL DE CATÁLOGO Y TIEMPO EN STOCK (TODO 1)

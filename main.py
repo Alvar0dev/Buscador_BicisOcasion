@@ -20,7 +20,7 @@ from typing import Any, Dict, Optional
 
 import config as cfg
 from config import SITIOS, HORA_EJECUCION, NOTA_MIN_NOTIFICAR, NOTA_MIN_AGUARDAR, TOP_N_NOTIFICAR
-from db import BaseDatos
+from db import BaseDatos, titulos_equivalentes_dedup
 from evaluator import evaluar, calcular_nota_oportunidad, pasa_filtros_estrictos, prioridad_modalidad
 from gemini_classifier import enriquecer_y_valorar_bici
 from notifier import enviar, enviar_heartbeat, es_mega_chollo
@@ -182,6 +182,42 @@ def _scrapear_sitio(sitio: cfg.SitioObjetivo) -> list:
         return []
 
 
+def deduplicar_inter_portal(bicis: list) -> list:
+    """
+    Elimina réplicas publicadas en Wallapop cuando el mismo modelo, talla compatible
+    y rango de precio (+-25 EUR) ya existe en una tienda oficial disponible
+    (Bike Ocasión, Buhobike, Upway, Mammoth), priorizando la tienda oficial.
+    """
+    oficiales = [b for b in bicis if (b.sitio or "").lower() != "wallapop"]
+    resultado = list(oficiales)
+
+    for b_w in bicis:
+        if (b_w.sitio or "").lower() != "wallapop":
+            continue
+        talla_w = (b_w.talla or "").strip().upper()
+        clon_de = None
+        for b_of in oficiales:
+            if not getattr(b_of, "disponible", True):
+                continue
+            talla_of = (b_of.talla or "").strip().upper()
+            if talla_of and talla_w and talla_of != talla_w:
+                continue
+            if abs(float(b_of.precio) - float(b_w.precio)) <= 25.0 and titulos_equivalentes_dedup(
+                b_of.titulo, b_w.titulo
+            ):
+                clon_de = b_of
+                break
+        if clon_de is not None:
+            logger.info(
+                f"  [Dedup inter-portal] Omitiendo clon Wallapop '{b_w.titulo}' ({b_w.precio:.0f} €) "
+                f"— ya presente en {clon_de.sitio} ({clon_de.precio:.0f} €)."
+            )
+            continue
+        resultado.append(b_w)
+
+    return resultado
+
+
 def _recolectar_oportunidades(
     db: BaseDatos,
     forzar_envio: bool = False,
@@ -189,9 +225,10 @@ def _recolectar_oportunidades(
 ) -> list:
     """
     Recorre los sitios objetivo en paralelo (con health check integrado),
-    pre-filtra candidatas, enriquece y valora con el clasificador híbrido
-    (ficha del sitio + catálogo + Gemini Flash / motor autónomo), y aplica
-    los filtros estrictos S1-S6 post-enriquecimiento.
+    pre-filtra candidatas, deduplica clones inter-portal (tienda oficial vs Wallapop),
+    enriquece y valora con el clasificador híbrido
+    (ficha del sitio + catálogo + DuckDuckGo cacheado + Gemini Flash / motor autónomo),
+    y aplica los filtros estrictos S1-S6 post-enriquecimiento.
 
     Devuelve una lista de (bici, nota, desglose) ordenada por relevancia:
       1. Estrictas (< 21 kg) nuevas o que bajaron de precio.
@@ -199,7 +236,7 @@ def _recolectar_oportunidades(
       3. Candidatas cercanas por peso nuevas.
       4. Candidatas cercanas por peso vigentes.
     """
-    candidatas_pre = []
+    bicis_brutas = []
     conteo_por_portal: Dict[str, int] = {}
 
     with ThreadPoolExecutor(max_workers=len(SITIOS)) as pool_sitios:
@@ -212,36 +249,49 @@ def _recolectar_oportunidades(
             try:
                 bicis = futuro_s.result()
                 conteo_por_portal[sitio.nombre] = len(bicis)
+                bicis_brutas.extend(bicis)
             except Exception as e:
                 logger.error(f"[{sitio.nombre}] Excepción en worker de scraping: {e}")
                 conteo_por_portal[sitio.nombre] = 0
-                continue
 
-            for bici in bicis:
-                if bici.range_extender_wh is None:
-                    ext = _extraer_range_extender(f"{bici.titulo} {bici.componentes or ''}")
-                    if ext:
-                        bici.range_extender_wh = ext
-                        if bici.bateria_wh is not None and bici.bateria_wh <= 600:
-                            bici.bateria_wh += ext
-                # Registrar en Zona de Vigilancia bicicletas aptas entre 3.301 € y 3.500 €
-                # para detectar cuándo bajan al rango objetivo <= 3.000 € / <= 3.300 €.
-                if 3300.0 < bici.precio <= 3500.0:
-                    from dataclasses import replace
-                    bici_test_vig = replace(bici, precio=3000.0)
-                    apto_vig, _ = pasa_filtros_estrictos(bici_test_vig)
-                    if apto_vig:
-                        db.registrar_en_catalogo(bici)
+    pre_aptas = []
+    vigilancia_aptas = []
 
-                # Pre-filtro rápido con los campos ya conocidos de la tarjeta (precio, talla, batería, disponibilidad...)
-                apto_pre, motivo_pre = pasa_filtros_estrictos(bici)
-                if not apto_pre:
-                    logger.debug(f"  DESCARTADA PRE [{sitio.nombre}]: {bici.titulo} - {motivo_pre}")
-                    continue
-                db.registrar_en_catalogo(bici)
-                candidatas_pre.append(bici)
+    for bici in bicis_brutas:
+        if bici.range_extender_wh is None:
+            ext = _extraer_range_extender(f"{bici.titulo} {bici.componentes or ''}")
+            if ext:
+                bici.range_extender_wh = ext
+                if bici.bateria_wh is not None and bici.bateria_wh <= 600:
+                    bici.bateria_wh += ext
+        # Registrar en Zona de Vigilancia bicicletas aptas entre 3.301 € y 3.500 €
+        if 3300.0 < bici.precio <= 3500.0:
+            from dataclasses import replace
+            bici_test_vig = replace(bici, precio=3000.0)
+            apto_vig, _ = pasa_filtros_estrictos(bici_test_vig)
+            if apto_vig:
+                vigilancia_aptas.append(bici)
+
+        # Pre-filtro rápido antes de deduplicar para que una talla L/XL oficial nunca tape una M de Wallapop
+        apto_pre, motivo_pre = pasa_filtros_estrictos(bici)
+        if not apto_pre:
+            logger.debug(f"  DESCARTADA PRE [{bici.sitio}]: {bici.titulo} - {motivo_pre}")
+            continue
+        pre_aptas.append(bici)
+
+    for b_vig in deduplicar_inter_portal(vigilancia_aptas):
+        db.registrar_en_catalogo(b_vig)
+
+    candidatas_pre = deduplicar_inter_portal(pre_aptas)
+    for b_cand in candidatas_pre:
+        db.registrar_en_catalogo(b_cand)
 
     if not candidatas_pre:
+        if telemetria is not None:
+            telemetria["conteo_por_portal"] = conteo_por_portal
+            telemetria["total_procesadas"] = sum(conteo_por_portal.values())
+            telemetria["candidatas_pre"] = 0
+            telemetria["candidatas_aptas"] = 0
         return []
 
     logger.info(f"[IA/Enriquecedor] Analizando y completando {len(candidatas_pre)} candidatas pre-filtradas...")
@@ -251,7 +301,7 @@ def _recolectar_oportunidades(
     respaldo_nuevas = []
     respaldo_conocidas = []
 
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    with ThreadPoolExecutor(max_workers=10) as executor:
         futuros = {
             executor.submit(enriquecer_y_valorar_bici, bici): bici
             for bici in candidatas_pre
@@ -275,6 +325,12 @@ def _recolectar_oportunidades(
             if bici.suspension_trasera is not None and str(bici.suspension_trasera).lower() in ("false", "no", "0"):
                 continue
             if not (cfg.PRECIO_MIN_EUR <= bici.precio <= cfg.PRECIO_MAX_EXCEPCIONAL_EUR):
+                continue
+
+            if (bici.sitio or "").lower() == "wallapop" and db.fue_enviada_equivalente(bici):
+                logger.info(
+                    f"  [Dedup inter-portal] Omitiendo clon Wallapop ya notificado desde tienda oficial: '{bici.titulo}'"
+                )
                 continue
 
             es_nueva = forzar_envio or db.debe_reenviarse(bici, nota)
