@@ -99,10 +99,11 @@ _MODELOS_DOBLE_RE = re.compile(
     r"doble\b(?!\s+(?:pared|plato|altura|bater[ií]a|piso|capa|junta)\b)"
     r"|full[\s\-]+suspension"
     r"|rise|wild|i?lynx|atomx|xtep|levo|kenevo"
+    r"|wilier[\s\-]+urta|urta(?:\s+hybrid)?|fourstroke(?:\s+amp)?|macina\s+scarp"
     r"|fuel[\s\-]+ex(?:[\-\s]*e)?|rail|stereo[\s\-]+hybrid"
     r"|crafty|dusk|neat|trance|reign|stance"
     r"|moterra|habit[\s\-]+neo|lumen|strike|patron"
-    r"|jam\s*2|thron(?:\s*2)?|vam\s*2|sam\s*2"
+    r"|jam\s*2|thron(?:\s*2)?|vam(?:\s*2|\s*8\.|\s*9\.)|sam\s*2"
     r"|allmtn|alltrail|e[\-\s]?zesty|zesty|overvolt"
     r"|spectral|neuron|mako|e[\-\s]?asx|e[\-\s]?riot|riot[\s\-]+am"
     r"|meta[\s\-]+power|e[\-\s]?feel|niner[\s\-]+rip|e[\-\s]?stream|sonic[\s\-]+evo"
@@ -110,6 +111,36 @@ _MODELOS_DOBLE_RE = re.compile(
     r"|heckler|bullit|lt2|fullseven"
     r")\b"
 )
+
+_UNICORNIOS_NACIONALES_PATRONES = {
+    "bh ilynx race": re.compile(r"\bi[\-\s]?lynx\s+race\b", re.IGNORECASE),
+    "wilier urta hybrid": re.compile(r"\bwilier\s+urta\b|\burta\s+hybrid\b", re.IGNORECASE),
+    "scott lumen": re.compile(r"\bscott\s+lumen\b", re.IGNORECASE),
+    "focus vam2": re.compile(r"\bfocus\s+vam\s*2?(?:\s*sl|\s*8\.|\s*9\.)?\b", re.IGNORECASE),
+    "bmc fourstroke amp": re.compile(r"\bbmc\s+fourstroke\b|\bfourstroke\s+amp\b", re.IGNORECASE),
+}
+
+
+def _extraer_pvp_wallapop(texto: str, precio: float) -> Optional[float]:
+    """Extrae el PVP original si el vendedor lo declara explícitamente en el texto."""
+    m = re.search(
+        r"\bp\.?v\.?p\.?(?:\s+en\s+20\d{2}|\s+original|\s+nuevo|\s+de|\s+aprox\.?)?\s*[:\-]?\s*"
+        r"(?:de\s+)?(\d{1,2}[.,]\d{3}|\d{4,5})(?:[.,]\d{2})?\s*(?:€|eur|euros)?\b",
+        texto or "",
+        re.IGNORECASE,
+    )
+    if not m:
+        return None
+    raw = m.group(1)
+    if re.match(r"^\d{1,2}[.,]\d{3}$", raw):
+        raw = raw.replace(".", "").replace(",", "")
+    try:
+        pvp = float(raw)
+    except ValueError:
+        return None
+    if pvp > precio * 1.05 and pvp <= 20000.0:
+        return pvp
+    return None
 
 _PATRONES_DESPIECE_TITULO = re.compile(
     r"^(?:bater[ií]a|cargador|horquilla|amortiguador|motor|rueda|ruedas|cuadro|extender)\b",
@@ -275,9 +306,101 @@ class WallapopScraper(BaseScraper):
                 break
             params = {"next_page": next_page, "source": "quick_filters"}
 
-        return bicis
+        extra = self._buscar_unicornios_nacionales(ids_vistos, bicis)
+        return bicis + extra
 
-    def _parsear_item(self, item: dict) -> Optional[Bicicleta]:
+    def _buscar_unicornios_nacionales(
+        self, ids_vistos: set, bicis_locales: List[Bicicleta]
+    ) -> List[Bicicleta]:
+        """Busca unicornios XC específicos en toda España deduplicando clones multi-ciudad."""
+        queries = getattr(cfg, "WALLAPOP_UNICORN_QUERIES", [])
+        if not queries:
+            return []
+
+        from db import titulos_equivalentes_dedup
+
+        locales_norm = [
+            (b.titulo, float(b.precio), (b.talla or "").strip().upper())
+            for b in bicis_locales
+        ]
+        nacionales_por_clave: Dict[int, tuple] = {}
+        orden_claves: List[int] = []
+        seq = 0
+
+        for kw in queries:
+            regex_modelo = _UNICORNIOS_NACIONALES_PATRONES.get(kw.lower())
+            tokens_req = tuple(t for t in kw.lower().split() if len(t) >= 3)
+            params_q = {
+                "source": "search_box",
+                "category_id": WALLAPOP_CATEGORIA_BICIS,
+                "subcategory_ids": WALLAPOP_SUBCATEGORIA_ELECTRICAS,
+                "keywords": kw,
+                "min_sale_price": cfg.PRECIO_MIN_EUR,
+                "max_sale_price": cfg.PRECIO_MAX_BLACK_FRIDAY_EUR,
+                "latitude": cfg.WALLAPOP_LAT,
+                "longitude": cfg.WALLAPOP_LON,
+            }
+            data = self._obtener_pagina_api(params_q)
+            if not data:
+                continue
+            items = (((data.get("data") or {}).get("section") or {}).get("payload") or {}).get("items") or []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                item_id = str(item.get("id") or "").strip()
+                if not item_id or item_id in ids_vistos:
+                    continue
+
+                txt_low = f"{item.get('title', '')} {item.get('description', '')}".lower().replace("²", "2")
+                if regex_modelo is not None:
+                    if not regex_modelo.search(txt_low):
+                        continue
+                elif not all(tok in txt_low for tok in tokens_req):
+                    continue
+
+                ids_vistos.add(item_id)
+
+                try:
+                    bici = self._parsear_item(item, permitir_nacional=True)
+                except Exception:
+                    continue
+                if bici is None:
+                    continue
+
+                talla_b = (bici.talla or "").strip().upper()
+                # Si ya existe idéntico (mismo modelo, precio y talla) en búsqueda local <= 50 km, no duplicar
+                if any(
+                    tl == talla_b
+                    and abs(p - bici.precio) <= 10.0
+                    and titulos_equivalentes_dedup(t, bici.titulo)
+                    for t, p, tl in locales_norm
+                ):
+                    continue
+
+                loc = item.get("location") or {}
+                dist_act = distancia_haversine_km(
+                    cfg.WALLAPOP_LAT, cfg.WALLAPOP_LON, float(loc.get("latitude")), float(loc.get("longitude"))
+                )
+                match_idx = None
+                for k, (prev_b, prev_d) in nacionales_por_clave.items():
+                    prev_talla = (prev_b.talla or "").strip().upper()
+                    if (
+                        prev_talla == talla_b
+                        and abs(prev_b.precio - bici.precio) <= 10.0
+                        and titulos_equivalentes_dedup(prev_b.titulo, bici.titulo)
+                    ):
+                        match_idx = k
+                        if dist_act < prev_d:
+                            nacionales_por_clave[k] = (bici, dist_act)
+                        break
+                if match_idx is None:
+                    nacionales_por_clave[seq] = (bici, dist_act)
+                    orden_claves.append(seq)
+                    seq += 1
+
+        return [nacionales_por_clave[k][0] for k in orden_claves]
+
+    def _parsear_item(self, item: dict, permitir_nacional: bool = False) -> Optional[Bicicleta]:
         """Convierte un ítem JSON de Wallapop en Bicicleta aplicando geo-filtro y extractores."""
         item_id = str(item.get("id") or "").strip()
         if not item_id:
@@ -313,7 +436,7 @@ class WallapopScraper(BaseScraper):
             )
         except (TypeError, ValueError):
             return None
-        if dist_km > float(cfg.WALLAPOP_RADIO_KM):
+        if not permitir_nacional and dist_km > float(cfg.WALLAPOP_RADIO_KM):
             return None
 
         titulo = self.limpiar_texto(item.get("title") or "") or ""
@@ -331,7 +454,7 @@ class WallapopScraper(BaseScraper):
         bateria_wh = _extraer_bateria(texto_completo)
         if bateria_wh is None:
             m_bat_w = re.search(
-                r"\b(?:bater[ií]a|bat\.?|pila)\s*[:\-]?\s*(360|400|500|504|520|530|540|600|625|630|700|720|750|800|900)\s*w\b",
+                r"\b(?:bater[ií]a|bat\.?|pila)\s*[:\-]?\s*(360|400|420|430|480|500|504|520|530|540|600|625|630|700|720|750|800|900)\s*w\b",
                 texto_completo,
                 re.IGNORECASE,
             )
@@ -359,8 +482,21 @@ class WallapopScraper(BaseScraper):
 
         salud_pct, ciclos_bat = _extraer_salud_bateria(texto_completo)
         km = _extraer_km(texto_completo)
-        if km is None and re.search(r"\bkm\.?\s*0\b", titulo, re.IGNORECASE):
+        if km is None and re.search(r"\bkm\.?\s*0\b", texto_completo, re.IGNORECASE):
             km = 0
+        if km is None:
+            for m_est in re.finditer(
+                r"\b(?:sin\s+estrenar|nueva\s+a\s+estrenar|a\s+estrenar)\b",
+                texto_completo,
+                re.IGNORECASE,
+            ):
+                ctx_est = texto_completo[max(0, m_est.start() - 35):min(len(texto_completo), m_est.end() + 20)].lower()
+                if not re.search(
+                    r"\b(?:cadena|cubierta|cubiertas|neum[aá]ticos?|cassette|pastillas|frenos|bater[ií]a|sill[ií]n|pu[ñn]os|horquilla|ruedas?|discos?|motor|cambio|tija)\b",
+                    ctx_est,
+                ):
+                    km = 0
+                    break
 
         ano = _extraer_ano(texto_completo)
         peso_kg = _extraer_peso(texto_completo)
@@ -391,13 +527,16 @@ class WallapopScraper(BaseScraper):
 
         ciudad = loc.get("city") or ""
         if ciudad and dist_km is not None:
-            ubicacion = f"{ciudad} ({dist_km:.1f} km)"
+            sufijo = " - envío España" if dist_km > float(cfg.WALLAPOP_RADIO_KM) else ""
+            ubicacion = f"{ciudad} ({dist_km:.0f} km{sufijo})" if dist_km > float(cfg.WALLAPOP_RADIO_KM) else f"{ciudad} ({dist_km:.1f} km)"
         elif dist_km is not None:
             ubicacion = f"A {dist_km:.1f} km de Fuenlabrada"
         elif ciudad:
             ubicacion = str(ciudad)
         else:
             ubicacion = None
+
+        pvp_original = _extraer_pvp_wallapop(texto_completo, precio)
 
         imagenes: List[str] = []
         for img in (item.get("images") or [])[:8]:
@@ -429,7 +568,7 @@ class WallapopScraper(BaseScraper):
             recorrido_mm=recorrido_mm,
             garantia_anos=garantia_anos,
             disponible=True,
-            pvp_original=None,
+            pvp_original=pvp_original,
             ubicacion=ubicacion,
             imagenes=imagenes or None,
             tiene_factura=tiene_factura,

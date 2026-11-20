@@ -31,8 +31,15 @@ from evaluator import (
     evaluar_oportunidad_black_friday,
     pasa_prefiltro_respaldo_black_friday,
     evaluar_respaldo_black_friday,
+    es_modalidad_xc,
+    es_modelo_trail_o_enduro,
+    es_unicornio_xc,
 )
-from gemini_classifier import enriquecer_y_valorar_bici, _es_anuncio_generico_sin_modelo
+from gemini_classifier import (
+    enriquecer_y_valorar_bici,
+    completar_con_catalogo,
+    _es_anuncio_generico_sin_modelo,
+)
 from notifier import (
     enviar,
     enviar_black_friday,
@@ -281,33 +288,34 @@ def _recolectar_oportunidades(
                 bici.range_extender_wh = ext
                 if bici.bateria_wh is not None and bici.bateria_wh <= 600:
                     bici.bateria_wh += ext
-        # Registrar en Zona de Vigilancia bicicletas aptas entre 3.301 € y 3.500 €
+        b_pre = completar_con_catalogo(replace(bici), aplicar_heuristica_peso=False)
+        # Registrar en Zona de Vigilancia bicicletas XC aptas entre 3.301 € y 3.500 €
         if 3300.0 < bici.precio <= 3500.0:
-            bici_test_vig = replace(bici, precio=3000.0)
+            bici_test_vig = replace(b_pre, precio=3000.0)
             apto_vig, _ = pasa_filtros_estrictos(bici_test_vig)
             if apto_vig:
                 vigilancia_aptas.append(bici)
 
-        # Pre-filtro rápido antes de deduplicar para que una talla L/XL oficial nunca tape una M de Wallapop
-        apto_pre, motivo_pre = pasa_filtros_estrictos(bici)
+        # Pre-filtro rápido usando catálogo XC local antes de deduplicar o enriquecer
+        apto_pre, motivo_pre = pasa_filtros_estrictos(b_pre)
         if apto_pre:
             pre_aptas.append(bici)
             continue
 
-        apto_bf_pre, _ = pasa_prefiltro_black_friday(bici)
+        apto_bf_pre, _ = pasa_prefiltro_black_friday(b_pre)
         if apto_bf_pre:
             bf_extra_pre.append(bici)
             continue
 
-        apto_resp_pre, _ = pasa_prefiltro_respaldo_black_friday(bici)
+        apto_resp_pre, _ = pasa_prefiltro_respaldo_black_friday(b_pre)
         if apto_resp_pre:
             bf_respaldo_pre.append(bici)
             continue
 
         logger.debug(f"  DESCARTADA PRE [{bici.sitio}]: {bici.titulo} - {motivo_pre}")
 
-    for b_vig in deduplicar_inter_portal(vigilancia_aptas):
-        db.registrar_en_catalogo(b_vig)
+    vigilancia_dedup = deduplicar_inter_portal(vigilancia_aptas)
+    vigilancia_ids = {b.bici_id for b in vigilancia_dedup}
 
     # Deduplicar por separado flujo diario y extras exclusivos BF para que un modelo
     # >3.300 EUR o 500 Wh de tienda nunca suprima un Wallapop elegible en flujo diario.
@@ -317,12 +325,12 @@ def _recolectar_oportunidades(
     bf_extra_unicas = [b for b in bf_extra_dedup if b.bici_id not in ids_pre_dedup]
     candidatas_pre = pre_aptas_dedup + bf_extra_unicas
     ids_catalogo_base = {b.bici_id for b in candidatas_pre}
-    for b_cand in candidatas_pre:
-        db.registrar_en_catalogo(b_cand)
 
     bf_respaldo_dedup = deduplicar_inter_portal(bf_respaldo_pre)
     bf_respaldo_unicas = [b for b in bf_respaldo_dedup if b.bici_id not in ids_catalogo_base]
-    todos_enriquecer = candidatas_pre + bf_respaldo_unicas
+    ids_enriquecer = ids_catalogo_base | {b.bici_id for b in bf_respaldo_unicas}
+    vigilancia_extra = [b for b in vigilancia_dedup if b.bici_id not in ids_enriquecer]
+    todos_enriquecer = candidatas_pre + bf_respaldo_unicas + vigilancia_extra
 
     if not todos_enriquecer:
         if telemetria is not None:
@@ -358,13 +366,28 @@ def _recolectar_oportunidades(
                 nota, desglose = calcular_nota_oportunidad(bici_orig)
                 bici = bici_orig
 
-            # Verificar disponibilidad, Talla M, Doble Suspensión
+            # Verificar disponibilidad, Talla M, Doble Suspensión y estricto XC (<= 130 mm)
             if getattr(bici, "disponible", True) is False:
                 continue
             if bici.talla and bici.talla.strip().upper() != cfg.TALLA_OBJETIVO.upper():
                 continue
             if bici.suspension_trasera is not None and str(bici.suspension_trasera).lower() in ("false", "no", "0"):
                 continue
+            if (
+                es_modelo_trail_o_enduro(bici)
+                or not es_modalidad_xc(bici.modalidad)
+                or (bici.recorrido_mm is not None and bici.recorrido_mm > cfg.RECORRIDO_MAX_XC_MM)
+            ):
+                logger.info(
+                    f"  [Descarte Trail/Enduro] {bici.titulo}: modalidad={bici.modalidad}, "
+                    f"recorrido={bici.recorrido_mm} mm (solo XC <= {cfg.RECORRIDO_MAX_XC_MM} mm)"
+                )
+                continue
+
+            if (bici.bici_id in ids_catalogo_base or bici.bici_id in vigilancia_ids) and (
+                bici.peso_kg is None or bici.peso_kg < cfg.PESO_DESCARTE_KG
+            ):
+                db.registrar_en_catalogo(bici)
 
             es_bf = False
             if bici.bici_id in ids_catalogo_base:
@@ -378,13 +401,22 @@ def _recolectar_oportunidades(
                 if ok_resp:
                     black_friday_respaldo_pool.append((bici, dto_r, nota_r, mot_r, clave_r))
 
-            if bici.bici_id not in ids_catalogo_base:
+            en_flujo_diario = (
+                bici.bici_id in ids_catalogo_base
+                or (bici.bici_id in vigilancia_ids and es_unicornio_xc(bici))
+            )
+            if not en_flujo_diario:
                 continue
 
-            # Flujo diario: Batería > 500 Wh y Precio 2.000-3.300 €
+            # Flujo diario: Batería > 500 Wh y Precio 2.000-3.300 € (hasta 3.500 € en Unicornios XC >=600 Wh, <=500 km)
             if bici.bateria_wh is not None and bici.bateria_wh <= cfg.BATERIA_MIN_WH:
                 continue
-            if not (cfg.PRECIO_MIN_EUR <= bici.precio <= cfg.PRECIO_MAX_EXCEPCIONAL_EUR):
+            precio_techo_diario = (
+                getattr(cfg, "PRECIO_MAX_UNICORNIO_XC_EUR", cfg.PRECIO_MAX_EXCEPCIONAL_EUR)
+                if es_unicornio_xc(bici)
+                else cfg.PRECIO_MAX_EXCEPCIONAL_EUR
+            )
+            if not (cfg.PRECIO_MIN_EUR <= bici.precio <= precio_techo_diario):
                 continue
 
             if (bici.sitio or "").lower() == "wallapop" and db.fue_enviada_equivalente(bici):
@@ -465,7 +497,7 @@ def exportar_radar_mercado_md(
     lineas = [
         "# 📡 Radar de Mercado e-MTB de Ocasión",
         "",
-        f"> **Última actualización:** `{ahora}`  ",
+        f"> **Última actualización:** `{ahora}` | **Criterio activo:** `XC / Downcountry <= {cfg.RECORRIDO_MAX_XC_MM} mm`, Talla `{cfg.TALLA_OBJETIVO}`, `< {cfg.PESO_DESCARTE_KG:.1f} kg`  ",
         f"> **Total en seguimiento activo:** `{total}` unidades | **Permanencia media global:** `{dias_global:.1f} días`  ",
         f"> **Oportunidades con rebaja activa:** `{total_rebajas}` unidades (Ahorro medio: `-{ahorro_medio_rebajas:.0f} €`) | **Zona de Vigilancia:** `{total_vigilancia}` unidades",
         "",

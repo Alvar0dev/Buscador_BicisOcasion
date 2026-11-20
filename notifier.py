@@ -342,6 +342,12 @@ def formatear_mensaje_black_friday(
     if dto_real is not None:
         cabecera = f"🔥⚡ *¡BLACK FRIDAY EXCLUSIVO (-{dto_real:.0f}% PVP)!* ⚡🔥"
 
+    nota_extender = ""
+    if bici.bateria_wh is not None and bici.bateria_wh < cfg.BATERIA_MIN_WH:
+        nota_extender = (
+            f"💡 _Extender +210 Wh (~450 €):_ *~{bici.bateria_wh + 210} Wh* totales dentro de tope (~{bici.precio + 450:.0f} €)\n"
+        )
+
     mensaje = (
         f"{cabecera}\n\n"
         f"🆕 Estado: *{etiqueta_estado}*\n"
@@ -350,6 +356,7 @@ def formatear_mensaje_black_friday(
         f"{c['linea_ubicacion']}"
         f"{linea_precio}\n"
         f"{linea_pvp}"
+        f"{nota_extender}"
         f"🏆 Índice Black Friday: *{nota_bf}/10*\n\n"
         f"📏 Talla: {c['talla']}\n"
         f"⚙️ Modalidad: {c['modalidad']}\n"
@@ -503,8 +510,9 @@ def formatear_heartbeat_black_friday(resumen: dict) -> str:
         f"⚡ *Black Bike Beast — Pulso Black Friday*\n"
         f"📅 `{fecha_hora}` | ⏱️ `{duracion}s`\n\n"
         f"🏪 Bicis analizadas en catálogo: *{total_proc}*\n"
-        f"🎯 Filtros activos: nuevas/expo (`<= {km_max} km`), Talla `{cfg.TALLA_OBJETIVO}`, "
-        f"`< {peso_max:.1f} kg`, `>= {bat_min} Wh`, `<= {precio_max} €`, `>= -{dto_min:.0f}% PVP`\n\n"
+        f"🎯 Filtros activos: *XC <= {getattr(cfg, 'RECORRIDO_MAX_XC_MM', 130)} mm*, "
+        f"nuevas/expo (`<= {km_max} km`), Talla `{cfg.TALLA_OBJETIVO}`, "
+        f"`< {peso_max:.1f} kg`, `>= {bat_min} Wh` (o Fazua 420+ Wh c/ margen ext.), `<= {precio_max} €`, `>= -{dto_min:.0f}% PVP`\n\n"
         f"{res_linea}\n\n"
         f"{estado}"
     )
@@ -559,9 +567,9 @@ def formatear_informe_respaldo_black_friday(items: list) -> str:
 
     cuerpo = "\n\n".join(bloques)
     return (
-        f"📊⚡ *Black Bike Beast — Top {len(items)} Más Interesantes (Fuera de Tope / Criterio)*\n"
-        f"_Ninguna unidad cumplió hoy todos los límites estrictos (<= 3.500 €, km <= 50, >= 500 Wh, < 21 kg, -35% PVP). "
-        f"Estas son las mejores alternativas de la búsqueda:_\n\n"
+        f"📊⚡ *Black Bike Beast — Top {len(items)} XC Puro Más Interesantes (Fuera de Tope / Criterio)*\n"
+        f"_Solo e-MTB XC/Downcountry (<= {getattr(cfg, 'RECORRIDO_MAX_XC_MM', 130)} mm), Talla {cfg.TALLA_OBJETIVO}, doble suspensión y < 21 kg. "
+        f"Ninguna unidad cumplió hoy todos los límites estrictos (<= 3.500 €, km <= 50, >= 500 Wh, -35% PVP):_\n\n"
         f"{cuerpo}"
     )
 

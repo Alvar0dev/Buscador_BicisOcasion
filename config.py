@@ -32,6 +32,13 @@ class SitioObjetivo:
 WALLAPOP_LAT: float = float(os.getenv("WALLAPOP_LAT", "40.2842"))
 WALLAPOP_LON: float = float(os.getenv("WALLAPOP_LON", "-3.7942"))
 WALLAPOP_RADIO_KM: int = int(os.getenv("WALLAPOP_RADIO_KM", "50"))
+WALLAPOP_UNICORN_QUERIES: List[str] = [
+    "BH iLynx Race",
+    "Wilier Urta Hybrid",
+    "Scott Lumen",
+    "Focus VAM2",
+    "BMC Fourstroke AMP",
+]
 
 SITIOS: List[SitioObjetivo] = [
     SitioObjetivo(
@@ -69,15 +76,12 @@ SITIOS: List[SitioObjetivo] = [
 # ---------------------------------------------------------------------------
 TALLA_OBJETIVO: str = "M"  # Aprox. 165 cm - 179 cm (S1)
 
-MODALIDADES_VALIDAS: List[str] = [  # S2
+MODALIDADES_VALIDAS: List[str] = [  # S2 — Estrictamente XC / Cross Country / Downcountry (<= 130 mm)
     "XC",
     "Cross Country",
     "Downcountry",
-    "Light e-MTB",
-    "Light eMTB",
-    "Trail",
-    "All Mountain",
 ]
+RECORRIDO_MAX_XC_MM: int = 130  # Límite máximo estricto de recorrido XC/Downcountry (descarta Trail >= 140 mm)
 
 PESO_MAX_RECOMENDADO_KG: float = 19.0  # Peso deseado máximo (S3)
 PESO_DESCARTE_KG: float = 21.0  # Modelos >= 21 kg se descartan (S3)
@@ -99,6 +103,7 @@ BATERIA_MIN_WH: int = 500  # > 500 Wh estricto (S4)
 PRECIO_MIN_EUR: int = 2000  # Rango principal 2.000 € (S5)
 PRECIO_MAX_EUR: int = 3000  # Rango principal 3.000 € (S5)
 PRECIO_MAX_EXCEPCIONAL_EUR: int = 3300  # Oportunidad excepcional hasta 3.300 € (S6)
+PRECIO_MAX_UNICORNIO_XC_EUR: int = 3500  # Margen <= 3.500 € para unicornios XC >= 600 Wh y <= 500 km / o BF + extender
 
 # Canal exclusivo Black Friday (bicis nuevas o de exposición hasta 3.500 €)
 PRECIO_MAX_BLACK_FRIDAY_EUR: int = 3500
@@ -117,8 +122,9 @@ TOP_N_NOTIFICAR: int = 3  # Cantidad de bicicletas más interesantes a enviar po
 # ---------------------------------------------------------------------------
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODELS: List[str] = [
-    "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
+    "gemini-3-flash-preview",
+    "gemini-3.5-flash",
 ]
 GEMINI_API_URL: str = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"

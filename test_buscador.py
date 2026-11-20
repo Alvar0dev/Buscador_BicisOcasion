@@ -490,22 +490,22 @@ def test_range_extender_extraccion_y_filtros():
     assert _extraer_range_extender("Compatible con range extender opcional de 252Wh") is None
     assert _extraer_range_extender("Admite batería externa Bosch PowerMore de 250Wh (se vende por separado).") is None
 
-    # 2. Rescate de filtro S4: Orbea Rise 360 Wh descartada sin extender, pero admitida con extender
-    b_sin = bici_prueba(titulo="Orbea Rise M20 2021", bateria_wh=360)
+    # 2. Rescate de filtro S4: XC 360 Wh descartada sin extender, pero admitida con extender (612 Wh)
+    b_sin = bici_prueba(titulo="BH iLynx Race Carbon 8.6", bateria_wh=360)
     apto_sin, motivo_sin = pasa_filtros_estrictos(b_sin)
     assert apto_sin is False
     assert "Batería <= 500 Wh: 360 Wh" in motivo_sin
 
     # Con extender en título: enriquecedor / catálogo ajusta capacidad total
     b_con = bici_prueba(
-        titulo="Orbea Rise M20 2021 + Range Extender 252Wh",
+        titulo="BH iLynx Race Carbon 8.6 + Range Extender 252Wh",
         bateria_wh=360,
     )
     b_con = completar_con_catalogo(b_con)
     assert b_con.range_extender_wh == 252
     assert b_con.bateria_wh == 612  # 360 + 252 Wh
     apto_con, _ = pasa_filtros_estrictos(b_con)
-    assert apto_con is True, "La bicicleta debe pasar el filtro estricto con 612 Wh"
+    assert apto_con is True, "La bicicleta XC debe pasar el filtro estricto con 612 Wh"
 
     # 3. Bonificación en puntuación calidad-precio (+0.5 pts)
     p_sin, just_sin = _puntuacion_calidad_precio(b_sin)
@@ -1196,17 +1196,17 @@ def test_rotacion_consecutiva_top3_y_aviso():
         try:
             db2 = BaseDatos(ruta=ruta_db2)
             oportunidades_4_portales = [
-                # Upway (2 válidas <21 kg)
-                (bici_prueba(sitio="Upway", bici_id="u-1", titulo="Orbea Rise M20 2023", precio=2500.0, peso_kg=18.5), 9.0, "D"),
+                # Upway (2 válidas XC <21 kg)
+                (bici_prueba(sitio="Upway", bici_id="u-1", titulo="BH iLynx Race Carbon 8.6", precio=2500.0, peso_kg=17.5), 9.0, "D"),
                 (bici_prueba(sitio="Upway", bici_id="u-2", titulo="BH iLynx Race 8.4", precio=2600.0, peso_kg=17.8), 8.5, "D"),
-                # Bike Ocasión (2 válidas <21 kg)
-                (bici_prueba(sitio="Bike Ocasión", bici_id="bo-1", titulo="Specialized Levo SL", precio=2700.0, peso_kg=18.0), 8.8, "D"),
-                (bici_prueba(sitio="Bike Ocasión", bici_id="bo-2", titulo="Trek Fuel EXe 9.5", precio=2800.0, peso_kg=19.2), 8.0, "D"),
-                # Wallapop (2 válidas <21 kg)
-                (bici_prueba(sitio="Wallapop", bici_id="w-1", titulo="Orbea Rise M10 2023", precio=2400.0, peso_kg=18.3, garantia_anos=0), 8.0, "D"),
-                (bici_prueba(sitio="Wallapop", bici_id="w-2", titulo="Orbea Rise H10 2023", precio=2200.0, peso_kg=20.5, garantia_anos=0), 7.0, "D"),
+                # Bike Ocasión (2 válidas XC <21 kg)
+                (bici_prueba(sitio="Bike Ocasión", bici_id="bo-1", titulo="Scott Lumen eRIDE 900", precio=2700.0, peso_kg=16.5), 8.8, "D"),
+                (bici_prueba(sitio="Bike Ocasión", bici_id="bo-2", titulo="Wilier Urta Hybrid XT", precio=2800.0, peso_kg=16.4), 8.0, "D"),
+                # Wallapop (2 válidas XC <21 kg)
+                (bici_prueba(sitio="Wallapop", bici_id="w-1", titulo="BH iLynx Race Carbon Pro", precio=2400.0, peso_kg=18.3, garantia_anos=0), 8.0, "D"),
+                (bici_prueba(sitio="Wallapop", bici_id="w-2", titulo="Focus VAM2 SL 9.8 XC", precio=2200.0, peso_kg=18.5, garantia_anos=0), 7.0, "D"),
                 # Mammoth (solo 1 respaldo >=21 kg -> siempre entrega su mejor opción y no rompe si repite)
-                (bici_prueba(sitio="Mammoth", bici_id="m-1", titulo="Cannondale Moterra Neo 3", precio=3100.0, peso_kg=23.5), 4.0, "D"),
+                (bici_prueba(sitio="Mammoth", bici_id="m-1", titulo="BH iLynx Race Carbon Test Pesada", precio=3100.0, peso_kg=23.5), 4.0, "D"),
             ]
 
             with patch("main.BaseDatos", return_value=db2), \
@@ -1629,20 +1629,20 @@ def test_todo2_edge_cases_y_regresion():
     b_buho_L = bici_prueba(
         sitio="Buhobike",
         bici_id="24840",
-        titulo="ORBEA RISE H10 2022 BICICLETA SEGUNDA MANO",
+        titulo="BH ILYNX RACE 8.4 2022 BICICLETA SEGUNDA MANO",
         precio=2599.0,
         talla="L",
     )
     b_wala_M = bici_prueba(
         sitio="Wallapop",
-        bici_id="wala-m-rise",
-        titulo="ORBEA RISE H10 2022 BICICLETA SEGUNDA MANO - Talla: M",
+        bici_id="wala-m-xc",
+        titulo="BH ILYNX RACE 8.4 2022 BICICLETA SEGUNDA MANO - Talla: M",
         precio=2599.0,
         talla="M",
         garantia_anos=0,
     )
     dedup_tallas = deduplicar_inter_portal([b_buho_L, b_wala_M])
-    assert {b.bici_id for b in dedup_tallas} == {"24840", "wala-m-rise"}
+    assert {b.bici_id for b in dedup_tallas} == {"24840", "wala-m-xc"}
 
     # 3. _recolectar_oportunidades: clon ya notificado en BD no entra ni en conocidas;
     #    y telemetría se rellena incluso cuando candidatas_pre queda vacío.
@@ -1653,15 +1653,15 @@ def test_todo2_edge_cases_y_regresion():
         b_oficial_enviada = bici_prueba(
             sitio="Buhobike",
             bici_id="ofi-99",
-            titulo="MONDRAKER DUSK R 2023 BICICLETA ELECTRICA",
+            titulo="SCOTT LUMEN ERIDE 910 2023 BICICLETA ELECTRICA",
             precio=2799.0,
             talla="M",
         )
         db.registrar(b_oficial_enviada, 8.2)
         b_wala_clon_env = bici_prueba(
             sitio="Wallapop",
-            bici_id="wala-dusk-clon",
-            titulo="MONDRAKER DUSK R 2023 BICICLETA ELECTRICA",
+            bici_id="wala-lumen-clon",
+            titulo="SCOTT LUMEN ERIDE 910 2023 BICICLETA ELECTRICA",
             precio=2799.0,
             talla="M",
             garantia_anos=0,
@@ -1690,7 +1690,7 @@ def test_todo2_edge_cases_y_regresion():
         with patch("main._scrapear_sitio", side_effect=_fake_scrap_sobrevive), \
              patch("main.enriquecer_y_valorar_bici", side_effect=lambda b: (b, 8.4, {})):
             res_sobrevive = _recolectar_oportunidades(db, forzar_envio=False)
-            assert [b.bici_id for b, _, _ in res_sobrevive] == ["wala-m-rise"]
+            assert [b.bici_id for b, _, _ in res_sobrevive] == ["wala-m-xc"]
 
         # Telemetría con candidatas_pre vacía
         tel_vacia = {}
@@ -1950,9 +1950,9 @@ def test_perito_esceptico_v2_y_seleccion_por_portal():
         ruta_db_ord = f_ord.name
     try:
         db_ord = BaseDatos(ruta=ruta_db_ord)
-        b_upway_conocida = bici_prueba(sitio="Upway", bici_id="u-conocida", titulo="Orbea Rise M20 2023", precio=2600.0, peso_kg=18.6, km=800)
+        b_upway_conocida = bici_prueba(sitio="Upway", bici_id="u-conocida", titulo="BH iLynx Race Carbon 8.6 2023", precio=2600.0, peso_kg=17.5, km=800)
         db_ord.registrar(b_upway_conocida, 9.5)  # Ya notificada antes -> 'conocida'
-        b_wala_flojita = bici_prueba(sitio="Wallapop", bici_id="w-flojita", titulo="Orbea Rise H30 2023", precio=2700.0, peso_kg=20.5, km=1800, garantia_anos=0)
+        b_wala_flojita = bici_prueba(sitio="Wallapop", bici_id="w-flojita", titulo="BH iLynx Race 8.4 2023", precio=2700.0, peso_kg=18.9, km=1800, garantia_anos=0)
         b_wala_gen = bici_prueba(sitio="Wallapop", bici_id="w-gen", titulo="BICI MONTAÑA ELECTRICA DOBLE CARBONO", precio=2300.0, peso_kg=20.5, km=200, garantia_anos=0)
 
         def _scrap_ord(sitio):
@@ -2027,9 +2027,9 @@ def test_perito_esceptico_v2_y_seleccion_por_portal():
     try:
         db_fail = BaseDatos(ruta=ruta_fail)
         ops_fail = [
-            (bici_prueba(sitio="Upway", bici_id="u-f1", titulo="Orbea Rise M20 2023", peso_kg=18.5, km=500), 9.0, "D"),
+            (bici_prueba(sitio="Upway", bici_id="u-f1", titulo="BH iLynx Race Carbon 8.6", peso_kg=17.5, km=500), 9.0, "D"),
             (bici_prueba(sitio="Upway", bici_id="u-f2", titulo="BH iLynx Race 8.4", peso_kg=17.8, km=500), 8.5, "D"),
-            (bici_prueba(sitio="Wallapop", bici_id="w-f1", titulo="Orbea Rise M10 2023", peso_kg=18.3, km=500), 8.5, "D"),
+            (bici_prueba(sitio="Wallapop", bici_id="w-f1", titulo="Scott Lumen eRIDE 900", peso_kg=16.5, km=500), 8.5, "D"),
         ]
 
         # Envío falla en Upway y acierta en Wallapop -> Upway no debe avanzar a u-f2
@@ -2098,22 +2098,24 @@ def test_black_friday_canal_exclusivo_y_segundo_bot():
     assert bicis_m[0].talla == "M"
     assert bicis_m[1].pvp_original is None
 
-    # 2. Acepta bici nueva hasta 3.500 € (< 21 kg, >= 500 Wh, >= 35% dto) pero la mantiene fuera del filtro diario >3300
+    # 2. Acepta bici XC nueva hasta 3.500 € (< 21 kg, >= 500 Wh, >= 35% dto, <= 130 mm) pero la mantiene fuera del filtro diario >3300
     b_bf_nueva = bici_prueba(
         sitio="Buhobike",
         bici_id="bf-new-1",
-        titulo="Orbea Rise SL M20 2025",
+        titulo="BH iLynx Race Carbon 8.6 2025",
         precio=3450.0,
         pvp_original=5999.0,
         km=0,
-        peso_kg=19.2,
-        bateria_wh=630,
-        motor="Shimano EP801",
+        peso_kg=17.2,
+        bateria_wh=540,
+        motor="BH 2EXMAG",
         componentes="Shimano XT 12v Fox Factory Kashima",
         cuadro_material="Carbono",
+        modalidad="XC",
+        recorrido_mm=120,
         suspension_trasera="si",
         garantia_anos=3,
-        url="https://www.buhobike.com/electricas-trail-dobles/123-orbea-rise-sl.html",
+        url="https://www.buhobike.com/electricas-trail-dobles/123-bh-ilynx-race-carbon.html",
     )
     assert pasa_filtros_estrictos(b_bf_nueva)[0] is False
     assert pasa_prefiltro_black_friday(b_bf_nueva)[0] is True
@@ -2125,13 +2127,15 @@ def test_black_friday_canal_exclusivo_y_segundo_bot():
     b_expo = bici_prueba(
         sitio="Bike Ocasión",
         bici_id="bf-expo-1",
-        titulo="BH iLynx Race Carbon 8.6",
+        titulo="BH iLynx Race Carbon Pro XT",
         precio=2899.0,
         pvp_original=7500.0,
         km=1,
-        peso_kg=19.5,
+        peso_kg=17.8,
         bateria_wh=500,
         componentes="XT 12v Fox Factory",
+        modalidad="XC / Downcountry",
+        recorrido_mm=120,
         suspension_trasera="si",
         garantia_anos=1,
     )
@@ -2154,14 +2158,16 @@ def test_black_friday_canal_exclusivo_y_segundo_bot():
     b_peso_desconocido = Bicicleta(
         sitio="Buhobike",
         bici_id="bf-peso-ia",
-        titulo="Orbea Rise SL 2025",
+        titulo="BH iLynx Race Carbon 8.8 2025",
         precio=3400.0,
         pvp_original=6000.0,
-        url="https://www.buhobike.com/electricas-trail-dobles/999-rise.html",
+        url="https://www.buhobike.com/electricas-trail-dobles/999-bh-ilynx-race.html",
         talla="M",
         bateria_wh=540,
         cuadro_material="Carbono",
-        motor="Shimano EP801",
+        motor="BH 2EXMAG",
+        modalidad="XC / Downcountry",
+        recorrido_mm=120,
         km=0,
         componentes="XT 12v",
         suspension_trasera="si",
@@ -2181,22 +2187,22 @@ def test_black_friday_canal_exclusivo_y_segundo_bot():
     b_of_3320 = bici_prueba(
         sitio="Buhobike",
         bici_id="bh-3320",
-        titulo="Orbea Rise M20 2023",
+        titulo="BH iLynx Race Carbon 8.4 2024",
         precio=3320.0,
         pvp_original=6000.0,
         km=0,
-        peso_kg=18.5,
+        peso_kg=17.5,
         bateria_wh=540,
         suspension_trasera="si",
-        url="https://www.buhobike.com/electricas-trail-dobles/3320-rise.html",
+        url="https://www.buhobike.com/electricas-trail-dobles/3320-ilynx-race.html",
     )
     b_wl_3295 = bici_prueba(
         sitio="Wallapop",
         bici_id="wl-3295",
-        titulo="Orbea Rise M20 2023",
+        titulo="BH iLynx Race Carbon 8.4 2024",
         precio=3295.0,
         km=500,
-        peso_kg=18.5,
+        peso_kg=17.5,
         bateria_wh=540,
         suspension_trasera="si",
         url="https://es.wallapop.com/item/3295",
@@ -2257,7 +2263,7 @@ def test_black_friday_canal_exclusivo_y_segundo_bot():
         b_bf_clon_w = bici_prueba(
             sitio="Wallapop",
             bici_id="wallapop-clon-bf",
-            titulo="Orbea Rise SL M20 2025 nueva",
+            titulo="BH iLynx Race Carbon 8.6 2025 nueva",
             precio=3450.0,
             km=0,
         )
@@ -2269,11 +2275,11 @@ def test_black_friday_canal_exclusivo_y_segundo_bot():
         b_diaria = bici_prueba(
             sitio="Upway",
             bici_id="upway-diaria-1",
-            titulo="Orbea Rise M20 2023",
+            titulo="BH iLynx Race Carbon 8.4 2023",
             precio=2799.0,
             pvp_original=5999.0,
             km=600,
-            peso_kg=18.5,
+            peso_kg=17.5,
             bateria_wh=540,
             suspension_trasera="si",
         )
@@ -2344,58 +2350,65 @@ def test_black_friday_canal_exclusivo_y_segundo_bot():
             assert mock_post_hb_bf.call_args.kwargs["json"]["chat_id"] == "-100999888"
             assert mock_post_hb_bf.call_args.kwargs["json"]["disable_notification"] is True
 
-        # 7. Respaldo Top 3 fuera de tope (> 3.500 € / 480 Wh / seminuevas) cuando 0 pasan el estricto BF
+        # 7. Respaldo Top 3 XC puro fuera de tope (> 3.500 € / 360 Wh / seminuevas) cuando 0 pasan el estricto BF
         from evaluator import pasa_prefiltro_respaldo_black_friday, evaluar_respaldo_black_friday
-        from notifier import formatear_informe_respaldo_black_friday, enviar_informe_respaldo_black_friday
+        from notifier import formatear_informe_respaldo_black_friday
 
         b_over_1 = bici_prueba(
             sitio="Mammoth",
-            bici_id="resp-moterra",
-            titulo="Cannondale Moterra SL 2",
+            bici_id="resp-ilynx",
+            titulo="BH iLynx Race Carbon 8.8 XT",
             precio=4549.0,
             pvp_original=6999.0,
             km=0,
-            peso_kg=19.8,
-            bateria_wh=600,
-            motor="Shimano EP801",
+            peso_kg=17.8,
+            bateria_wh=540,
+            motor="BH 2EXMAG",
+            modalidad="XC / Downcountry",
+            recorrido_mm=120,
             suspension_trasera="si",
-            url="https://www.mammothbikes.com/ebike-cannondale-moterra-sl-2/p-1",
+            url="https://www.mammothbikes.com/ebike-bh-ilynx-race/p-1",
         )
         b_over_2 = bici_prueba(
             sitio="Buhobike",
-            bici_id="resp-rise",
-            titulo="Orbea Rise SL M20 630W 2026",
-            precio=3999.0,
-            pvp_original=6799.0,
-            km=712,
-            peso_kg=20.2,
-            bateria_wh=630,
-            motor="Shimano EP801-RS Gen2",
+            bici_id="resp-lumen",
+            titulo="Scott Lumen eRIDE 920 2026",
+            precio=5399.0,
+            pvp_original=6749.0,
+            km=0,
+            peso_kg=16.5,
+            bateria_wh=360,
+            motor="TQ HPR50",
+            modalidad="XC / Downcountry",
+            recorrido_mm=130,
             suspension_trasera="si",
-            url="https://www.buhobike.com/segunda-mano-electricas/resp-rise.html",
+            url="https://www.buhobike.com/3230-electricas-trail-dobles/resp-lumen.html",
         )
         b_over_3 = bici_prueba(
             sitio="Bike Ocasión",
-            bici_id="resp-ghost",
-            titulo="Ghost Path Riot CF LTD AXS",
-            precio=3599.0,
-            pvp_original=11000.0,
-            km=1,
-            peso_kg=19.5,
-            bateria_wh=480,
-            motor="Fazua",
+            bici_id="resp-bmc",
+            titulo="BMC Fourstroke AMP LT TWO XT",
+            precio=3194.0,
+            pvp_original=6500.0,
+            km=1544,
+            peso_kg=17.5,
+            bateria_wh=360,
+            motor="TQ HPR50",
+            modalidad="XC / Downcountry",
+            recorrido_mm=120,
             suspension_trasera="si",
-            url="https://bike-ocasion.com/bicicletas-electricas-de-montana-doble-suspension/resp-ghost.html",
+            url="https://bike-ocasion.com/bicicletas-electricas-de-montana-doble-suspension/resp-bmc.html",
         )
         b_heavy_over = bici_prueba(sitio="Mammoth", bici_id="resp-heavy", precio=4000.0, pvp_original=7000.0, km=0, peso_kg=24.0, bateria_wh=750, suspension_trasera="si")
 
         assert pasa_prefiltro_respaldo_black_friday(b_over_1)[0] is True
+        assert pasa_prefiltro_respaldo_black_friday(b_over_3)[0] is True
         ok_r1, dto_r1, _, mot_r1, clave_r1 = evaluar_respaldo_black_friday(b_over_1, nota_perito=7.5)
         ok_r2, dto_r2, _, mot_r2, clave_r2 = evaluar_respaldo_black_friday(b_over_2, nota_perito=6.5)
-        ok_r3, dto_r3, _, mot_r3, clave_r3 = evaluar_respaldo_black_friday(b_over_3, nota_perito=4.0)
+        ok_r3, dto_r3, _, mot_r3, clave_r3 = evaluar_respaldo_black_friday(b_over_3, nota_perito=6.0)
         assert ok_r1 and "+1049 € sobre tope 3.500 €" in mot_r1
-        assert ok_r2 and "712 km" in mot_r2
-        assert ok_r3 and "480 Wh" in mot_r3
+        assert ok_r2 and "360 Wh (< 500 Wh)" in mot_r2
+        assert ok_r3 and "1544 km" in mot_r3 and "360 Wh" in mot_r3
         assert clave_r1 > clave_r2 > clave_r3
         assert evaluar_respaldo_black_friday(b_heavy_over)[0] is False
 
@@ -2417,17 +2430,17 @@ def test_black_friday_canal_exclusivo_y_segundo_bot():
             ops_r = _recolectar_oportunidades(db_bf, telemetria=tele_r)
         assert ops_r == []
         assert tele_r["black_friday_pool"] == []
-        assert [x[0].bici_id for x in tele_r["black_friday_respaldo_pool"]] == ["resp-moterra", "resp-ghost"]
-        assert db_bf.obtener_seguimiento("resp-moterra") is None
+        assert [x[0].bici_id for x in tele_r["black_friday_respaldo_pool"]] == ["resp-ilynx", "resp-bmc"]
+        assert db_bf.obtener_seguimiento("resp-ilynx") is None
 
         items_top3 = [
             (b_over_1, dto_r1, 7.5, mot_r1),
             (b_over_2, dto_r2, 6.5, mot_r2),
-            (b_over_3, dto_r3, 4.0, mot_r3),
+            (b_over_3, dto_r3, 6.0, mot_r3),
         ]
         txt_top3 = formatear_informe_respaldo_black_friday(items_top3)
-        assert "Top 3 Más Interesantes" in txt_top3
-        assert "Cannondale Moterra SL 2" in txt_top3 and "Ghost Path Riot CF LTD AXS" in txt_top3
+        assert "Top 3 XC Puro Más Interesantes" in txt_top3
+        assert "BH iLynx Race Carbon 8.8 XT" in txt_top3 and "BMC Fourstroke AMP LT TWO XT" in txt_top3
 
         enviados_top3 = []
         with patch("main.BaseDatos", return_value=db_bf), \
@@ -2442,7 +2455,7 @@ def test_black_friday_canal_exclusivo_y_segundo_bot():
              patch("main.enviar_heartbeat_black_friday") as mock_hb_bf_resp, \
              patch.object(cfg, "TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", "999999:TEST_BF_TOKEN"):
             ejecutar_busqueda(forzar_envio=False)
-            assert enviados_top3 == [["resp-moterra", "resp-rise", "resp-ghost"]]
+            assert enviados_top3 == [["resp-ilynx", "resp-lumen", "resp-bmc"]]
             assert mock_hb_bf_resp.call_args.args[0]["black_friday_respaldo_enviado"] is True
             # Segunda pasada idéntica no repite el informe Top 3 de respaldo
             ejecutar_busqueda(forzar_envio=False)
@@ -2453,8 +2466,8 @@ def test_black_friday_canal_exclusivo_y_segundo_bot():
             b_otro_portal = bici_prueba(
                 sitio="Buhobike",
                 bici_id="bf-otro-portal",
-                titulo="Ghost Path Riot CF LTD AXS",
-                precio=3580.0,
+                titulo="BMC Fourstroke AMP LT TWO XT",
+                precio=3180.0,
             )
             assert db_bf.fue_enviada_black_friday_equivalente(b_otro_portal) is False
     finally:
@@ -2463,6 +2476,179 @@ def test_black_friday_canal_exclusivo_y_segundo_bot():
                 os.unlink(ruta_bf)
         except (PermissionError, OSError):
             pass
+
+
+def test_filtro_estricto_xc_vs_trail():
+    """Verifica el bloqueo absoluto de modelos Trail/Enduro (>130 mm) y aceptación exclusiva de XC puro."""
+    from evaluator import evaluar_respaldo_black_friday, pasa_prefiltro_respaldo_black_friday
+    from main import _recolectar_oportunidades
+
+    # 1. Modelos Trail / All Mountain / Enduro deben rechazarse SIEMPRE en diario, BF estricto y BF respaldo
+    trail_titles = [
+        "Orbea Rise SL M20 2025",
+        "Orbea Rise LT M10 2026",
+        "BH iLynx Trail Carbon 8.7 XT",
+        "BH iLynx+ Trail Carbon 8.9",
+        "Cannondale Moterra SL 2",
+        "Ghost Path Riot CF LTD AXS",
+        "Mondraker Neat R 2025",
+        "Specialized Turbo Levo SL Carbon",
+        "Trek Fuel EXe 9.7",
+        "Cube AMS Hybrid ONE44 C:68X",
+    ]
+    for tit in trail_titles:
+        b_trail = bici_prueba(
+            titulo=tit,
+            precio=2900.0,
+            pvp_original=6999.0,
+            km=0,
+            peso_kg=18.5,
+            bateria_wh=540,
+            suspension_trasera="si",
+            modalidad=None,
+            recorrido_mm=None,
+        )
+        assert pasa_filtros_estrictos(b_trail)[0] is False, f"Trail '{tit}' no debe pasar pasa_filtros_estrictos"
+        assert pasa_prefiltro_black_friday(b_trail)[0] is False, f"Trail '{tit}' no debe pasar prefiltro BF"
+        assert evaluar_oportunidad_black_friday(b_trail)[0] is False, f"Trail '{tit}' no debe pasar BF estricto"
+        assert pasa_prefiltro_respaldo_black_friday(b_trail)[0] is False, f"Trail '{tit}' no debe pasar prefiltro respaldo"
+        assert evaluar_respaldo_black_friday(b_trail)[0] is False, f"Trail '{tit}' no debe pasar respaldo BF"
+
+        b_cat = completar_con_catalogo(bici_prueba(titulo=tit, modalidad=None, recorrido_mm=None), aplicar_heuristica_peso=False)
+        assert b_cat.recorrido_mm is not None and b_cat.recorrido_mm >= 140, f"{tit} sin recorrido >=140 en catálogo"
+
+    # 2. Modalidad genérica "Light e-MTB" sin "XC" ni "Downcountry", o recorrido 140 mm, también se rechazan
+    b_light_only = bici_prueba(titulo="Modelo Desconocido SL", modalidad="Light e-MTB")
+    assert pasa_filtros_estrictos(b_light_only)[0] is False
+    b_140 = bici_prueba(titulo="XC Doble 140mm", modalidad="XC", recorrido_mm=140)
+    assert pasa_filtros_estrictos(b_140)[0] is False
+    assert "excesivo" in pasa_filtros_estrictos(b_140)[1]
+
+    # 3. Modelos XC / Downcountry puros (<=130 mm) incluso alojados en URL '/electricas-trail-dobles/' SÍ pasan
+    xc_buho = bici_prueba(
+        sitio="Buhobike",
+        titulo="BH iLynx Race Carbon 8.6",
+        url="https://www.buhobike.com/3230-electricas-trail-dobles/125-bh-ilynx-race-carbon.html",
+        modalidad="XC / Downcountry",
+        recorrido_mm=120,
+        suspension_trasera="si",
+    )
+    assert pasa_filtros_estrictos(xc_buho)[0] is True
+
+    # 4. Catálogo BMC Fourstroke AMP LT ('amp lt' y 'amplt') + Scott Lumen + _recolectar_oportunidades excluye Trail y deja XC
+    b_bmc = completar_con_catalogo(Bicicleta(sitio="Bike Ocasión", bici_id="bmc-1", titulo="BMC Fourstroke AMP LT TWO XT", precio=3194.0, url="https://bike-ocasion.com/bmc"), aplicar_heuristica_peso=False)
+    assert b_bmc.recorrido_mm == 120 and "XC" in (b_bmc.modalidad or "") and b_bmc.bateria_wh == 360
+    b_bmc_sin_esp = completar_con_catalogo(Bicicleta(sitio="Buhobike", bici_id="bmc-2", titulo="BMC FOURSTROKE AMPLT 29 T-M", precio=3799.0, url="https://buhobike.com/bmc", talla="M"), aplicar_heuristica_peso=True)
+    assert b_bmc_sin_esp.recorrido_mm == 120 and "XC" in (b_bmc_sin_esp.modalidad or "") and b_bmc_sin_esp.peso_kg == 18.5
+
+    fd_xc, ruta_xc = tempfile.mkstemp(suffix=".db")
+    os.close(fd_xc)
+    try:
+        db_xc = BaseDatos(ruta=ruta_xc)
+        trail_sneak = bici_prueba(sitio="Mammoth", bici_id="trail-sneak", titulo="Cannondale Moterra SL 2", precio=3000.0, pvp_original=6999.0, km=0, peso_kg=19.8, bateria_wh=600, suspension_trasera="si")
+        xc_ok = bici_prueba(sitio="Upway", bici_id="xc-ok", titulo="BH iLynx Race Carbon 8.4", precio=2700.0, km=600, peso_kg=17.5, bateria_wh=540, suspension_trasera="si")
+        fake_empty = MagicMock(); fake_empty.extraer_bicicletas.return_value = []
+        fake_m = MagicMock(); fake_m.extraer_bicicletas.return_value = [trail_sneak]
+        fake_u = MagicMock(); fake_u.extraer_bicicletas.return_value = [xc_ok]
+        tel_xc = {}
+        with patch.dict("main.SCRAPERS", {"Mammoth": lambda s: fake_m, "Upway": lambda s: fake_u, "Bike Ocasión": lambda s: fake_empty, "Buhobike": lambda s: fake_empty, "Wallapop": lambda s: fake_empty}, clear=True), \
+             patch("main.enriquecer_y_valorar_bici", side_effect=lambda b: (b, 8.8, "OK")):
+            ops_xc = _recolectar_oportunidades(db_xc, telemetria=tel_xc)
+        assert [b.bici_id for b, _, _ in ops_xc] == ["xc-ok"]
+        assert tel_xc["black_friday_respaldo_pool"] == []
+    finally:
+        if os.path.exists(ruta_xc):
+            os.unlink(ruta_xc)
+
+
+    # 5. Superíndice '²', ruido HTML 'Trail' en Buhobike sobre XC real, y no bloquear clasificación Gemini <21 kg
+    b_jam2_sup = bici_prueba(titulo="Focus JAM² 6.8 Talla M", modalidad=None, recorrido_mm=None)
+    assert pasa_filtros_estrictos(b_jam2_sup)[0] is False
+    b_lumen_buho = completar_con_catalogo(bici_prueba(titulo="SCOTT LUMEN 900", modalidad="Trail", recorrido_mm=None), aplicar_heuristica_peso=False)
+    assert b_lumen_buho.recorrido_mm == 130 and "XC" in (b_lumen_buho.modalidad or "")
+    b_no_cat_ligera = completar_con_catalogo(Bicicleta(sitio="Upway", bici_id="nc-1", titulo="Ghost Lector Hybrid XC", precio=2800.0, url="https://upway.es/lector", talla="M", peso_kg=16.5), aplicar_heuristica_peso=True)
+    assert b_no_cat_ligera.modalidad is None, "No debe pre-etiquetar como 'Light e-MTB / Trail' antes de Gemini"
+
+    # 6. Corrección KTM Macina Scarp SX (400 Wh / 140 mm Trail -> rechazada) vs Wilier Urta Hybrid XC y Unicornio XC <3500 €
+    b_scarp_real = completar_con_catalogo(Bicicleta(sitio="Bike Ocasión", bici_id="scarp-1", titulo="KTM Macina Scarp SX", precio=2800.0, url="https://bike-ocasion.com/scarp", talla="M"), aplicar_heuristica_peso=False)
+    assert b_scarp_real.bateria_wh == 400 and b_scarp_real.recorrido_mm == 140
+    assert pasa_filtros_estrictos(b_scarp_real)[0] is False
+
+    # Autonomía "da para 65/70km" no debe confundirse con odómetro, sin romper frases vecinas ni confundir "recorrido 120 mm"
+    assert _extraer_km("Con extender da para 65/70km a maxima potencia y unos 120/130 en eco.") is None
+    assert _extraer_km("Horquilla con recorrido 120 mm y amortiguador Fox") is None
+    assert _extraer_km("Tiene 1.800 km. Batería da para 70 km en modo eco.") == 1800
+
+    # Unicornio XC Diario <= 3.500 € (BH iLynx Race Pro 7.9, 720 Wh, 400 km, 3.400 €) pasa prefiltro, evaluar() y _recolectar_oportunidades post-enriquecimiento
+    from evaluator import es_xc_ampliable_en_presupuesto
+    from main import _recolectar_oportunidades
+    b_unicornio = bici_prueba(titulo="BH iLynx Race Carbon Pro 7.9", precio=3400.0, km=400, peso_kg=17.4, bateria_wh=720, modalidad="XC / Downcountry", recorrido_mm=120, suspension_trasera="si")
+    assert pasa_filtros_estrictos(b_unicornio)[0] is True
+    assert evaluar(b_unicornio)[1] >= 7.0
+    b_normal_3400 = bici_prueba(titulo="BH iLynx Race Carbon 8.4", precio=3400.0, km=1500, peso_kg=17.4, bateria_wh=540, suspension_trasera="si")
+    assert pasa_filtros_estrictos(b_normal_3400)[0] is False
+
+    # Post-enriquecimiento en _recolectar_oportunidades rescata unicornio 3.400 € cuyos 720 Wh/400 km vienen solo del detalle
+    b_u_card = Bicicleta(sitio="Wallapop", bici_id="u-card-3400", titulo="BH i-Lynx Race Carbon Pro 7.9", precio=3400.0, url="https://es.wallapop.com/item/u3400", talla="M", suspension_trasera="si")
+    b_u_rich = bici_prueba(**{**b_u_card.to_dict(), "bateria_wh": 720, "km": 400, "peso_kg": 17.4, "modalidad": "XC / Downcountry", "recorrido_mm": 120})
+    fd_u, ruta_u = tempfile.mkstemp(suffix=".db")
+    os.close(fd_u)
+    try:
+        db_u = BaseDatos(ruta=ruta_u)
+        fake_w_u = MagicMock(); fake_w_u.extraer_bicicletas.return_value = [b_u_card]
+        fake_e_u = MagicMock(); fake_e_u.extraer_bicicletas.return_value = []
+        with patch.dict("main.SCRAPERS", {"Wallapop": lambda s: fake_w_u, "Bike Ocasión": lambda s: fake_e_u, "Buhobike": lambda s: fake_e_u, "Upway": lambda s: fake_e_u, "Mammoth": lambda s: fake_e_u}, clear=True), \
+             patch("main.enriquecer_y_valorar_bici", return_value=(b_u_rich, 8.2, "OK")):
+            ops_u = _recolectar_oportunidades(db_u)
+        assert [b.bici_id for b, _, _ in ops_u] == ["u-card-3400"]
+    finally:
+        if os.path.exists(ruta_u):
+            os.unlink(ruta_u)
+
+    # Wilier Urta Hybrid NUEVA (sin estrenar + autonomía 100 km -> km=0; partes sin estrenar != km=0; Haibike Lyke bloqueada; frontera 3050 vs 3051€)
+    from scrapers.wallapop import WallapopScraper
+    sc_w = WallapopScraper(cfg.SITIOS[4])
+    item_urta = {
+        "id": "1323820177",
+        "category_id": 17000,
+        "title": "Wilier Urta Hybrid GX AXS NUEVA",
+        "description": "Bicicleta eléctrica de montaña ligera (16,4 kg) SIN ESTRENAR. Autonomia 100 km - Horquilla RockShox SID - SRAM GX AXS - Motor Fazua 60 Nm - Bateria 420Wh Talla M PVP EN 2025 7900 EUROS",
+        "price": {"amount": 2850.0},
+        "reserved": {"flag": False},
+        "location": {"latitude": 40.4168, "longitude": -3.7038, "city": "Madrid"},
+        "web_slug": "wilier-urta-hybrid-gx-axs-nueva-1323820177",
+    }
+    b_urta = sc_w._parsear_item(item_urta, permitir_nacional=True)
+    assert b_urta is not None and b_urta.km == 0 and b_urta.pvp_original == 7900.0 and b_urta.bateria_wh == 420 and b_urta.peso_kg == 16.4
+    b_urta = completar_con_catalogo(b_urta, aplicar_heuristica_peso=False)
+    ok_u, nota_u, dto_u, _, desglose_u = evaluar_oportunidad_black_friday(b_urta)
+    assert ok_u is True and dto_u > 60.0 and nota_u >= 7.5
+    assert "ext. +210 Wh opc." in desglose_u
+    assert "Extender +210 Wh" in formatear_mensaje_black_friday(b_urta, nota_u, dto_u, "A ESTRENAR (0 km)", "OK")
+
+    assert es_xc_ampliable_en_presupuesto(bici_prueba(titulo="Wilier Urta Hybrid", precio=3050.0, bateria_wh=430, peso_kg=16.4, motor="Fazua Ride 60"), 3500) is True
+    assert es_xc_ampliable_en_presupuesto(bici_prueba(titulo="Wilier Urta Hybrid", precio=3051.0, bateria_wh=430, peso_kg=16.4, motor="Fazua Ride 60"), 3500) is False
+    assert es_xc_ampliable_en_presupuesto(Bicicleta(sitio="Wallapop", bici_id="lyke1", titulo="Haibike Lyke CF 11", precio=2800.0, url="https://es.wallapop.com/item/lyke", talla="M", peso_kg=18.0, bateria_wh=430, motor="Fazua Ride 60", suspension_trasera="si"), 3500) is False
+
+    # Evitar falsos km=0 por 'horquilla sin estrenar' o 'bicicleta nueva ... 1500kms'
+    item_horq_nueva = {**item_urta, "id": "h-nueva", "description": "Vendo bici perfecta, horquilla sin estrenar. Talla M."}
+    assert sc_w._parsear_item(item_horq_nueva, permitir_nacional=True).km is None
+    item_1500kms = {**item_urta, "id": "kms-1500", "description": "Bicicleta nueva costó 7900€, tiene 1500kms reales. Talla M."}
+    assert sc_w._parsear_item(item_1500kms, permitir_nacional=True).km == 1500
+
+    # Deduplicación nacional respeta Talla M frente a Talla L más cercana, no agota item_id entre queries y evita falsos 'vam' ('llevamos')
+    item_l_cerca = {**item_urta, "id": "u-l-cerca", "title": "BH i-Lynx Race Carbon Pro 7.9 Talla L", "description": "Doble 720Wh 400km", "price": {"amount": 3400.0}, "location": {"latitude": 40.30, "longitude": -3.73, "city": "Getafe"}}
+    item_m_lejos = {**item_l_cerca, "id": "u-m-murcia", "title": "BH i-Lynx Race Carbon Pro 7.9 Talla M"}
+    item_m_murcia = {**item_m_lejos, "location": {"latitude": 37.55, "longitude": -1.82, "city": "Puerto Lumbreras"}}
+    item_m_sev = {**item_m_lejos, "id": "u-m-sev", "location": {"latitude": 37.38, "longitude": -5.98, "city": "Sevilla"}}
+    item_falso_vam = {**item_urta, "id": "u-vam", "title": "Focus Jam 6.8 Trail", "description": "Llevamos años con doble suspensión"}
+    item_falso_race = {**item_urta, "id": "u-racef", "title": "BH iLynx Trail Carbon", "description": "Ruedas Race Face doble"}
+    resp_nac = {"data": {"section": {"payload": {"items": [item_l_cerca, item_m_sev, item_m_murcia, item_falso_vam, item_falso_race]}}}, "meta": {"next_page": None}}
+    with patch.object(sc_w, "_obtener_pagina_api", return_value=resp_nac), patch.object(cfg, "WALLAPOP_UNICORN_QUERIES", ["Wilier Urta Hybrid", "BH iLynx Race", "Focus VAM2"]):
+        b_nac = sc_w._buscar_unicornios_nacionales(set(), [])
+    ids_nac = [b.bici_id for b in b_nac]
+    assert "wallapop-u-m-murcia" in ids_nac and "wallapop-u-m-sev" not in ids_nac and "wallapop-u-l-cerca" in ids_nac
+    assert "wallapop-u-vam" not in ids_nac and "wallapop-u-racef" not in ids_nac
 
 
 if __name__ == "__main__":
@@ -2495,4 +2681,5 @@ if __name__ == "__main__":
     test_todo2_edge_cases_y_regresion()
     test_perito_esceptico_v2_y_seleccion_por_portal()
     test_black_friday_canal_exclusivo_y_segundo_bot()
+    test_filtro_estricto_xc_vs_trail()
     print("Todas las pruebas pasaron (GREEN).")

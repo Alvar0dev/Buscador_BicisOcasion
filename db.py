@@ -496,11 +496,15 @@ class BaseDatos:
         en_vigilancia: List[Dict[str, Any]] = []
 
         familias_clave = {
+            "BH iLynx Race": ["ilynx race", "i-lynx race"],
+            "Wilier Urta Hybrid": ["urta hybrid", "wilier urta"],
+            "Focus VAM2 SL": ["vam2", "vam 2", "vam 8."],
+            "BMC Fourstroke AMP": ["fourstroke"],
+            "Scott Lumen": ["lumen"],
             "Orbea Rise": ["orbea rise", "rise h", "rise m"],
             "BH iLynx": ["ilynx", "i-lynx"],
             "Specialized Levo SL": ["levo sl"],
             "Trek Fuel EXe": ["fuel exe"],
-            "Scott Lumen": ["lumen"],
             "Mondraker Neat": ["neat"],
         }
         stats_familias: Dict[str, Dict[str, Any]] = {
@@ -525,7 +529,7 @@ class BaseDatos:
             dias_s = int(f["dias_en_stock"])
             precio = float(f["precio_actual"])
             p_ini = float(f["precio_inicial"])
-            titulo = f["titulo"].lower()
+            titulo = f["titulo"].lower().replace("²", "2")
 
             pvp_orig = None
             if "pvp_original" in f.keys() and f["pvp_original"] is not None:

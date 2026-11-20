@@ -959,8 +959,12 @@ def _extraer_km_de_imagenes(
 
     for model in modelos_vision:
         url_api = f"{cfg.GEMINI_API_URL.format(model=model)}?key={cfg.GEMINI_API_KEY}"
+        gen_cfg_v = dict(payload["generationConfig"])
+        if "3-flash" in model:
+            gen_cfg_v["thinkingConfig"] = {"thinkingBudget": 0}
+        payload_m = {**payload, "generationConfig": gen_cfg_v}
         try:
-            res = requests.post(url_api, json=payload, timeout=20)
+            res = requests.post(url_api, json=payload_m, timeout=20)
             if res.status_code != 200:
                 log.debug(f"[Visión IA {model}] HTTP {res.status_code}: {res.text[:160]}")
                 continue
@@ -992,14 +996,18 @@ def _extraer_km(texto: str) -> Optional[int]:
         return int(match_menor.group(1))
 
     # 2. Patrones con etiqueta explícita de odómetro / kilometraje del vehículo
-    # Ej: "Kilometraje: 1.250 km", "Odómetro: 3400 km", "Kilómetros: 800", "Km: 1.837"
+    # Ej: "Kilometraje: 1.250 km", "Odómetro: 3400 km", "Km: 1.837" ("recorrido" exige sufijo km para no capturar mm de horquilla)
     for match_etiqueta in re.finditer(
-        r"\b(?:(?:kilometraje|kilómetros|kilometros|odómetro|odometro|recorrido|rodaje)\s*[:\-]?\s*(\d[\d.,]*)|kms?\s*[:\-]\s*(\d[\d.,]*))\s*(?:km\b)?",
+        r"\b(?:"
+        r"(?:kilometraje|kil[oó]metros|kilometros|od[oó]metro|odometro)\s*[:\-]?\s*(\d[\d.,]*)\s*(?:kms?\b)?(?!\s*mm\b)"
+        r"|kms?\s*[:\-]\s*(\d[\d.,]*)\s*(?:kms?\b)?(?!\s*mm\b)"
+        r"|(?:recorrido|rodaje)\s*[:\-]?\s*(\d[\d.,]*)\s*(?:kms?|kil[oó]metros?)\b(?!\s*mm\b)"
+        r")",
         texto_norm,
         re.IGNORECASE,
     ):
         try:
-            raw_num = match_etiqueta.group(1) or match_etiqueta.group(2)
+            raw_num = match_etiqueta.group(1) or match_etiqueta.group(2) or match_etiqueta.group(3)
             km_str = raw_num.replace(".", "").replace(",", "")
             val = int(km_str)
             if 0 <= val <= 99999:
@@ -1007,22 +1015,19 @@ def _extraer_km(texto: str) -> Optional[int]:
         except ValueError:
             pass
 
-    # 3. Fallback general: buscar 'XXXX km', descartando estrictamente falsos positivos de contexto:
-    # - Mantenimiento de cadena / engrase (ej. 'hacerle unos 700 km sin otra necesidad de engrasar la cadena')
-    # - Intervalos de cambio de componentes (ej. 'cambies la cadena (entre 700 y 1500 km después de la compra)')
-    # - Autonomía de la batería ('autonomía de hasta 100 km')
-    # - Radio / distancia geográfica ('a 50 km de Madrid')
-    for match in re.finditer(r"(\d[\d.,]*)\s*km\b", texto_norm, re.IGNORECASE):
-        inicio = max(0, match.start() - 65)
-        fin = min(len(texto_norm), match.end() + 65)
-        contexto_previo = texto_norm[inicio:match.start()].lower()
-        contexto_posterior = texto_norm[match.end():fin].lower()
-        contexto_total = f"{contexto_previo} {contexto_posterior}"
+    # 3. Fallback general: buscar 'XXXX km'/'kms'/'kilómetros' acotado a su frase (sin cruzar '.')
+    for match in re.finditer(r"(\d[\d.,]*)\s*(?:kms?|kil[oó]metros?)\b", texto_norm, re.IGNORECASE):
+        frag_prev = re.split(r"[.;!\n]", texto_norm[max(0, match.start() - 80):match.start()])[-1].lower()
+        frag_post = re.split(r"[.;!\n]", texto_norm[match.end():min(len(texto_norm), match.end() + 80)])[0].lower()
+        contexto_total = f"{frag_prev} {frag_post}"
 
         palabras_bloqueadas = (
             "engrasar", "engrase", "engrasado", "cera", "mantenimiento",
             "cambies la cadena", "cambiar la cadena", "cambiar cadena", "cambio de cadena",
             "después de la compra", "tras la compra", "autonomía", "autonomia", "alcance",
+            "da para", "en eco", "en modo eco", "modo eco", "en turbo", "modo turbo",
+            "en trail", "modo trail", "en boost", "con una carga", "por carga",
+            "maxima potencia", "máxima potencia",
             "radio", "distancia", "radio de", "a menos de", "garantía de",
         )
         if any(p in contexto_total for p in palabras_bloqueadas):

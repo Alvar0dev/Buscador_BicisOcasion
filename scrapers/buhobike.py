@@ -21,6 +21,8 @@ class BuhobikeScraper(BaseScraper):
     usar_stealth_directo: bool = True
 
     URLS_ADICIONALES: List[str] = [
+        "https://www.buhobike.com/3230-electricas-trail-dobles?order=product.price.asc&page=2",
+        "https://www.buhobike.com/3230-electricas-trail-dobles?q=MODELO-LUMEN",
         "https://www.buhobike.com/9448-segunda-mano-montana-electricas",
         "https://www.buhobike.com/3225-segunda-mano-electricas",
     ]
@@ -121,7 +123,7 @@ class BuhobikeScraper(BaseScraper):
                     "trail-dobles" in url.lower()
                     or "trail-dobles" in url_listado.lower()
                     or "doble-suspension" in url.lower()
-                    or any(k in titulo.lower() for k in ["ilynx", "lynx", "rise", "strike", "zesty", "overvolt tr", "crafty", "thron", "jam", "stereo", "lt "])
+                    or any(k in titulo.lower() for k in ["ilynx", "lynx", "lumen", "fourstroke", "rise", "strike", "zesty", "overvolt tr", "crafty", "thron", "jam", "stereo", "lt "])
                 )
 
                 reg_el = p.select_one(".regular-price, del, .price-before-discount")

@@ -61,6 +61,7 @@ CATALOGO_EMTB = [
         "cuadro_material": "Carbono",
         "suspension_trasera": "si",
         "modalidad": "XC / Downcountry",
+        "recorrido_mm": 120,
     },
     {
         "patrones": ["bh ilynx+ trail carbon", "ilynx+ trail carbon", "bh ilynx+ enduro", "ilynx+"],
@@ -70,6 +71,7 @@ CATALOGO_EMTB = [
         "cuadro_material": "Carbono",
         "suspension_trasera": "si",
         "modalidad": "Trail",
+        "recorrido_mm": 160,
     },
     {
         "patrones": ["bh ilynx trail carbon", "ilynx trail carbon"],
@@ -78,7 +80,8 @@ CATALOGO_EMTB = [
         "motor": "BH 2EXMAG",
         "cuadro_material": "Carbono",
         "suspension_trasera": "si",
-        "modalidad": "Light e-MTB / Trail",
+        "modalidad": "Trail",
+        "recorrido_mm": 150,
     },
     {
         "patrones": ["bh ilynx race"],
@@ -88,6 +91,7 @@ CATALOGO_EMTB = [
         "cuadro_material": "Aluminio",
         "suspension_trasera": "si",
         "modalidad": "XC / Downcountry",
+        "recorrido_mm": 120,
     },
     {
         "patrones": ["bh ilynx trail"],
@@ -96,19 +100,31 @@ CATALOGO_EMTB = [
         "motor": "BH 2EXMAG",
         "cuadro_material": "Aluminio",
         "suspension_trasera": "si",
-        "modalidad": "Light e-MTB / Trail",
+        "modalidad": "Trail",
+        "recorrido_mm": 150,
+    },
+    {
+        "patrones": ["orbea rise lt"],
+        "peso_kg": 19.5,
+        "bateria_wh_default": 630,
+        "motor": "Shimano EP801-RS Gen2",
+        "cuadro_material": "Carbono",
+        "suspension_trasera": "si",
+        "modalidad": "Trail",
+        "recorrido_mm": 150,
     },
     {
         "patrones": [
             "orbea rise m10", "orbea rise m20", "orbea rise m-team", "orbea rise m-ltd",
-            "orbea rise sl m10", "orbea rise lt m10", "orbea rise m-pro", "orbea rise carbon",
+            "orbea rise sl m10", "orbea rise m-pro", "orbea rise carbon", "orbea rise sl",
         ],
         "peso_kg": 18.3,
         "bateria_wh_default": 540,
         "motor": "Shimano EP801 RS",
         "cuadro_material": "Carbono",
         "suspension_trasera": "si",
-        "modalidad": "Light e-MTB / Trail",
+        "modalidad": "Trail",
+        "recorrido_mm": 140,
     },
     {
         "patrones": ["orbea rise h", "orbea rise h10", "orbea rise h15", "orbea rise h20", "orbea rise h30"],
@@ -117,16 +133,18 @@ CATALOGO_EMTB = [
         "motor": "Shimano EP8-RS",
         "cuadro_material": "Aluminio",
         "suspension_trasera": "si",
-        "modalidad": "Light e-MTB / Trail",
+        "modalidad": "Trail",
+        "recorrido_mm": 140,
     },
     {
-        "patrones": ["amflow pl carbon", "amflow pl"],
+        "patrones": ["amflow pl carbon", "amflow pl", "am flow"],
         "peso_kg": 19.8,
         "bateria_wh_default": 600,
         "motor": "DJI Avinox",
         "cuadro_material": "Carbono",
         "suspension_trasera": "si",
-        "modalidad": "Light e-MTB / Trail",
+        "modalidad": "Trail / All Mountain",
+        "recorrido_mm": 150,
     },
     {
         "patrones": ["cannondale moterra sl"],
@@ -135,7 +153,18 @@ CATALOGO_EMTB = [
         "motor": "Shimano EP801",
         "cuadro_material": "Carbono",
         "suspension_trasera": "si",
-        "modalidad": "Light e-MTB / Trail",
+        "modalidad": "Trail",
+        "recorrido_mm": 150,
+    },
+    {
+        "patrones": ["ghost path riot", "path riot"],
+        "peso_kg": 19.2,
+        "bateria_wh_default": 430,
+        "motor": "Fazua Ride 60",
+        "cuadro_material": "Carbono",
+        "suspension_trasera": "si",
+        "modalidad": "Trail / Enduro",
+        "recorrido_mm": 150,
     },
     {
         "patrones": ["mondraker dune"],
@@ -144,7 +173,8 @@ CATALOGO_EMTB = [
         "motor": "Bosch Performance Line SX",
         "cuadro_material": "Carbono",
         "suspension_trasera": "si",
-        "modalidad": "Light e-MTB / Trail",
+        "modalidad": "Enduro",
+        "recorrido_mm": 170,
     },
     {
         "patrones": ["pivot shuttle sl", "shuttle sl"],
@@ -153,7 +183,8 @@ CATALOGO_EMTB = [
         "motor": "Fazua Ride 60",
         "cuadro_material": "Carbono",
         "suspension_trasera": "si",
-        "modalidad": "Light e-MTB",
+        "modalidad": "Trail",
+        "recorrido_mm": 140,
     },
     {
         "patrones": ["specialized turbo levo sl", "levo sl"],
@@ -162,7 +193,8 @@ CATALOGO_EMTB = [
         "motor": "Specialized SL 1.1 / 1.2",
         "cuadro_material": "Carbono",
         "suspension_trasera": "si",
-        "modalidad": "Light e-MTB",
+        "modalidad": "Trail",
+        "recorrido_mm": 150,
     },
     {
         "patrones": ["trek fuel+ ex 9", "fuel+ ex 9"],
@@ -171,7 +203,8 @@ CATALOGO_EMTB = [
         "motor": "TQ HPR60",
         "cuadro_material": "Carbono",
         "suspension_trasera": "si",
-        "modalidad": "Light e-MTB",
+        "modalidad": "Trail",
+        "recorrido_mm": 150,
     },
     {
         "patrones": ["trek fuel+ ex", "fuel+ ex"],
@@ -180,7 +213,8 @@ CATALOGO_EMTB = [
         "motor": "TQ HPR60",
         "cuadro_material": "Aluminio",
         "suspension_trasera": "si",
-        "modalidad": "Light e-MTB / Trail",
+        "modalidad": "Trail",
+        "recorrido_mm": 150,
     },
     {
         "patrones": ["trek fuel exe", "fuel exe"],
@@ -189,16 +223,28 @@ CATALOGO_EMTB = [
         "motor": "TQ HPR50",
         "cuadro_material": "Carbono",
         "suspension_trasera": "si",
-        "modalidad": "Light e-MTB",
+        "modalidad": "Trail",
+        "recorrido_mm": 140,
     },
     {
-        "patrones": ["scott lumen"],
-        "peso_kg": 16.5,
-        "bateria_wh_default": 520,
+        "patrones": ["bmc fourstroke amp lt", "fourstroke amp lt", "fourstroke amplt", "bmc fourstroke"],
+        "peso_kg": 18.5,
+        "bateria_wh_default": 360,
         "motor": "TQ HPR50",
         "cuadro_material": "Carbono",
         "suspension_trasera": "si",
         "modalidad": "XC / Downcountry",
+        "recorrido_mm": 120,
+    },
+    {
+        "patrones": ["scott lumen"],
+        "peso_kg": 16.5,
+        "bateria_wh_default": 360,
+        "motor": "TQ HPR50",
+        "cuadro_material": "Carbono",
+        "suspension_trasera": "si",
+        "modalidad": "XC / Downcountry",
+        "recorrido_mm": 130,
     },
     {
         "patrones": ["mondraker neat"],
@@ -207,7 +253,8 @@ CATALOGO_EMTB = [
         "motor": "TQ HPR50",
         "cuadro_material": "Carbono",
         "suspension_trasera": "si",
-        "modalidad": "Light e-MTB",
+        "modalidad": "Trail",
+        "recorrido_mm": 150,
     },
     {
         "patrones": ["giant trance x advanced e+ elite"],
@@ -216,16 +263,28 @@ CATALOGO_EMTB = [
         "motor": "Giant SyncDrive Pro",
         "cuadro_material": "Carbono",
         "suspension_trasera": "si",
-        "modalidad": "Light e-MTB",
+        "modalidad": "Trail",
+        "recorrido_mm": 140,
     },
     {
-        "patrones": ["ktm macina scarp"],
-        "peso_kg": 17.8,
-        "bateria_wh_default": 500,
-        "motor": "Bosch Performance Line SX / CX",
+        "patrones": ["ktm macina scarp sx", "macina scarp"],
+        "peso_kg": 18.5,
+        "bateria_wh_default": 400,
+        "motor": "Bosch Performance Line SX",
+        "cuadro_material": "Carbono",
+        "suspension_trasera": "si",
+        "modalidad": "Trail",
+        "recorrido_mm": 140,
+    },
+    {
+        "patrones": ["wilier urta hybrid", "urta hybrid"],
+        "peso_kg": 16.4,
+        "bateria_wh_default": 430,
+        "motor": "Fazua Ride 60",
         "cuadro_material": "Carbono",
         "suspension_trasera": "si",
         "modalidad": "XC / Downcountry",
+        "recorrido_mm": 120,
     },
     {
         "patrones": ["cube ams hybrid one44"],
@@ -234,7 +293,8 @@ CATALOGO_EMTB = [
         "motor": "Bosch Performance Line SX",
         "cuadro_material": "Carbono",
         "suspension_trasera": "si",
-        "modalidad": "Light e-MTB / Downcountry",
+        "modalidad": "Trail",
+        "recorrido_mm": 140,
     },
     {
         "patrones": ["lapierre e-zesty", "ezesty"],
@@ -243,16 +303,48 @@ CATALOGO_EMTB = [
         "motor": "Fazua Ride 60",
         "cuadro_material": "Carbono",
         "suspension_trasera": "si",
-        "modalidad": "Light e-MTB",
+        "modalidad": "Trail",
+        "recorrido_mm": 140,
     },
     {
-        "patrones": ["focus vam2 sl", "focus jam2 sl"],
-        "peso_kg": 17.9,
+        "patrones": ["focus vam2 sl", "focus vam 2 sl", "focus vam 8.7 sl", "focus vam 8.8 sl", "focus vam2", "focus vam 2"],
+        "peso_kg": 17.5,
         "bateria_wh_default": 430,
         "motor": "Fazua Ride 60",
         "cuadro_material": "Carbono",
         "suspension_trasera": "si",
-        "modalidad": "Light e-MTB",
+        "modalidad": "XC / Downcountry",
+        "recorrido_mm": 130,
+    },
+    {
+        "patrones": ["haibike lyke"],
+        "peso_kg": 18.8,
+        "bateria_wh_default": 430,
+        "motor": "Fazua Ride 60",
+        "cuadro_material": "Carbono",
+        "suspension_trasera": "si",
+        "modalidad": "Trail",
+        "recorrido_mm": 140,
+    },
+    {
+        "patrones": ["santa cruz heckler sl", "heckler sl"],
+        "peso_kg": 19.3,
+        "bateria_wh_default": 430,
+        "motor": "Fazua Ride 60",
+        "cuadro_material": "Carbono",
+        "suspension_trasera": "si",
+        "modalidad": "Trail",
+        "recorrido_mm": 150,
+    },
+    {
+        "patrones": ["focus jam2 sl", "focus jam 2 sl", "focus jam2", "focus jam 2"],
+        "peso_kg": 18.5,
+        "bateria_wh_default": 430,
+        "motor": "Fazua Ride 60",
+        "cuadro_material": "Carbono",
+        "suspension_trasera": "si",
+        "modalidad": "Trail",
+        "recorrido_mm": 150,
     },
     {
         "patrones": ["merida eone-forty", "eone-forty"],
@@ -710,7 +802,7 @@ def _es_excepcion_ligera(bici: Bicicleta) -> bool:
         re.search(
             r"\b(?:orbea\s+)?rise\b|\bilynx\s+(?:race|trail)\b|\bmoterra\s+sl\b|"
             r"\bamflow\s+pl\b|\blevo\s+sl\b|\bkenevo\s+sl\b|\bfuel[\s\-]*exe\b|"
-            r"\bscott\s+lumen\b|\bams\s+hybrid\b|\be-?zesty\b|\b(?:vam|jam)\s*2\s*sl\b|\bmacina\s+scarp\b",
+            r"\bscott\s+lumen\b|\bbmc\s+fourstroke\b|\bwilier\s+urta\b|\burta\s+hybrid\b|\bams\s+hybrid\b|\be-?zesty\b|\b(?:vam|jam)\s*2(?:\s*sl)?\b|\bmacina\s+scarp\b",
             txt,
         )
     )
@@ -721,7 +813,11 @@ def completar_con_catalogo(bici: Bicicleta, aplicar_heuristica_peso: bool = True
     Completa campos faltantes de la bicicleta cruzando su título y datos actuales
     con el catálogo técnico y aplicando física realista y correcciones de motor.
     """
-    texto = f"{bici.titulo} {bici.motor or ''} {bici.componentes or ''}".lower()
+    texto = (
+        f"{bici.titulo} {bici.motor or ''} {bici.componentes or ''}"
+        .lower()
+        .replace("²", "2")
+    )
 
     # Detección de Range Extender en título o componentes
     if bici.range_extender_wh is None:
@@ -747,7 +843,16 @@ def completar_con_catalogo(bici: Bicicleta, aplicar_heuristica_peso: bool = True
                 bici.cuadro_material = entrada["cuadro_material"]
             if bici.suspension_trasera is None:
                 bici.suspension_trasera = entrada["suspension_trasera"]
-            if not bici.modalidad:
+            if bici.recorrido_mm is None and entrada.get("recorrido_mm") is not None:
+                bici.recorrido_mm = entrada["recorrido_mm"]
+            es_cat_xc = (entrada.get("recorrido_mm") or 999) <= cfg.RECORRIDO_MAX_XC_MM
+            if not bici.modalidad or bici.modalidad.strip().lower() in ("light e-mtb", "light emtb"):
+                bici.modalidad = entrada["modalidad"]
+            elif not es_cat_xc:
+                # Modelo explícitamente Trail/Enduro en catálogo nunca debe ocultarse tras etiqueta HTML ambigua
+                bici.modalidad = entrada["modalidad"]
+            elif bici.recorrido_mm is None or bici.recorrido_mm <= cfg.RECORRIDO_MAX_XC_MM:
+                # En tiendas como Buhobike la categoría 'electricas-trail-dobles' contamina XC puros con 'Trail'
                 bici.modalidad = entrada["modalidad"]
             break
 
@@ -758,6 +863,8 @@ def completar_con_catalogo(bici: Bicicleta, aplicar_heuristica_peso: bool = True
         if bici.peso_kg is not None and bici.peso_kg < 19.5:
             bici.peso_kg = 20.4
         bici.modalidad = "Trail (160mm)"
+        if bici.recorrido_mm is None:
+            bici.recorrido_mm = 160
     elif ("bh " in titulo_lower or "ilynx" in titulo_lower) and ("ilynx race" in titulo_lower or "ilynx trail" in titulo_lower or "ilynx" in titulo_lower):
         if "ilynx" in titulo_lower:
             bici.motor = "BH 2EXMAG"
@@ -811,11 +918,8 @@ def completar_con_catalogo(bici: Bicicleta, aplicar_heuristica_peso: bool = True
         else:
             bici.peso_kg = 23.0
 
-    if not bici.modalidad and bici.peso_kg is not None:
-        if bici.peso_kg < 21.0:
-            bici.modalidad = "Light e-MTB / Trail"
-        else:
-            bici.modalidad = "Trail"
+    if not bici.modalidad and bici.peso_kg is not None and bici.peso_kg >= cfg.PESO_DESCARTE_KG:
+        bici.modalidad = "Trail"
 
     return bici
 
@@ -1202,12 +1306,15 @@ def _llamar_gemini_api(prompt: str, usar_busqueda: bool = False) -> Optional[dic
 
     for model in cfg.GEMINI_MODELS:
         url = f"{cfg.GEMINI_API_URL.format(model=model)}?key={api_key}"
+        gen_cfg: dict = {
+            "temperature": 0.1,
+            "responseMimeType": "application/json",
+        }
+        if "3-flash" in model:
+            gen_cfg["thinkingConfig"] = {"thinkingBudget": 0}
         payload: dict = {
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0.1,
-                "responseMimeType": "application/json",
-            },
+            "generationConfig": gen_cfg,
         }
         if usar_busqueda:
             payload["tools"] = [{"google_search": {}}]
@@ -1255,8 +1362,11 @@ def enriquecer_y_valorar_bici(bici: Bicicleta) -> Tuple[Bicicleta, float, str]:
     except Exception as e:
         log.warning(f"[IA] Error en enriquecer_bici para {bici.titulo}: {e}")
 
+    peso_despues_web = bici.peso_kg
+
     # 2. Enriquecimiento desde catálogo técnico local antes de consultar DuckDuckGo
     bici = completar_con_catalogo(bici, aplicar_heuristica_peso=False)
+    peso_tras_cat = bici.peso_kg
 
     # 2b. Fallback DuckDuckGo cacheado solo si el catálogo tampoco cubrió peso/suspensión/año
     try:
@@ -1264,11 +1374,12 @@ def enriquecer_y_valorar_bici(bici: Bicicleta) -> Tuple[Bicicleta, float, str]:
     except Exception as e:
         log.warning(f"[IA] Error en DuckDuckGo para {bici.titulo}: {e}")
 
-    # Peso empírico verificado antes de recurrir a caché IA, Gemini o heurística Regla B
-    peso_empirico_previo = bici.peso_kg
+    # Peso empírico verificado desde el anuncio o DuckDuckGo (catálogo estático / Regla B / Gemini son estimaciones)
+    ddg_aporto_peso = bici.peso_kg is not None and bici.peso_kg != peso_tras_cat
+    peso_empirico_previo = bici.peso_kg if (peso_despues_web is not None or ddg_aporto_peso) else None
 
-    # Verificar caché de valoración IA (perito_v5: Perito Escéptico y Estricto v2)
-    cache_version = "perito_v5"
+    # Verificar caché de valoración IA (perito_v6_xc: XC <= 130 mm estricto)
+    cache_version = "perito_v6_xc"
     cache_key = f"{cache_version}:{bici.sitio}:{bici.bici_id}:{int(bici.precio)}"
     cache_ia = _cargar_cache_ia()
     if cache_key in cache_ia:
@@ -1314,7 +1425,7 @@ REQUISITOS DEL COMPRADOR:
 - Peso real en orden de marcha: < 21.0 kg (objetivo ideal: < 19.5 kg).
 - Batería interna: >= 500 Wh.
 - Presupuesto objetivo: 2.000 € - 3.000 € (margen negociable máx. 3.150 €).
-- Modalidad: XC / Trail ágil (120-150 mm).
+- Modalidad obligatoria: ESTRICTAMENTE XC / Cross Country / Downcountry ligero (<= 130 mm de recorrido; DESCARTAR Trail >= 140 mm como Orbea Rise, BH iLynx Trail, Cannondale Moterra SL, Ghost Path Riot, Levo SL, Trek Fuel EXe, Mondraker Neat, All Mountain o Enduro).
 
 ==================================================
 1. REGLAS ANTI-ALUCINACIÓN (OBLIGATORIAS)
@@ -1344,6 +1455,7 @@ Calcula primero la nota matemática y, al final, aplica el tope más bajo que se
 - Peso real o estimado > 21.0 kg: NOTA MÁXIMA = 4.0 (DESCARTADA).
 - Kilometraje > 6.000 km: NOTA MÁXIMA = 4.5 (DESCARTADA).
 - Anuncio genérico sin marca ni modelo identificable: NOTA MÁXIMA = 4.5 (DESCARTADA).
+- Modalidad Trail / All Mountain / Enduro (>= 140 mm): NOTA MÁXIMA = 3.0 (DESCARTADA por no ser XC <= 130 mm).
 
 ==================================================
 3. RÚBRICA MATEMÁTICA DE 5 EJES (BASE = 10.0)
@@ -1407,7 +1519,8 @@ Verifica la aritmética antes de responder y devuelve ÚNICAMENTE un objeto JSON
   "motor": "motor real corregido o NO ESPECIFICADO",
   "cuadro_material": "Carbono, Aluminio o NO ESPECIFICADO",
   "suspension_trasera": "si o no",
-  "modalidad": "Light e-MTB / XC / Downcountry / Trail",
+  "modalidad": "XC / Downcountry / Trail / Enduro",
+  "recorrido_mm": numero_int_mm_suspension_delantera_o_null,
   "ano": numero_int_ano_o_null,
   "componentes": "solo componentes explícitamente declarados o NO ESPECIFICADO",
   "nota": numero_float_de_0_a_10,
@@ -1437,6 +1550,10 @@ Verifica la aritmética antes de responder y devuelve ÚNICAMENTE un objeto JSON
                 bici.suspension_trasera = str(res_gemini["suspension_trasera"]).lower()
             if not bici.modalidad and res_gemini.get("modalidad"):
                 bici.modalidad = str(res_gemini["modalidad"])
+            if bici.recorrido_mm is None and res_gemini.get("recorrido_mm") is not None:
+                m_rec = re.search(r"\b(\d{2,3})\b", str(res_gemini["recorrido_mm"]))
+                if m_rec:
+                    bici.recorrido_mm = int(m_rec.group(1))
             if bici.ano is None and res_gemini.get("ano"):
                 bici.ano = int(res_gemini["ano"])
             if not comp_antes_gemini and res_gemini.get("componentes"):
