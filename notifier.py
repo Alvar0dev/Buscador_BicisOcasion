@@ -24,25 +24,8 @@ def es_mega_chollo(bici, nota: float) -> bool:
     return pct_dto >= 50.0 and nota >= 9.0
 
 
-def formatear_mensaje(
-    bici,
-    nota: float,
-    desglose: str,
-    precio_anterior: Optional[float] = None,
-    seguimiento: Optional[dict] = None,
-    aviso_top_repetido: bool = False,
-    ranking_posicion: Optional[int] = None,
-    es_rotacion_portal: bool = False,
-    aviso_retorno_top1: bool = False,
-) -> str:
-    """
-    Construye el mensaje Markdown para Telegram (S9).
-    Incluye: título, precio (con alerta de bajada si aplica), nota destacada 🔥,
-    kilómetros, batería, cuadro, recorrido de suspensión, seguimiento en stock,
-    desglose de la nota y enlace directo.
-    Si aviso_top_repetido es True, antepone un aviso claro de que el Top 3 no varió
-    y se expone la siguiente alternativa disponible.
-    """
+def _campos_ficha_bici(bici, desglose: str) -> dict:
+    """Normaliza los campos comunes de una bicicleta para mensajes Markdown de Telegram."""
     km = bici.km if bici.km is not None else "no indicado"
     if getattr(bici, "range_extender_wh", None):
         extender_val = bici.range_extender_wh
@@ -65,13 +48,11 @@ def formatear_mensaje(
         if ciclos_bat is not None:
             partes_soh.append(f"{ciclos_bat} ciclos")
         bateria = f"{bateria} [{' | '.join(partes_soh)}]"
-    cuadro = bici.cuadro_material or "no indicado"
-    motor = bici.motor or "no indicado"
-    ano = bici.ano or "no indicado"
-    talla = bici.talla or "no indicada"
+
     modalidad = bici.modalidad or "no indicada"
     if getattr(bici, "recorrido_mm", None):
         modalidad = f"{modalidad} ({bici.recorrido_mm} mm)"
+
     garantia = (
         bici.garantia_anos
         if bici.garantia_anos is not None
@@ -89,6 +70,93 @@ def formatear_mensaje(
         .replace("*", "")
         .replace("`", "'")
     )
+
+    linea_ubicacion = (
+        f"📍 Ubicación: {bici.ubicacion}\n"
+        if getattr(bici, "ubicacion", None)
+        else ""
+    )
+
+    return {
+        "km": km,
+        "bateria": bateria,
+        "cuadro": bici.cuadro_material or "no indicado",
+        "motor": bici.motor or "no indicado",
+        "ano": bici.ano or "no indicado",
+        "talla": bici.talla or "no indicada",
+        "modalidad": modalidad,
+        "garantia_txt": garantia_txt,
+        "desglose_seguro": desglose_seguro,
+        "linea_ubicacion": linea_ubicacion,
+    }
+
+
+def _enviar_telegram(
+    token: str,
+    chat_id: str,
+    texto: str,
+    silencioso: bool,
+    disable_web_page_preview: bool,
+    log_tag: str,
+    log_ok: str,
+) -> bool:
+    """Envía un mensaje a Telegram Bot API con reintento sin Markdown ante error 400."""
+    if not token or not chat_id:
+        print(f"[{log_tag}] Credenciales no configuradas. Se omite el envío.")
+        return False
+
+    url = cfg.TELEGRAM_API_URL.format(token=token)
+    payload = {
+        "chat_id": chat_id,
+        "text": texto,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": disable_web_page_preview,
+        "disable_notification": bool(silencioso),
+    }
+
+    try:
+        resp = requests.post(url, json=payload, timeout=15)
+        if resp.status_code == 400:
+            # Fallback sin parse_mode por si algún carácter especial rompe Markdown v1
+            payload.pop("parse_mode", None)
+            resp = requests.post(url, json=payload, timeout=15)
+        resp.raise_for_status()
+        print(f"[{log_tag}] {log_ok}")
+        return True
+    except requests.RequestException as e:
+        print(f"[{log_tag}] Error enviando mensaje: {e}")
+        return False
+
+
+def formatear_mensaje(
+    bici,
+    nota: float,
+    desglose: str,
+    precio_anterior: Optional[float] = None,
+    seguimiento: Optional[dict] = None,
+    aviso_top_repetido: bool = False,
+    ranking_posicion: Optional[int] = None,
+    es_rotacion_portal: bool = False,
+    aviso_retorno_top1: bool = False,
+) -> str:
+    """
+    Construye el mensaje Markdown para Telegram (S9).
+    Incluye: título, precio (con alerta de bajada si aplica), nota destacada 🔥,
+    kilómetros, batería, cuadro, recorrido de suspensión, seguimiento en stock,
+    desglose de la nota y enlace directo.
+    Si aviso_top_repetido es True, antepone un aviso claro de que el Top 3 no varió
+    y se expone la siguiente alternativa disponible.
+    """
+    c = _campos_ficha_bici(bici, desglose)
+    km = c["km"]
+    bateria = c["bateria"]
+    cuadro = c["cuadro"]
+    motor = c["motor"]
+    ano = c["ano"]
+    talla = c["talla"]
+    modalidad = c["modalidad"]
+    garantia_txt = c["garantia_txt"]
+    desglose_seguro = c["desglose_seguro"]
 
     precio_ref = precio_anterior
     if precio_ref is None and seguimiento and seguimiento.get("precio_inicial"):
@@ -164,18 +232,12 @@ def formatear_mensaje(
             f"💡 _Vuelve al primer puesto tras alternar al #2 (sigue siendo la mejor opción de {bici.sitio}):_\n\n"
         )
 
-    linea_ubicacion = (
-        f"📍 Ubicación: {bici.ubicacion}\n"
-        if getattr(bici, "ubicacion", None)
-        else ""
-    )
-
     mensaje = (
         f"{banner_repetido}"
         f"{cabecera}\n\n"
         f"*{bici.titulo}*\n"
         f"🏪 Tienda: {bici.sitio}\n"
-        f"{linea_ubicacion}"
+        f"{c['linea_ubicacion']}"
         f"{linea_precio}\n"
         f"{linea_pvp}"
         f"🔥 Nota de Oportunidad: *{nota}/10*\n\n"
@@ -237,27 +299,102 @@ def enviar(
         else:
             silencioso = False
 
-    payload = {
-        "chat_id": cfg.TELEGRAM_CHAT_ID,
-        "text": texto,
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": False,
-        "disable_notification": bool(silencioso),
-    }
+    modo_txt = "silencioso" if silencioso else "prioritario/sonoro"
+    return _enviar_telegram(
+        token=cfg.TELEGRAM_BOT_TOKEN,
+        chat_id=cfg.TELEGRAM_CHAT_ID,
+        texto=texto,
+        silencioso=bool(silencioso),
+        disable_web_page_preview=False,
+        log_tag="Telegram",
+        log_ok=f"Enviado ({modo_txt}): {bici.resumen_corto()}",
+    )
 
-    try:
-        resp = requests.post(url, json=payload, timeout=15)
-        if resp.status_code == 400:
-            # Fallback sin parse_mode por si algún carácter especial rompe Markdown v1
-            payload.pop("parse_mode", None)
-            resp = requests.post(url, json=payload, timeout=15)
-        resp.raise_for_status()
-        modo_txt = "silencioso" if silencioso else "prioritario/sonoro"
-        print(f"[Telegram] Enviado ({modo_txt}): {bici.resumen_corto()}")
-        return True
-    except requests.RequestException as e:
-        print(f"[Telegram] Error enviando mensaje: {e}")
-        return False
+
+def formatear_mensaje_black_friday(
+    bici,
+    nota_bf: float,
+    descuento_pct: Optional[float],
+    etiqueta_estado: str,
+    desglose: str,
+    precio_anterior: Optional[float] = None,
+) -> str:
+    """Construye la alerta prioritaria de oportunidades exclusivas Black Friday (nuevas / exposición)."""
+    c = _campos_ficha_bici(bici, desglose)
+    pvp_orig = getattr(bici, "pvp_original", None)
+    dto_real = descuento_pct
+    if dto_real is None and pvp_orig and pvp_orig > bici.precio > 0:
+        dto_real = ((pvp_orig - bici.precio) / pvp_orig) * 100.0
+
+    es_bajada = precio_anterior is not None and bici.precio < precio_anterior
+    if es_bajada:
+        ahorro_bajada = precio_anterior - bici.precio
+        linea_precio = f"💰 Precio Black Friday: *{bici.precio:.0f} €* (Antes: ~{precio_anterior:.0f} €~ | 📉 *-{ahorro_bajada:.0f} €*)"
+    else:
+        linea_precio = f"💰 Precio Black Friday: *{bici.precio:.0f} €*"
+
+    linea_pvp = ""
+    if pvp_orig and pvp_orig > bici.precio and dto_real is not None:
+        ahorro_pvp = pvp_orig - bici.precio
+        linea_pvp = f"🏷️ PVP Original: ~{pvp_orig:.0f} €~ (*-{dto_real:.0f}% DTO* | Ahorro: *-{ahorro_pvp:.0f} €*)\n"
+
+    cabecera = "🔥⚡ *¡CHOLLO EXCLUSIVO BLACK FRIDAY!* ⚡🔥"
+    if dto_real is not None:
+        cabecera = f"🔥⚡ *¡BLACK FRIDAY EXCLUSIVO (-{dto_real:.0f}% PVP)!* ⚡🔥"
+
+    mensaje = (
+        f"{cabecera}\n\n"
+        f"🆕 Estado: *{etiqueta_estado}*\n"
+        f"*{bici.titulo}*\n"
+        f"🏪 Tienda: {bici.sitio}\n"
+        f"{c['linea_ubicacion']}"
+        f"{linea_precio}\n"
+        f"{linea_pvp}"
+        f"🏆 Índice Black Friday: *{nota_bf}/10*\n\n"
+        f"📏 Talla: {c['talla']}\n"
+        f"⚙️ Modalidad: {c['modalidad']}\n"
+        f"⚖️ Peso real est.: {bici.peso_kg if bici.peso_kg else 'no indicado'} kg\n"
+        f"🔋 Batería: {c['bateria']}\n"
+        f"🛞 Cuadro: {c['cuadro']}\n"
+        f"⚡ Motor: {c['motor']}\n"
+        f"📅 Año: {c['ano']}\n"
+        f"🛣️ Kilómetros: {c['km']}\n"
+        f"🛡️ Garantía: {c['garantia_txt']}\n\n"
+        f"_Auditoría Black Friday (Perito Escéptico):_\n{c['desglose_seguro']}\n\n"
+        f"🔗 [Ver oferta exclusiva]({bici.url})"
+    )
+    return mensaje
+
+
+def enviar_black_friday(
+    bici,
+    nota_bf: float,
+    descuento_pct: Optional[float],
+    etiqueta_estado: str,
+    desglose: str,
+    precio_anterior: Optional[float] = None,
+    silencioso: bool = False,
+) -> bool:
+    """Envía una oferta exclusiva Black Friday al segundo bot/chat de Telegram configurado."""
+    token_bf = getattr(cfg, "TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", "")
+    chat_bf = getattr(cfg, "TELEGRAM_CHAT_ID_BLACK_FRIDAY", "") or getattr(cfg, "TELEGRAM_CHAT_ID", "")
+    texto = formatear_mensaje_black_friday(
+        bici=bici,
+        nota_bf=nota_bf,
+        descuento_pct=descuento_pct,
+        etiqueta_estado=etiqueta_estado,
+        desglose=desglose,
+        precio_anterior=precio_anterior,
+    )
+    return _enviar_telegram(
+        token=token_bf,
+        chat_id=chat_bf,
+        texto=texto,
+        silencioso=silencioso,
+        disable_web_page_preview=False,
+        log_tag="Telegram/BlackFriday",
+        log_ok=f"Enviado exclusivo: {bici.resumen_corto()}",
+    )
 
 
 def formatear_heartbeat(resumen: dict) -> str:
@@ -288,6 +425,8 @@ def formatear_heartbeat(resumen: dict) -> str:
         texto_notif = "0 (sin nuevas oportunidades ni rebajas en el Top)"
 
     linea_mega = f"  • Mega Chollos (>50% dto y Nota >= 9.0): *{mega_chollos}* 💥\n" if mega_chollos > 0 else ""
+    bf_notif = resumen.get("black_friday_notificadas", 0)
+    linea_bf = f"  • ⚡ Black Friday (Black Bike Beast): *{bf_notif}* enviada(s)\n" if bf_notif > 0 else ""
 
     linea_rotacion = ""
     portales_rot = resumen.get("portales_rotados") or []
@@ -311,6 +450,7 @@ def formatear_heartbeat(resumen: dict) -> str:
         f"  • Alertas prioritarias: {texto_notif}\n"
         f"{linea_rotacion}"
         f"{linea_mega}"
+        f"{linea_bf}"
         f"  • Radar activo en seguimiento: *{en_catalogo}* unidades\n"
         f"  • Zona de vigilancia (2.900-3.500 €): *{en_vigilancia}* unidades\n\n"
         f"{estado}"
@@ -323,28 +463,124 @@ def enviar_heartbeat(resumen: dict) -> bool:
     Envía el mensaje de heartbeat a Telegram. Devuelve True si tuvo éxito.
     Se envía con disable_notification=True para diagnóstico silencioso que no molesta al usuario.
     """
-    if not cfg.TELEGRAM_BOT_TOKEN or not cfg.TELEGRAM_CHAT_ID:
-        print("[Telegram/Heartbeat] Credenciales no configuradas. Se omite el envío.")
-        return False
-
-    url = cfg.TELEGRAM_API_URL.format(token=cfg.TELEGRAM_BOT_TOKEN)
     texto = formatear_heartbeat(resumen)
-    payload = {
-        "chat_id": cfg.TELEGRAM_CHAT_ID,
-        "text": texto,
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": True,
-        "disable_notification": True,
-    }
+    return _enviar_telegram(
+        token=cfg.TELEGRAM_BOT_TOKEN,
+        chat_id=cfg.TELEGRAM_CHAT_ID,
+        texto=texto,
+        silencioso=True,
+        disable_web_page_preview=True,
+        log_tag="Telegram/Heartbeat",
+        log_ok="Heartbeat enviado exitosamente.",
+    )
 
-    try:
-        resp = requests.post(url, json=payload, timeout=15)
-        if resp.status_code == 400:
-            payload.pop("parse_mode", None)
-            resp = requests.post(url, json=payload, timeout=15)
-        resp.raise_for_status()
-        print(f"[Telegram/Heartbeat] Heartbeat enviado exitosamente.")
-        return True
-    except requests.RequestException as e:
-        print(f"[Telegram/Heartbeat] Error enviando heartbeat: {e}")
+
+def formatear_heartbeat_black_friday(resumen: dict) -> str:
+    """Construye el pulso operativo Markdown para el segundo bot (Black Friday)."""
+    fecha_hora = resumen.get("fecha_hora", "")
+    duracion = resumen.get("duracion_seg", 0.0)
+    total_proc = resumen.get("total_procesadas", 0)
+    bf_encontradas = resumen.get("black_friday_encontradas", 0)
+    bf_notificadas = resumen.get("black_friday_notificadas", 0)
+    estado = resumen.get("estado", "🟢 Runner operativo")
+
+    km_max = getattr(cfg, "KM_MAX_BLACK_FRIDAY", 50)
+    peso_max = getattr(cfg, "PESO_DESCARTE_KG", 21.0)
+    bat_min = getattr(cfg, "BATERIA_MIN_WH", 500)
+    precio_max = getattr(cfg, "PRECIO_MAX_BLACK_FRIDAY_EUR", 3500)
+    dto_min = getattr(cfg, "DESCUENTO_MIN_BLACK_FRIDAY_PCT", 35.0)
+
+    if bf_notificadas > 0:
+        res_linea = f"🔥 Chollos exclusivos enviados: *{bf_notificadas}* (elegibles: *{bf_encontradas}*)"
+    elif resumen.get("black_friday_respaldo_enviado"):
+        res_linea = "📊 *0* en presupuesto <= 3.500 € — enviado *Informe Top 3 más interesantes fuera de tope*"
+    elif bf_encontradas > 0:
+        res_linea = f"✅ *{bf_encontradas}* elegible(s) ya notificada(s) previamente (sin rebaja extra)"
+    else:
+        res_linea = "🔍 *0* bicis cumplen hoy todos los criterios estrictos (sin alertas nuevas)"
+
+    return (
+        f"⚡ *Black Bike Beast — Pulso Black Friday*\n"
+        f"📅 `{fecha_hora}` | ⏱️ `{duracion}s`\n\n"
+        f"🏪 Bicis analizadas en catálogo: *{total_proc}*\n"
+        f"🎯 Filtros activos: nuevas/expo (`<= {km_max} km`), Talla `{cfg.TALLA_OBJETIVO}`, "
+        f"`< {peso_max:.1f} kg`, `>= {bat_min} Wh`, `<= {precio_max} €`, `>= -{dto_min:.0f}% PVP`\n\n"
+        f"{res_linea}\n\n"
+        f"{estado}"
+    )
+
+
+def enviar_heartbeat_black_friday(resumen: dict) -> bool:
+    """Envía el heartbeat silencioso de Black Friday al segundo bot si está configurado."""
+    token_bf = getattr(cfg, "TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", "")
+    chat_bf = getattr(cfg, "TELEGRAM_CHAT_ID_BLACK_FRIDAY", "") or getattr(cfg, "TELEGRAM_CHAT_ID", "")
+    if not token_bf or not chat_bf:
         return False
+    texto = formatear_heartbeat_black_friday(resumen)
+    return _enviar_telegram(
+        token=token_bf,
+        chat_id=chat_bf,
+        texto=texto,
+        silencioso=True,
+        disable_web_page_preview=True,
+        log_tag="Telegram/BlackFridayHeartbeat",
+        log_ok="Heartbeat Black Friday enviado exitosamente.",
+    )
+
+
+def formatear_informe_respaldo_black_friday(items: list) -> str:
+    """
+    Formatea un informe consolidado con el Top N (hasta 3) de bicis ligeras más
+    interesantes encontradas cuando 0 unidades cumplen el tope estricto <= 3.500 €.
+    Cada elemento es (bici, dto_pct, nota_perito, motivo_fuera).
+    """
+    bloques = []
+    for idx, (bici, dto_pct, nota_ref, motivo_fuera) in enumerate(items, 1):
+        pvp_orig = getattr(bici, "pvp_original", None)
+        dto_txt = f"*-{dto_pct:.1f}% PVP*" if dto_pct is not None else ""
+        if pvp_orig and pvp_orig > bici.precio:
+            ahorro = pvp_orig - bici.precio
+            linea_pvp = f" (~{pvp_orig:.0f} €~ | {dto_txt} | Ahorro *-{ahorro:.0f} €*)"
+        else:
+            linea_pvp = ""
+
+        peso_tag = "~" if getattr(bici, "_peso_estimado", False) else ""
+        peso_txt = f"{peso_tag}{bici.peso_kg:.1f} kg" if bici.peso_kg is not None else "peso n/d"
+        km_txt = "NUEVA 0 km" if bici.km == 0 else (f"EXPO {bici.km} km" if (bici.km or 0) <= 50 else f"{bici.km} km")
+        motivo_seguro = str(motivo_fuera).replace("_", "-").replace("*", "").replace("`", "'")
+
+        bloques.append(
+            f"*{idx}. {bici.titulo}* ({bici.sitio})\n"
+            f"💰 *{bici.precio:.0f} €*{linea_pvp}\n"
+            f"⚙️ {km_txt} | ⚖️ {peso_txt} | 🔋 {bici.bateria_wh} Wh | ⚡ {bici.motor or 'n/d'} | 📏 {bici.talla}\n"
+            f"⚠️ _Fuera de filtro:_ {motivo_seguro}\n"
+            f"🔗 [Ver oferta en {bici.sitio}]({bici.url})"
+        )
+
+    cuerpo = "\n\n".join(bloques)
+    return (
+        f"📊⚡ *Black Bike Beast — Top {len(items)} Más Interesantes (Fuera de Tope / Criterio)*\n"
+        f"_Ninguna unidad cumplió hoy todos los límites estrictos (<= 3.500 €, km <= 50, >= 500 Wh, < 21 kg, -35% PVP). "
+        f"Estas son las mejores alternativas de la búsqueda:_\n\n"
+        f"{cuerpo}"
+    )
+
+
+def enviar_informe_respaldo_black_friday(items: list, silencioso: bool = False) -> bool:
+    """Envía al segundo bot el Top 3 de bicicletas más interesantes fuera de presupuesto."""
+    if not items:
+        return False
+    token_bf = getattr(cfg, "TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", "")
+    chat_bf = getattr(cfg, "TELEGRAM_CHAT_ID_BLACK_FRIDAY", "") or getattr(cfg, "TELEGRAM_CHAT_ID", "")
+    if not token_bf or not chat_bf:
+        return False
+    texto = formatear_informe_respaldo_black_friday(items)
+    return _enviar_telegram(
+        token=token_bf,
+        chat_id=chat_bf,
+        texto=texto,
+        silencioso=silencioso,
+        disable_web_page_preview=True,
+        log_tag="Telegram/BlackFridayTop3",
+        log_ok=f"Informe Top {len(items)} de respaldo enviado exitosamente.",
+    )

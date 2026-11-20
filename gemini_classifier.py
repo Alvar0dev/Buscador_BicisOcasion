@@ -1264,6 +1264,9 @@ def enriquecer_y_valorar_bici(bici: Bicicleta) -> Tuple[Bicicleta, float, str]:
     except Exception as e:
         log.warning(f"[IA] Error en DuckDuckGo para {bici.titulo}: {e}")
 
+    # Peso empírico verificado antes de recurrir a caché IA, Gemini o heurística Regla B
+    peso_empirico_previo = bici.peso_kg
+
     # Verificar caché de valoración IA (perito_v5: Perito Escéptico y Estricto v2)
     cache_version = "perito_v5"
     cache_key = f"{cache_version}:{bici.sitio}:{bici.bici_id}:{int(bici.precio)}"
@@ -1279,6 +1282,8 @@ def enriquecer_y_valorar_bici(bici: Bicicleta) -> Tuple[Bicicleta, float, str]:
                 if entry.get(campo) is not None and getattr(bici, campo, None) is None:
                     setattr(bici, campo, entry[campo])
             bici = completar_con_catalogo(bici, aplicar_heuristica_peso=True)
+            if peso_empirico_previo is None and bici.peso_kg is not None:
+                bici._peso_estimado = True
             audit_cached = auditar_perito_mecanico(bici)
             return bici, audit_cached["nota_final"], str(entry["desglose"])
         log.info(
@@ -1491,6 +1496,8 @@ Verifica la aritmética antes de responder y devuelve ÚNICAMENTE un objeto JSON
                 "desglose": desglose_ia,
             }
             _guardar_entrada_cache_ia(cache_key, entry_data)
+            if peso_empirico_previo is None and bici.peso_kg is not None:
+                bici._peso_estimado = True
             log.info(
                 f"[Perito IA] {bici.titulo} -> {nota_final}/10 "
                 f"(km={bici.km}, peso={bici.peso_kg} kg) | {audit_post['formula_str']}"
@@ -1501,6 +1508,8 @@ Verifica la aritmética antes de responder y devuelve ÚNICAMENTE un objeto JSON
 
     # 4. Fallback al motor autónomo pericial local (100% sin API)
     bici = completar_con_catalogo(bici, aplicar_heuristica_peso=True)
+    if peso_empirico_previo is None and bici.peso_kg is not None:
+        bici._peso_estimado = True
     nota_auto, desglose_auto = valorar_autonomo(bici)
     log.info(f"[Perito Autónomo] {bici.titulo} -> {nota_auto}/10 (km={bici.km}, peso={bici.peso_kg} kg)")
     return bici, nota_auto, desglose_auto

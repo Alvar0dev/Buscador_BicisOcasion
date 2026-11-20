@@ -50,10 +50,10 @@ class MammothScraper(BaseScraper):
             try:
                 link_el = card.select_one("a[href*='/p-'], a[href]")
                 nombre_el = card.select_one(".card-product-name")
-                precio_el = card.select_one(
-                    ".card-product-price .price.is__discount, "
-                    ".card-product-price .price.is__full, "
-                    ".card-product-price .price"
+                precio_el = (
+                    card.select_one(".card-product-price .price.is__discount")
+                    or card.select_one(".card-product-price .price.is__full:not(.is__old)")
+                    or card.select_one(".card-product-price .price:not(.is__old)")
                 )
                 if not (link_el and nombre_el and precio_el):
                     continue
@@ -88,9 +88,11 @@ class MammothScraper(BaseScraper):
                 es_categoria_xc = "rally-xc" in url_listado.lower() or "c-3104" in url_listado.lower()
                 modalidad = "XC / Downcountry" if (es_categoria_xc and not es_rigida) else None
 
-                old_el = card.select_one(".card-price-old, .old-price, del, .price-before-discount")
+                old_el = card.select_one(
+                    ".is__old, .price.is__old, .card-price-old, .old-price, del, .price-before-discount"
+                )
                 pvp_original = self._parsear_precio(old_el.get_text()) if old_el else None
-                if pvp_original and pvp_original <= precio:
+                if not pvp_original or pvp_original <= precio:
                     pvp_original = None
 
                 bicis.append(Bicicleta(

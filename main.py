@@ -21,9 +21,26 @@ from typing import Any, Dict, Optional
 import config as cfg
 from config import SITIOS, HORA_EJECUCION, NOTA_MIN_NOTIFICAR, NOTA_MIN_AGUARDAR, TOP_N_NOTIFICAR
 from db import BaseDatos, titulos_equivalentes_dedup
-from evaluator import evaluar, calcular_nota_oportunidad, pasa_filtros_estrictos, prioridad_modalidad
+from dataclasses import replace
+from evaluator import (
+    evaluar,
+    calcular_nota_oportunidad,
+    pasa_filtros_estrictos,
+    prioridad_modalidad,
+    pasa_prefiltro_black_friday,
+    evaluar_oportunidad_black_friday,
+    pasa_prefiltro_respaldo_black_friday,
+    evaluar_respaldo_black_friday,
+)
 from gemini_classifier import enriquecer_y_valorar_bici, _es_anuncio_generico_sin_modelo
-from notifier import enviar, enviar_heartbeat, es_mega_chollo
+from notifier import (
+    enviar,
+    enviar_black_friday,
+    enviar_informe_respaldo_black_friday,
+    enviar_heartbeat,
+    enviar_heartbeat_black_friday,
+    es_mega_chollo,
+)
 from scrapers.bike_ocasion import BikeOcasionScraper
 from scrapers.buhobike import BuhobikeScraper
 from scrapers.upway import UpwayScraper
@@ -253,6 +270,8 @@ def _recolectar_oportunidades(
                 conteo_por_portal[sitio.nombre] = 0
 
     pre_aptas = []
+    bf_extra_pre = []
+    bf_respaldo_pre = []
     vigilancia_aptas = []
 
     for bici in bicis_brutas:
@@ -264,7 +283,6 @@ def _recolectar_oportunidades(
                     bici.bateria_wh += ext
         # Registrar en Zona de Vigilancia bicicletas aptas entre 3.301 € y 3.500 €
         if 3300.0 < bici.precio <= 3500.0:
-            from dataclasses import replace
             bici_test_vig = replace(bici, precio=3000.0)
             apto_vig, _ = pasa_filtros_estrictos(bici_test_vig)
             if apto_vig:
@@ -272,35 +290,64 @@ def _recolectar_oportunidades(
 
         # Pre-filtro rápido antes de deduplicar para que una talla L/XL oficial nunca tape una M de Wallapop
         apto_pre, motivo_pre = pasa_filtros_estrictos(bici)
-        if not apto_pre:
-            logger.debug(f"  DESCARTADA PRE [{bici.sitio}]: {bici.titulo} - {motivo_pre}")
+        if apto_pre:
+            pre_aptas.append(bici)
             continue
-        pre_aptas.append(bici)
+
+        apto_bf_pre, _ = pasa_prefiltro_black_friday(bici)
+        if apto_bf_pre:
+            bf_extra_pre.append(bici)
+            continue
+
+        apto_resp_pre, _ = pasa_prefiltro_respaldo_black_friday(bici)
+        if apto_resp_pre:
+            bf_respaldo_pre.append(bici)
+            continue
+
+        logger.debug(f"  DESCARTADA PRE [{bici.sitio}]: {bici.titulo} - {motivo_pre}")
 
     for b_vig in deduplicar_inter_portal(vigilancia_aptas):
         db.registrar_en_catalogo(b_vig)
 
-    candidatas_pre = deduplicar_inter_portal(pre_aptas)
+    # Deduplicar por separado flujo diario y extras exclusivos BF para que un modelo
+    # >3.300 EUR o 500 Wh de tienda nunca suprima un Wallapop elegible en flujo diario.
+    pre_aptas_dedup = deduplicar_inter_portal(pre_aptas)
+    ids_pre_dedup = {b.bici_id for b in pre_aptas_dedup}
+    bf_extra_dedup = deduplicar_inter_portal(bf_extra_pre)
+    bf_extra_unicas = [b for b in bf_extra_dedup if b.bici_id not in ids_pre_dedup]
+    candidatas_pre = pre_aptas_dedup + bf_extra_unicas
+    ids_catalogo_base = {b.bici_id for b in candidatas_pre}
     for b_cand in candidatas_pre:
         db.registrar_en_catalogo(b_cand)
 
-    if not candidatas_pre:
+    bf_respaldo_dedup = deduplicar_inter_portal(bf_respaldo_pre)
+    bf_respaldo_unicas = [b for b in bf_respaldo_dedup if b.bici_id not in ids_catalogo_base]
+    todos_enriquecer = candidatas_pre + bf_respaldo_unicas
+
+    if not todos_enriquecer:
         if telemetria is not None:
             telemetria["conteo_por_portal"] = conteo_por_portal
             telemetria["total_procesadas"] = sum(conteo_por_portal.values())
             telemetria["candidatas_pre"] = 0
             telemetria["candidatas_aptas"] = 0
+            telemetria["black_friday_pool"] = []
+            telemetria["black_friday_respaldo_pool"] = []
         return []
 
-    logger.info(f"[IA/Enriquecedor] Analizando y completando {len(candidatas_pre)} candidatas pre-filtradas...")
+    logger.info(
+        f"[IA/Enriquecedor] Analizando y completando {len(todos_enriquecer)} candidatas pre-filtradas "
+        f"({len(bf_respaldo_unicas)} extra fuera de tope para respaldo Top 3)..."
+    )
 
     estrictas_pool = []
     respaldo_pool = []
+    black_friday_pool = []
+    black_friday_respaldo_pool = []
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         futuros = {
             executor.submit(enriquecer_y_valorar_bici, bici): bici
-            for bici in candidatas_pre
+            for bici in todos_enriquecer
         }
         for futuro in as_completed(futuros):
             bici_orig = futuros[futuro]
@@ -311,14 +358,31 @@ def _recolectar_oportunidades(
                 nota, desglose = calcular_nota_oportunidad(bici_orig)
                 bici = bici_orig
 
-            # Verificar disponibilidad, Talla M, Doble Suspensión, Batería > 500 Wh y Precio 2.000-3.300 €
+            # Verificar disponibilidad, Talla M, Doble Suspensión
             if getattr(bici, "disponible", True) is False:
                 continue
             if bici.talla and bici.talla.strip().upper() != cfg.TALLA_OBJETIVO.upper():
                 continue
-            if bici.bateria_wh is not None and bici.bateria_wh <= cfg.BATERIA_MIN_WH:
-                continue
             if bici.suspension_trasera is not None and str(bici.suspension_trasera).lower() in ("false", "no", "0"):
+                continue
+
+            es_bf = False
+            if bici.bici_id in ids_catalogo_base:
+                # Evaluar elegibilidad exclusiva Black Friday (2.000-3.500 €, nuevas/exposición) antes del techo diario 3.300 €
+                es_bf, nota_bf, dto_bf, etiq_bf, desglose_bf = evaluar_oportunidad_black_friday(bici, nota_perito=nota)
+                if es_bf:
+                    black_friday_pool.append((bici, nota_bf, dto_bf, etiq_bf, desglose_bf))
+
+            if not es_bf:
+                ok_resp, dto_r, nota_r, mot_r, clave_r = evaluar_respaldo_black_friday(bici, nota_perito=nota)
+                if ok_resp:
+                    black_friday_respaldo_pool.append((bici, dto_r, nota_r, mot_r, clave_r))
+
+            if bici.bici_id not in ids_catalogo_base:
+                continue
+
+            # Flujo diario: Batería > 500 Wh y Precio 2.000-3.300 €
+            if bici.bateria_wh is not None and bici.bateria_wh <= cfg.BATERIA_MIN_WH:
                 continue
             if not (cfg.PRECIO_MIN_EUR <= bici.precio <= cfg.PRECIO_MAX_EXCEPCIONAL_EUR):
                 continue
@@ -351,6 +415,12 @@ def _recolectar_oportunidades(
     )
     respaldo_pool.sort(key=clave_orden_respaldo, reverse=True)
 
+    black_friday_pool.sort(
+        key=lambda x: (x[1], x[2] or 0.0, -(x[0].peso_kg or 21.0)),
+        reverse=True,
+    )
+    black_friday_respaldo_pool.sort(key=lambda x: x[4], reverse=True)
+
     seleccion = [
         (b, n, d) for (b, n, d, _) in (estrictas_pool + respaldo_pool)
     ]
@@ -360,6 +430,10 @@ def _recolectar_oportunidades(
         telemetria["total_procesadas"] = sum(conteo_por_portal.values())
         telemetria["candidatas_pre"] = len(candidatas_pre)
         telemetria["candidatas_aptas"] = len(seleccion)
+        telemetria["black_friday_pool"] = black_friday_pool
+        telemetria["black_friday_respaldo_pool"] = [
+            x[:4] for x in black_friday_respaldo_pool
+        ]
 
     return seleccion
 
@@ -590,6 +664,91 @@ def seleccionar_por_portal(
     }
 
 
+def _despachar_alertas_black_friday(
+    db: BaseDatos,
+    bf_pool: list,
+    forzar_envio: bool = False,
+    bf_respaldo_pool: Optional[list] = None,
+    estado_extra: Optional[dict] = None,
+) -> int:
+    """
+    Envía ofertas exclusivas de Black Friday (nuevas / exposición <= 3.500 €)
+    al segundo bot/chat de Telegram, deduplicando y registrando envíos en SQLite.
+    Si 0 bicis pasan los filtros estrictos y hay alternativas en bf_respaldo_pool,
+    envía un informe consolidado con el Top 3 más interesante aunque supere tope/criterio.
+    """
+    if not getattr(cfg, "TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", ""):
+        if bf_pool or bf_respaldo_pool:
+            logger.info(
+                "[Black Friday] Ofertas detectadas, pero TELEGRAM_BOT_TOKEN_BLACK_FRIDAY no está configurado."
+            )
+        return 0
+
+    if not bf_pool:
+        top_n_resp = max(1, int(getattr(cfg, "BLACK_FRIDAY_FALLBACK_TOP_N", 3)))
+        candidatas_resp = list(bf_respaldo_pool or [])[:top_n_resp]
+        if not candidatas_resp:
+            return 0
+        debe_enviar = forzar_envio or any(
+            db.debe_reenviarse_black_friday(replace(b, bici_id=f"respaldo:{b.bici_id}"))
+            for b, *_ in candidatas_resp
+        )
+        if not debe_enviar:
+            return 0
+        if enviar_informe_respaldo_black_friday(candidatas_resp):
+            for b, dto_r, nota_r, _ in candidatas_resp:
+                b_mark = replace(b, bici_id=f"respaldo:{b.bici_id}")
+                prev_r = db.precio_previo_black_friday(b_mark.bici_id)
+                db.registrar_black_friday(b_mark, nota_r, dto_r, precio_anterior=prev_r)
+            if estado_extra is not None:
+                estado_extra["respaldo_enviado"] = True
+            logger.info(
+                f"  📊⚡ INFORME TOP {len(candidatas_resp)} [Black Friday Respaldo > tope]: enviado a Black Bike Beast."
+            )
+            return len(candidatas_resp)
+        return 0
+
+    enviadas = 0
+    vistos_run = set()
+    max_envios = max(1, int(getattr(cfg, "BLACK_FRIDAY_TOP_N", 5)))
+
+    for bici, nota_bf, dto_pct, etiqueta, desglose_bf in bf_pool:
+        if enviadas >= max_envios:
+            break
+        if bici.bici_id in vistos_run:
+            continue
+        vistos_run.add(bici.bici_id)
+
+        if not forzar_envio and not db.debe_reenviarse_black_friday(bici):
+            continue
+        if db.fue_enviada_black_friday_equivalente(bici):
+            continue
+
+        precio_anterior = db.precio_previo_black_friday(bici.bici_id)
+        if enviar_black_friday(
+            bici=bici,
+            nota_bf=nota_bf,
+            descuento_pct=dto_pct,
+            etiqueta_estado=etiqueta,
+            desglose=desglose_bf,
+            precio_anterior=precio_anterior,
+        ):
+            db.registrar_black_friday(
+                bici=bici,
+                nota_bf=nota_bf,
+                descuento_pct=dto_pct,
+                precio_anterior=precio_anterior,
+            )
+            enviadas += 1
+            dto_txt = f"-{dto_pct:.0f}%" if dto_pct is not None else "n/a"
+            logger.info(
+                f"  ⚡ NOTIFICADA [Black Friday / {etiqueta}]: {bici.titulo} "
+                f"({bici.precio:.0f} €, {dto_txt}, {bici.peso_kg} kg) - BF {nota_bf}/10"
+            )
+
+    return enviadas
+
+
 def ejecutar_busqueda(forzar_envio: bool = False) -> None:
     """Ejecuta una pasada completa de búsqueda, valoración pericial y entrega 1 opción por página."""
     t_inicio = time.time()
@@ -691,6 +850,16 @@ def ejecutar_busqueda(forzar_envio: bool = False) -> None:
         )
 
     duracion_seg = round(time.time() - t_inicio, 1)
+    bf_pool = telemetria_ejecucion.get("black_friday_pool") or []
+    bf_respaldo_pool = telemetria_ejecucion.get("black_friday_respaldo_pool") or []
+    bf_estado_envio: Dict[str, Any] = {}
+    bf_notificadas = _despachar_alertas_black_friday(
+        db,
+        bf_pool,
+        forzar_envio=forzar_envio,
+        bf_respaldo_pool=bf_respaldo_pool,
+        estado_extra=bf_estado_envio,
+    )
     stats_radar = db.obtener_estadisticas_mercado()
 
     # Heartbeat a Telegram: si está configurado, o si se forzó la búsqueda
@@ -703,6 +872,9 @@ def ejecutar_busqueda(forzar_envio: bool = False) -> None:
             "candidatas_aptas": len(oportunidades),
             "notificadas": total_notificadas,
             "mega_chollos": mega_chollos_count,
+            "black_friday_encontradas": len(bf_pool),
+            "black_friday_notificadas": 0 if bf_estado_envio.get("respaldo_enviado") else bf_notificadas,
+            "black_friday_respaldo_enviado": bool(bf_estado_envio.get("respaldo_enviado")),
             "top_repetido": aviso_top_repetido,
             "offset_usado": 0,
             "portales_rotados": portales_rotados,
@@ -712,6 +884,8 @@ def ejecutar_busqueda(forzar_envio: bool = False) -> None:
             "estado": "🟢 Runner operativo" if telemetria_ejecucion.get("total_procesadas", 0) > 0 else "⚠️ Sin bicicletas procesadas",
         }
         enviar_heartbeat(resumen_hb)
+        if getattr(cfg, "TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", ""):
+            enviar_heartbeat_black_friday(resumen_hb)
 
     logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Finalizado en {duracion_seg}s. "
                 f"{len(oportunidades)} candidatas aptas, {total_notificadas} notificadas.\n")
@@ -805,11 +979,15 @@ def main() -> None:
             "total_procesadas": stats.get("total", 0),
             "candidatas_aptas": len(stats.get("con_rebajas", [])),
             "notificadas": 0,
+            "black_friday_encontradas": 0,
+            "black_friday_notificadas": 0,
             "total_en_catalogo": stats.get("total", 0),
             "total_en_vigilancia": len(stats.get("en_vigilancia", [])),
             "estado": "🟢 Test manual de Heartbeat",
         }
         enviar_heartbeat(resumen_hb)
+        if getattr(cfg, "TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", ""):
+            enviar_heartbeat_black_friday(resumen_hb)
         return
 
     if args.stats:

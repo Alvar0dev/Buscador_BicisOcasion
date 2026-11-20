@@ -9,6 +9,7 @@ import json
 import re
 import sqlite3
 import unicodedata
+from contextlib import contextmanager
 from datetime import datetime, date
 from typing import Optional, Tuple, Dict, Any, List, Set
 import config as cfg
@@ -65,10 +66,23 @@ class BaseDatos:
         self.ruta = ruta if ruta is not None else cfg.DB_PATH
         self._crear_tabla()
 
-    def _conectar(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.ruta)
+    @contextmanager
+    def _conectar(self):
+        conn = sqlite3.connect(self.ruta, timeout=30.0)
         conn.row_factory = sqlite3.Row
-        return conn
+        if str(self.ruta) != ":memory:":
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+            except sqlite3.Error:
+                pass
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _crear_tabla(self) -> None:
         with self._conectar() as conn:
@@ -127,6 +141,22 @@ class BaseDatos:
                 conn.execute("ALTER TABLE analisis_ejecuciones ADD COLUMN estado_portales TEXT")
             except Exception:
                 pass
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS bicis_black_friday_enviadas (
+                    bici_id         TEXT PRIMARY KEY,
+                    sitio           TEXT NOT NULL,
+                    titulo          TEXT NOT NULL,
+                    precio          REAL NOT NULL,
+                    pvp_original    REAL,
+                    descuento_pct   REAL,
+                    url             TEXT NOT NULL,
+                    nota_bf         REAL NOT NULL,
+                    fecha_envio     TEXT NOT NULL DEFAULT (datetime('now')),
+                    precio_anterior REAL
+                )
+                """
+            )
             conn.commit()
 
     def ya_enviada(self, bici_id: str) -> bool:
@@ -137,13 +167,19 @@ class BaseDatos:
             ).fetchone()
         return fila is not None
 
-    def precio_previo(self, bici_id: str) -> Optional[float]:
-        """Devuelve el último precio registrado para detectar bajadas (S12)."""
+    def _precio_previo_en_tabla(self, tabla: str, bici_id: str) -> Optional[float]:
+        """Devuelve el último precio registrado en la tabla permitida."""
+        if tabla not in ("bicis_enviadas", "bicis_black_friday_enviadas"):
+            raise ValueError(f"Tabla no permitida: {tabla}")
         with self._conectar() as conn:
             fila = conn.execute(
-                "SELECT precio FROM bicis_enviadas WHERE bici_id = ?", (bici_id,)
+                f"SELECT precio FROM {tabla} WHERE bici_id = ?", (bici_id,)
             ).fetchone()
         return fila["precio"] if fila else None
+
+    def precio_previo(self, bici_id: str) -> Optional[float]:
+        """Devuelve el último precio registrado para detectar bajadas (S12)."""
+        return self._precio_previo_en_tabla("bicis_enviadas", bici_id)
 
     def registrar(self, bici: Bicicleta, nota: float, precio_anterior: Optional[float] = None) -> None:
         """Guarda la bicicleta como enviada (S12)."""
@@ -180,14 +216,16 @@ class BaseDatos:
             return False
         return bici.precio < previo
 
-    def fue_enviada_equivalente(self, bici: Bicicleta, tolerancia_eur: float = 25.0) -> bool:
-        """
-        Detecta si un anuncio equivalente (mismo modelo normalizado y precio dentro de tolerancia)
-        ya fue notificado previamente desde otro portal distinto (ej. Buhobike vs su clon en Wallapop).
-        """
+    def _fue_enviada_equivalente_en_tabla(
+        self, tabla: str, bici: Bicicleta, tolerancia_eur: float = 25.0
+    ) -> bool:
+        """Comprueba si existe un clon equivalente de otro portal en la tabla indicada."""
+        if tabla not in ("bicis_enviadas", "bicis_black_friday_enviadas"):
+            raise ValueError(f"Tabla no permitida: {tabla}")
+        filtro_extra = " AND bici_id NOT LIKE 'respaldo:%'" if tabla == "bicis_black_friday_enviadas" else ""
         with self._conectar() as conn:
             filas = conn.execute(
-                "SELECT sitio, titulo, precio FROM bicis_enviadas WHERE bici_id != ?",
+                f"SELECT sitio, titulo, precio FROM {tabla} WHERE bici_id != ?{filtro_extra}",
                 (bici.bici_id,),
             ).fetchall()
         for fila in filas:
@@ -202,6 +240,75 @@ class BaseDatos:
             ):
                 return True
         return False
+
+    def fue_enviada_equivalente(self, bici: Bicicleta, tolerancia_eur: float = 25.0) -> bool:
+        """
+        Detecta si un anuncio equivalente (mismo modelo normalizado y precio dentro de tolerancia)
+        ya fue notificado previamente desde otro portal distinto (ej. Buhobike vs su clon en Wallapop).
+        """
+        return self._fue_enviada_equivalente_en_tabla("bicis_enviadas", bici, tolerancia_eur=tolerancia_eur)
+
+    # ---------------------------------------------------------------------------
+    # CANAL EXCLUSIVO BLACK FRIDAY (DEDUP Y REGISTRO)
+    # ---------------------------------------------------------------------------
+
+    def ya_enviada_black_friday(self, bici_id: str) -> bool:
+        """Devuelve True si la bici ya se envió al canal Black Friday."""
+        with self._conectar() as conn:
+            fila = conn.execute(
+                "SELECT 1 FROM bicis_black_friday_enviadas WHERE bici_id = ?", (bici_id,)
+            ).fetchone()
+        return fila is not None
+
+    def precio_previo_black_friday(self, bici_id: str) -> Optional[float]:
+        """Devuelve el último precio enviado al canal Black Friday para detectar rebajas extra."""
+        return self._precio_previo_en_tabla("bicis_black_friday_enviadas", bici_id)
+
+    def debe_reenviarse_black_friday(self, bici: Bicicleta) -> bool:
+        """True si nunca se envió al bot Black Friday o si bajó estrictamente de precio."""
+        if not self.ya_enviada_black_friday(bici.bici_id):
+            return True
+        previo = self.precio_previo_black_friday(bici.bici_id)
+        if previo is None:
+            return False
+        return bici.precio < previo
+
+    def fue_enviada_black_friday_equivalente(
+        self, bici: Bicicleta, tolerancia_eur: float = 25.0
+    ) -> bool:
+        """Evita duplicar anuncios clones entre portales dentro del canal Black Friday."""
+        return self._fue_enviada_equivalente_en_tabla(
+            "bicis_black_friday_enviadas", bici, tolerancia_eur=tolerancia_eur
+        )
+
+    def registrar_black_friday(
+        self,
+        bici: Bicicleta,
+        nota_bf: float,
+        descuento_pct: Optional[float],
+        precio_anterior: Optional[float] = None,
+    ) -> None:
+        """Registra una alerta enviada al bot exclusivo Black Friday."""
+        with self._conectar() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO bicis_black_friday_enviadas
+                    (bici_id, sitio, titulo, precio, pvp_original, descuento_pct, url, nota_bf, precio_anterior)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    bici.bici_id,
+                    bici.sitio,
+                    bici.titulo,
+                    bici.precio,
+                    getattr(bici, "pvp_original", None),
+                    descuento_pct,
+                    bici.url,
+                    nota_bf,
+                    precio_anterior,
+                ),
+            )
+            conn.commit()
 
     # ---------------------------------------------------------------------------
     # HISTORIAL DE CATÁLOGO Y TIEMPO EN STOCK (TODO 1)

@@ -9,7 +9,15 @@ No depende de la web real ni de credenciales de Telegram.
 import os
 import tempfile
 from models import Bicicleta
-from evaluator import evaluar, calcular_nota_oportunidad, pasa_filtros_estrictos, _puntuacion_calidad_precio, prioridad_modalidad
+from evaluator import (
+    evaluar,
+    calcular_nota_oportunidad,
+    pasa_filtros_estrictos,
+    _puntuacion_calidad_precio,
+    prioridad_modalidad,
+    pasa_prefiltro_black_friday,
+    evaluar_oportunidad_black_friday,
+)
 from gemini_classifier import (
     completar_con_catalogo,
     evaluar_documentacion_motor,
@@ -36,7 +44,15 @@ from main import exportar_radar_mercado_md
 from scraper_base import BaseScraper, crear_proxy_rotator, random_rotation
 import config as cfg
 from db import BaseDatos
-from notifier import formatear_mensaje, formatear_heartbeat, enviar_heartbeat, enviar, es_mega_chollo
+from notifier import (
+    formatear_mensaje,
+    formatear_heartbeat,
+    enviar_heartbeat,
+    enviar,
+    es_mega_chollo,
+    formatear_mensaje_black_friday,
+    enviar_black_friday,
+)
 from scrapers.upway import UpwayScraper
 from unittest.mock import patch, MagicMock
 
@@ -1197,7 +1213,8 @@ def test_rotacion_consecutiva_top3_y_aviso():
                  patch("main._recolectar_oportunidades", return_value=oportunidades_4_portales), \
                  patch("main.exportar_radar_mercado_md"), \
                  patch("main.enviar", return_value=True) as mock_enviar, \
-                 patch("main.enviar_heartbeat"):
+                 patch("main.enviar_heartbeat"), \
+                 patch("main.enviar_heartbeat_black_friday"):
 
                 # Día 1: #1 de cada página (u-1, bo-1, w-1, m-1)
                 ejecutar_busqueda(forzar_envio=True)
@@ -2020,7 +2037,8 @@ def test_perito_esceptico_v2_y_seleccion_por_portal():
              patch("main._recolectar_oportunidades", return_value=ops_fail), \
              patch("main.exportar_radar_mercado_md"), \
              patch("main.enviar", side_effect=lambda b, *a, **kw: b.sitio != "Upway"), \
-             patch("main.enviar_heartbeat"):
+             patch("main.enviar_heartbeat"), \
+             patch("main.enviar_heartbeat_black_friday"):
             ejecutar_busqueda(forzar_envio=True)
 
         ult_fail = db_fail.obtener_ultimo_analisis()
@@ -2031,7 +2049,8 @@ def test_perito_esceptico_v2_y_seleccion_por_portal():
         with patch("main.BaseDatos", return_value=db_fail), \
              patch("main._recolectar_oportunidades", return_value=[]), \
              patch("main.exportar_radar_mercado_md"), \
-             patch("main.enviar_heartbeat"):
+             patch("main.enviar_heartbeat"), \
+             patch("main.enviar_heartbeat_black_friday"):
             ejecutar_busqueda(forzar_envio=True)
         ult_vacio = db_fail.obtener_ultimo_analisis()
         assert ult_vacio["estado_portales"]["Wallapop"]["enviado_id"] == "w-f1"
@@ -2039,6 +2058,409 @@ def test_perito_esceptico_v2_y_seleccion_por_portal():
         try:
             if os.path.exists(ruta_fail):
                 os.unlink(ruta_fail)
+        except (PermissionError, OSError):
+            pass
+
+
+def test_black_friday_canal_exclusivo_y_segundo_bot():
+    """Valida detección PVP Mammoth, filtros/rúbrica Black Friday <= 3.500 €, dedup SQLite y envío al 2º bot."""
+    from bs4 import BeautifulSoup
+    from scrapers.mammoth import MammothScraper
+    from main import _recolectar_oportunidades, ejecutar_busqueda
+
+    # 1. Extractor Mammoth reconoce .price.is__old y rellena pvp_original (incluso si is__old aparece primero en DOM)
+    html_mammoth = """
+    <div class="card-content">
+      <a href="/ebike-trek-fuel-ex-8/p-599999">
+        <div class="card-product-name"><strong>trek</strong> ebike trek fuel+ ex 8 gen 2</div>
+        <div class="card-product-price">
+          <span class="price is__old">5.499,00 €</span>
+          <span class="price is__discount">3.299,40 €</span>
+        </div>
+        <div class="card--product-sizes form-sizes-group"><ul><li><label>M</label></li></ul></div>
+      </a>
+    </div>
+    <div class="card-content">
+      <a href="/ebike-trek-no-pvp/p-599998">
+        <div class="card-product-name"><strong>trek</strong> ebike trek powerfly fs 4</div>
+        <div class="card-product-price"><span class="price">3.100,00 €</span><del>Proximamente</del></div>
+        <div class="card--product-sizes form-sizes-group"><ul><li><label>M</label></li></ul></div>
+      </a>
+    </div>
+    """
+    sitio_mammoth = next(s for s in cfg.SITIOS if s.nombre == "Mammoth")
+    m_scraper = MammothScraper(sitio_mammoth)
+    soup_m = BeautifulSoup(html_mammoth, "html.parser")
+    bicis_m = m_scraper._extraer_de_sopa(soup_m, url_listado=sitio_mammoth.seccion_emtb)
+    assert len(bicis_m) == 2
+    assert bicis_m[0].precio == 3299.4
+    assert bicis_m[0].pvp_original == 5499.0
+    assert bicis_m[0].talla == "M"
+    assert bicis_m[1].pvp_original is None
+
+    # 2. Acepta bici nueva hasta 3.500 € (< 21 kg, >= 500 Wh, >= 35% dto) pero la mantiene fuera del filtro diario >3300
+    b_bf_nueva = bici_prueba(
+        sitio="Buhobike",
+        bici_id="bf-new-1",
+        titulo="Orbea Rise SL M20 2025",
+        precio=3450.0,
+        pvp_original=5999.0,
+        km=0,
+        peso_kg=19.2,
+        bateria_wh=630,
+        motor="Shimano EP801",
+        componentes="Shimano XT 12v Fox Factory Kashima",
+        cuadro_material="Carbono",
+        suspension_trasera="si",
+        garantia_anos=3,
+        url="https://www.buhobike.com/electricas-trail-dobles/123-orbea-rise-sl.html",
+    )
+    assert pasa_filtros_estrictos(b_bf_nueva)[0] is False
+    assert pasa_prefiltro_black_friday(b_bf_nueva)[0] is True
+    ok_bf, nota_bf, dto_bf, etiq_bf, _ = evaluar_oportunidad_black_friday(b_bf_nueva)
+    assert ok_bf is True and nota_bf >= 7.5 and dto_bf == 42.5
+    assert "NUEVA" in etiq_bf
+
+    #    Exposición 1 km también entra y permite exacto 500 Wh en BF (sin romper >500 Wh en S4 diario)
+    b_expo = bici_prueba(
+        sitio="Bike Ocasión",
+        bici_id="bf-expo-1",
+        titulo="BH iLynx Race Carbon 8.6",
+        precio=2899.0,
+        pvp_original=7500.0,
+        km=1,
+        peso_kg=19.5,
+        bateria_wh=500,
+        componentes="XT 12v Fox Factory",
+        suspension_trasera="si",
+        garantia_anos=1,
+    )
+    assert pasa_filtros_estrictos(b_expo)[0] is False  # S4 diario sigue exigiendo > 500 Wh
+    ok_expo, nota_expo, dto_expo, etiq_expo, _ = evaluar_oportunidad_black_friday(b_expo)
+    assert ok_expo is True and nota_expo >= 8.0 and dto_expo > 60.0
+    assert "EXPOSICIÓN" in etiq_expo
+
+    # 3. Rechazos estrictos anti-alucinación / peso / descuento insuficiente / >3500 € / sin doble confirmada / peso estimado IA
+    assert evaluar_oportunidad_black_friday(bici_prueba(precio=3501.0, pvp_original=7000.0, km=0, suspension_trasera="si"))[0] is False
+    assert evaluar_oportunidad_black_friday(bici_prueba(precio=2800.0, pvp_original=6000.0, km=0, peso_kg=23.2, suspension_trasera="si"))[0] is False
+    assert evaluar_oportunidad_black_friday(bici_prueba(precio=2800.0, pvp_original=6000.0, km=0, peso_kg=19.2, suspension_trasera=None))[0] is False
+    assert evaluar_oportunidad_black_friday(bici_prueba(precio=3399.0, pvp_original=4499.0, km=0, peso_kg=19.0, suspension_trasera="si"))[0] is False  # 24% dto < 35%
+    assert evaluar_oportunidad_black_friday(bici_prueba(titulo="Bike NUEVA a estrenar", precio=2500.0, pvp_original=6000.0, km=120, suspension_trasera="si"))[0] is False
+    assert evaluar_oportunidad_black_friday(bici_prueba(precio=2500.0, pvp_original=6000.0, km=None, suspension_trasera="si"))[0] is False
+    assert evaluar_oportunidad_black_friday(bici_prueba(precio=2500.0, pvp_original=None, km=0, suspension_trasera="si"))[0] is False
+
+    #    Peso sin dato real rellenado solo por heurística Regla B o Gemini API no debe pasar Black Friday
+    from gemini_classifier import enriquecer_y_valorar_bici
+    b_peso_desconocido = Bicicleta(
+        sitio="Buhobike",
+        bici_id="bf-peso-ia",
+        titulo="Orbea Rise SL 2025",
+        precio=3400.0,
+        pvp_original=6000.0,
+        url="https://www.buhobike.com/electricas-trail-dobles/999-rise.html",
+        talla="M",
+        bateria_wh=540,
+        cuadro_material="Carbono",
+        motor="Shimano EP801",
+        km=0,
+        componentes="XT 12v",
+        suspension_trasera="si",
+        garantia_anos=3,
+        peso_kg=None,
+    )
+    with patch("gemini_classifier.enriquecer_bici", side_effect=lambda b, **kw: b), \
+         patch("gemini_classifier.completar_desde_duckduckgo", side_effect=lambda b: b), \
+         patch("gemini_classifier._cargar_cache_ia", return_value={}), \
+         patch("gemini_classifier._guardar_entrada_cache_ia"), \
+         patch("gemini_classifier._llamar_gemini_api", return_value=None):
+        b_out_heur, _, _ = enriquecer_y_valorar_bici(b_peso_desconocido)
+    assert b_out_heur.peso_kg is not None and getattr(b_out_heur, "_peso_estimado", False) is True
+    assert evaluar_oportunidad_black_friday(b_out_heur)[0] is False
+
+    #    Un anuncio BF oficial >3.300 EUR no debe suprimir a su clon Wallapop <=3.300 EUR en el flujo diario
+    b_of_3320 = bici_prueba(
+        sitio="Buhobike",
+        bici_id="bh-3320",
+        titulo="Orbea Rise M20 2023",
+        precio=3320.0,
+        pvp_original=6000.0,
+        km=0,
+        peso_kg=18.5,
+        bateria_wh=540,
+        suspension_trasera="si",
+        url="https://www.buhobike.com/electricas-trail-dobles/3320-rise.html",
+    )
+    b_wl_3295 = bici_prueba(
+        sitio="Wallapop",
+        bici_id="wl-3295",
+        titulo="Orbea Rise M20 2023",
+        precio=3295.0,
+        km=500,
+        peso_kg=18.5,
+        bateria_wh=540,
+        suspension_trasera="si",
+        url="https://es.wallapop.com/item/3295",
+    )
+    fd_sep, ruta_sep = tempfile.mkstemp(suffix=".db")
+    os.close(fd_sep)
+    try:
+        db_sep = BaseDatos(ruta=ruta_sep)
+        fake_b_sep = MagicMock(); fake_b_sep.extraer_bicicletas.return_value = [b_of_3320]
+        fake_w_sep = MagicMock(); fake_w_sep.extraer_bicicletas.return_value = [b_wl_3295]
+        fake_empty_sep = MagicMock(); fake_empty_sep.extraer_bicicletas.return_value = []
+        tele_sep = {}
+        with patch.dict(
+            "main.SCRAPERS",
+            {
+                "Buhobike": lambda s: fake_b_sep,
+                "Wallapop": lambda s: fake_w_sep,
+                "Bike Ocasión": lambda s: fake_empty_sep,
+                "Upway": lambda s: fake_empty_sep,
+                "Mammoth": lambda s: fake_empty_sep,
+            },
+            clear=True,
+        ), patch("main.enriquecer_y_valorar_bici", side_effect=lambda b: (b, 8.8, "OK")):
+            ops_sep = _recolectar_oportunidades(db_sep, telemetria=tele_sep)
+        assert [b.bici_id for b, _, _ in ops_sep] == ["wl-3295"]
+        assert [x[0].bici_id for x in tele_sep["black_friday_pool"]] == ["bh-3320"]
+    finally:
+        if os.path.exists(ruta_sep):
+            os.unlink(ruta_sep)
+
+    # 4. Formato y envío exclusivo al 2º bot/chat configurado
+    msg_bf = formatear_mensaje_black_friday(b_bf_nueva, nota_bf, dto_bf, etiq_bf, "Dto PVP -42.5%")
+    assert "BLACK FRIDAY EXCLUSIVO (-42% PVP)" in msg_bf or "BLACK FRIDAY EXCLUSIVO (-43% PVP)" in msg_bf
+    assert "NUEVA (0 km)" in msg_bf
+    assert "3450 €" in msg_bf and "5999 €" in msg_bf
+
+    resp_ok = MagicMock()
+    resp_ok.status_code = 200
+    resp_ok.raise_for_status.return_value = None
+    with patch.object(cfg, "TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", "999999:TEST_BF_TOKEN"), \
+         patch.object(cfg, "TELEGRAM_CHAT_ID_BLACK_FRIDAY", "-100999888"), \
+         patch("notifier.requests.post", return_value=resp_ok) as mock_post:
+        assert enviar_black_friday(b_bf_nueva, nota_bf, dto_bf, etiq_bf, "Dto PVP") is True
+        called_url = mock_post.call_args.args[0]
+        called_payload = mock_post.call_args.kwargs["json"]
+        assert "999999:TEST_BF_TOKEN" in called_url
+        assert called_payload["chat_id"] == "-100999888"
+        assert called_payload["disable_notification"] is False
+
+    # 5. Dedup SQLite BF + Integración _recolectar_oportunidades y ejecutar_busqueda sin contaminar el bot #1 (>3300)
+    fd_bf, ruta_bf = tempfile.mkstemp(suffix=".db")
+    os.close(fd_bf)
+    try:
+        db_bf = BaseDatos(ruta=ruta_bf)
+        assert db_bf.debe_reenviarse_black_friday(b_bf_nueva) is True
+        db_bf.registrar_black_friday(b_bf_nueva, nota_bf, dto_bf)
+        assert db_bf.debe_reenviarse_black_friday(b_bf_nueva) is False
+        b_bf_clon_w = bici_prueba(
+            sitio="Wallapop",
+            bici_id="wallapop-clon-bf",
+            titulo="Orbea Rise SL M20 2025 nueva",
+            precio=3450.0,
+            km=0,
+        )
+        assert db_bf.fue_enviada_black_friday_equivalente(b_bf_clon_w) is True
+        b_bf_rebaja = bici_prueba(**{**b_bf_nueva.to_dict(), "precio": 3199.0})
+        assert db_bf.debe_reenviarse_black_friday(b_bf_rebaja) is True
+
+        # Integración end-to-end: bici nueva de 3.450 € va solo al bot Black Friday, mientras una diaria va al bot normal
+        b_diaria = bici_prueba(
+            sitio="Upway",
+            bici_id="upway-diaria-1",
+            titulo="Orbea Rise M20 2023",
+            precio=2799.0,
+            pvp_original=5999.0,
+            km=600,
+            peso_kg=18.5,
+            bateria_wh=540,
+            suspension_trasera="si",
+        )
+        b_bf_2 = bici_prueba(**{**b_bf_nueva.to_dict(), "bici_id": "bf-new-e2e"})
+
+        fake_buhobike = MagicMock()
+        fake_buhobike.extraer_bicicletas.return_value = [b_bf_2]
+        fake_upway = MagicMock()
+        fake_upway.extraer_bicicletas.return_value = [b_diaria]
+        fake_empty = MagicMock()
+        fake_empty.extraer_bicicletas.return_value = []
+
+        telemetria = {}
+        with patch.dict(
+            "main.SCRAPERS",
+            {
+                "Buhobike": lambda s: fake_buhobike,
+                "Upway": lambda s: fake_upway,
+                "Bike Ocasión": lambda s: fake_empty,
+                "Mammoth": lambda s: fake_empty,
+                "Wallapop": lambda s: fake_empty,
+            },
+            clear=True,
+        ), patch("main.enriquecer_y_valorar_bici", side_effect=lambda b: (b, 9.0, "OK")):
+            ops_diarias = _recolectar_oportunidades(db_bf, telemetria=telemetria)
+
+        assert [b.bici_id for b, _, _ in ops_diarias] == ["upway-diaria-1"]
+        assert len(telemetria["black_friday_pool"]) == 1
+        assert telemetria["black_friday_pool"][0][0].bici_id == "bf-new-e2e"
+
+        enviados_normales = []
+        enviados_bf = []
+        with patch("main.BaseDatos", return_value=db_bf), \
+             patch("main._recolectar_oportunidades", side_effect=lambda db, forzar_envio=False, telemetria=None: (
+                 telemetria.update({"black_friday_pool": [(b_bf_2, nota_bf, dto_bf, etiq_bf, "BF OK")], "total_procesadas": 2, "conteo_por_portal": {"Upway": 1, "Buhobike": 1}})
+                 if telemetria is not None else None,
+                 [(b_diaria, 9.0, "OK")],
+             )[1]), \
+             patch("main.exportar_radar_mercado_md"), \
+             patch("main.enviar", side_effect=lambda b, *a, **kw: enviados_normales.append(b.bici_id) or True), \
+             patch("main.enviar_black_friday", side_effect=lambda *a, **kw: enviados_bf.append((kw.get("bici") or a[0]).bici_id) or True), \
+             patch("main.enviar_heartbeat") as mock_hb, \
+             patch("main.enviar_heartbeat_black_friday") as mock_hb_bf, \
+             patch.object(cfg, "TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", "999999:TEST_BF_TOKEN"):
+            ejecutar_busqueda(forzar_envio=False)
+            assert enviados_normales == ["upway-diaria-1"]
+            assert enviados_bf == ["bf-new-e2e"]
+            assert mock_hb.call_args.args[0]["black_friday_notificadas"] == 1
+            assert mock_hb_bf.call_args.args[0]["black_friday_encontradas"] == 1
+
+        # 6. Formato y envío del heartbeat dedicado de Black Friday al 2º bot
+        from notifier import formatear_heartbeat_black_friday, enviar_heartbeat_black_friday
+        txt_hb_bf = formatear_heartbeat_black_friday({
+            "fecha_hora": "2026-11-20 13:55:00",
+            "duracion_seg": 78.2,
+            "total_procesadas": 350,
+            "black_friday_encontradas": 0,
+            "black_friday_notificadas": 0,
+            "estado": "🟢 Runner operativo",
+        })
+        assert "Black Bike Beast" in txt_hb_bf
+        assert "0* bicis cumplen hoy todos los criterios estrictos" in txt_hb_bf
+        with patch.object(cfg, "TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", "999999:TEST_BF_TOKEN"), \
+             patch.object(cfg, "TELEGRAM_CHAT_ID_BLACK_FRIDAY", "-100999888"), \
+             patch("notifier.requests.post", return_value=resp_ok) as mock_post_hb_bf:
+            assert enviar_heartbeat_black_friday({"fecha_hora": "2026-11-20 13:55:00", "duracion_seg": 1.0, "total_procesadas": 10}) is True
+            assert "999999:TEST_BF_TOKEN" in mock_post_hb_bf.call_args.args[0]
+            assert mock_post_hb_bf.call_args.kwargs["json"]["chat_id"] == "-100999888"
+            assert mock_post_hb_bf.call_args.kwargs["json"]["disable_notification"] is True
+
+        # 7. Respaldo Top 3 fuera de tope (> 3.500 € / 480 Wh / seminuevas) cuando 0 pasan el estricto BF
+        from evaluator import pasa_prefiltro_respaldo_black_friday, evaluar_respaldo_black_friday
+        from notifier import formatear_informe_respaldo_black_friday, enviar_informe_respaldo_black_friday
+
+        b_over_1 = bici_prueba(
+            sitio="Mammoth",
+            bici_id="resp-moterra",
+            titulo="Cannondale Moterra SL 2",
+            precio=4549.0,
+            pvp_original=6999.0,
+            km=0,
+            peso_kg=19.8,
+            bateria_wh=600,
+            motor="Shimano EP801",
+            suspension_trasera="si",
+            url="https://www.mammothbikes.com/ebike-cannondale-moterra-sl-2/p-1",
+        )
+        b_over_2 = bici_prueba(
+            sitio="Buhobike",
+            bici_id="resp-rise",
+            titulo="Orbea Rise SL M20 630W 2026",
+            precio=3999.0,
+            pvp_original=6799.0,
+            km=712,
+            peso_kg=20.2,
+            bateria_wh=630,
+            motor="Shimano EP801-RS Gen2",
+            suspension_trasera="si",
+            url="https://www.buhobike.com/segunda-mano-electricas/resp-rise.html",
+        )
+        b_over_3 = bici_prueba(
+            sitio="Bike Ocasión",
+            bici_id="resp-ghost",
+            titulo="Ghost Path Riot CF LTD AXS",
+            precio=3599.0,
+            pvp_original=11000.0,
+            km=1,
+            peso_kg=19.5,
+            bateria_wh=480,
+            motor="Fazua",
+            suspension_trasera="si",
+            url="https://bike-ocasion.com/bicicletas-electricas-de-montana-doble-suspension/resp-ghost.html",
+        )
+        b_heavy_over = bici_prueba(sitio="Mammoth", bici_id="resp-heavy", precio=4000.0, pvp_original=7000.0, km=0, peso_kg=24.0, bateria_wh=750, suspension_trasera="si")
+
+        assert pasa_prefiltro_respaldo_black_friday(b_over_1)[0] is True
+        ok_r1, dto_r1, _, mot_r1, clave_r1 = evaluar_respaldo_black_friday(b_over_1, nota_perito=7.5)
+        ok_r2, dto_r2, _, mot_r2, clave_r2 = evaluar_respaldo_black_friday(b_over_2, nota_perito=6.5)
+        ok_r3, dto_r3, _, mot_r3, clave_r3 = evaluar_respaldo_black_friday(b_over_3, nota_perito=4.0)
+        assert ok_r1 and "+1049 € sobre tope 3.500 €" in mot_r1
+        assert ok_r2 and "712 km" in mot_r2
+        assert ok_r3 and "480 Wh" in mot_r3
+        assert clave_r1 > clave_r2 > clave_r3
+        assert evaluar_respaldo_black_friday(b_heavy_over)[0] is False
+
+        # Integración en _recolectar_oportunidades + ejecutar_busqueda sin contaminar diarias ni historial_catalogo
+        fake_m_resp = MagicMock(); fake_m_resp.extraer_bicicletas.return_value = [b_over_1]
+        fake_bo_resp = MagicMock(); fake_bo_resp.extraer_bicicletas.return_value = [b_over_3]
+        tele_r = {}
+        with patch.dict(
+            "main.SCRAPERS",
+            {
+                "Mammoth": lambda s: fake_m_resp,
+                "Bike Ocasión": lambda s: fake_bo_resp,
+                "Buhobike": lambda s: fake_empty,
+                "Upway": lambda s: fake_empty,
+                "Wallapop": lambda s: fake_empty,
+            },
+            clear=True,
+        ), patch("main.enriquecer_y_valorar_bici", side_effect=lambda b: (b, 7.5, "OK")):
+            ops_r = _recolectar_oportunidades(db_bf, telemetria=tele_r)
+        assert ops_r == []
+        assert tele_r["black_friday_pool"] == []
+        assert [x[0].bici_id for x in tele_r["black_friday_respaldo_pool"]] == ["resp-moterra", "resp-ghost"]
+        assert db_bf.obtener_seguimiento("resp-moterra") is None
+
+        items_top3 = [
+            (b_over_1, dto_r1, 7.5, mot_r1),
+            (b_over_2, dto_r2, 6.5, mot_r2),
+            (b_over_3, dto_r3, 4.0, mot_r3),
+        ]
+        txt_top3 = formatear_informe_respaldo_black_friday(items_top3)
+        assert "Top 3 Más Interesantes" in txt_top3
+        assert "Cannondale Moterra SL 2" in txt_top3 and "Ghost Path Riot CF LTD AXS" in txt_top3
+
+        enviados_top3 = []
+        with patch("main.BaseDatos", return_value=db_bf), \
+             patch("main._recolectar_oportunidades", side_effect=lambda db, forzar_envio=False, telemetria=None: (
+                 telemetria.update({"black_friday_pool": [], "black_friday_respaldo_pool": items_top3, "total_procesadas": 10, "conteo_por_portal": {"Mammoth": 1}})
+                 if telemetria is not None else None,
+                 [],
+             )[1]), \
+             patch("main.exportar_radar_mercado_md"), \
+             patch("main.enviar_informe_respaldo_black_friday", side_effect=lambda items, **kw: enviados_top3.append([x[0].bici_id for x in items]) or True), \
+             patch("main.enviar_heartbeat"), \
+             patch("main.enviar_heartbeat_black_friday") as mock_hb_bf_resp, \
+             patch.object(cfg, "TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", "999999:TEST_BF_TOKEN"):
+            ejecutar_busqueda(forzar_envio=False)
+            assert enviados_top3 == [["resp-moterra", "resp-rise", "resp-ghost"]]
+            assert mock_hb_bf_resp.call_args.args[0]["black_friday_respaldo_enviado"] is True
+            # Segunda pasada idéntica no repite el informe Top 3 de respaldo
+            ejecutar_busqueda(forzar_envio=False)
+            assert len(enviados_top3) == 1
+            # Pero si luego baja a <= 3.500 EUR, sí dispara alerta estricta de Black Friday (bici_id real no bloqueado)
+            assert db_bf.debe_reenviarse_black_friday(bici_prueba(**{**b_over_1.to_dict(), "precio": 3400.0})) is True
+            # Tampoco un respaldo de otro portal dentro de +-25 EUR bloquea una alerta estricta en otro portal
+            b_otro_portal = bici_prueba(
+                sitio="Buhobike",
+                bici_id="bf-otro-portal",
+                titulo="Ghost Path Riot CF LTD AXS",
+                precio=3580.0,
+            )
+            assert db_bf.fue_enviada_black_friday_equivalente(b_otro_portal) is False
+    finally:
+        try:
+            if os.path.exists(ruta_bf):
+                os.unlink(ruta_bf)
         except (PermissionError, OSError):
             pass
 
@@ -2072,4 +2494,5 @@ if __name__ == "__main__":
     test_todo2_dedup_interportal_wallapop_estricto_y_cache_ddg()
     test_todo2_edge_cases_y_regresion()
     test_perito_esceptico_v2_y_seleccion_por_portal()
+    test_black_friday_canal_exclusivo_y_segundo_bot()
     print("Todas las pruebas pasaron (GREEN).")

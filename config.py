@@ -100,6 +100,14 @@ PRECIO_MIN_EUR: int = 2000  # Rango principal 2.000 € (S5)
 PRECIO_MAX_EUR: int = 3000  # Rango principal 3.000 € (S5)
 PRECIO_MAX_EXCEPCIONAL_EUR: int = 3300  # Oportunidad excepcional hasta 3.300 € (S6)
 
+# Canal exclusivo Black Friday (bicis nuevas o de exposición hasta 3.500 €)
+PRECIO_MAX_BLACK_FRIDAY_EUR: int = 3500
+KM_MAX_BLACK_FRIDAY: int = 50
+DESCUENTO_MIN_BLACK_FRIDAY_PCT: float = 35.0
+NOTA_MIN_BLACK_FRIDAY: float = 7.5
+BLACK_FRIDAY_TOP_N: int = 5
+BLACK_FRIDAY_FALLBACK_TOP_N: int = 3
+
 NOTA_MIN_AGUARDAR: float = 8.0  # Solo nota >= 8.0 pasa filtros estrictos (S8)
 NOTA_MIN_NOTIFICAR: float = 8.5  # Umbral para notificar por Telegram (fallback a Top N si ninguna llega)
 TOP_N_NOTIFICAR: int = 3  # Cantidad de bicicletas más interesantes a enviar por Telegram
@@ -121,6 +129,8 @@ GEMINI_API_URL: str = (
 # ---------------------------------------------------------------------------
 TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_BOT_TOKEN_BLACK_FRIDAY: str = os.getenv("TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", "")
+TELEGRAM_CHAT_ID_BLACK_FRIDAY: str = os.getenv("TELEGRAM_CHAT_ID_BLACK_FRIDAY", "") or TELEGRAM_CHAT_ID
 TELEGRAM_API_URL: str = "https://api.telegram.org/bot{token}/sendMessage"
 # Enviar heartbeat de pulso diario/ejecución a Telegram (TODO 2)
 TELEGRAM_HEARTBEAT: bool = os.getenv("TELEGRAM_HEARTBEAT", "true").lower() in ("true", "1", "yes", "si")

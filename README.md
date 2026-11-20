@@ -2,13 +2,13 @@
 
 Script modular en Python para rastrear automáticamente tiendas profesionales de reacondicionado de bicicletas y encontrar ofertas de bicicletas eléctricas de montaña (e-MTB) doble suspensión que cumplan con filtros estrictos de talla, modalidad, peso, batería y precio.
 
-Cuando encuentra una bicicleta con **Nota de Oportunidad ≥ 8.0/10**, la notifica por Telegram con un mensaje formateado en Markdown.
+Cuando encuentra bicicletas aptas tras superar los filtros estrictos, las audita con un **Perito Mecánico Escéptico y Estricto (v2)** y envía por Telegram **1 mejor bicicleta por cada portal con stock** (con rotación ping-pong `#1 -> #2 -> #1` si la mejor opción de una página no cambia entre corridas consecutivas), evitando alertas repetitivas salvo bajadas de precio o verificación de liderazgo.
 
 ## Tabla de contenidos
 
 - [¿Qué hace este proyecto?](#qué-hace-este-proyecto)
 - [Requisitos estrictos de filtrado](#requisitos-estrictos-de-filtrado)
-- [Algoritmo de Nota de Oportunidad (0-10)](#algoritmo-de-nota-de-oportunidad-0-10)
+- [Algoritmo de Nota de Oportunidad (Perito Mecánico Escéptico v2)](#algoritmo-de-nota-de-oportunidad-perito-mecánico-escéptico-v2)
 - [Integración con Telegram](#integración-con-telegram)
 - [Automatización y programación](#automatización-y-programación)
 - [Plataformas objetivo y garantía](#plataformas-objetivo-y-garantía)
@@ -57,37 +57,49 @@ La ejecución está programada para correr todos los días a las **12:00 de la m
 
 ---
 
-## Algoritmo de Nota de Oportunidad (Perito Mecánico Senior)
+## Algoritmo de Nota de Oportunidad (Perito Mecánico Escéptico v2)
 
-El sistema opera bajo la **Regla Maestra del Perito Mecánico Senior**: **NUNCA** realiza medias optimistas. La evaluación parte de una nota base de **10.0** y aplica deducciones aritméticas irreversibles y límites por **Líneas Rojas**:
+El sistema opera bajo las reglas deterministas de un **Perito Mecánico Escéptico y Estricto (`perito_v5`)**: parte de **BASE = 10.0 sin bonos positivos**, prohíbe inventar componentes, aplica física realista anti-optimismo de peso (`Full Power + >= 625 Wh` o sin batería confirmada `>= 22.5 kg` salvo excepciones ligeras explícitas), corrige erratas de motor (`BH iLynx Race/Trail` sin `+` = `BH 2EXMAG` cerrado; `BH iLynx+` = `Shimano EP801` abierto; `Orbea Rise 2021-2022` = `EP8-RS`; `2025+` = `EP801-RS Gen2`; `Bosch` = solo taller oficial sin SoH en app de usuario) y limita la nota final mediante **5 Líneas Rojas**:
 
-### 1. Penalizaciones por Kilometraje (Factor Crítico)
-* **0 a 1.000 km**: -0.0 pts (Estado óptimo de reestreno, desgaste despreciable).
-* **1.001 a 2.000 km**: -1.0 pts (Rodada y aceptable; prever mantenimiento de cadena y pastillas).
-* **2.001 a 4.000 km**: -2.5 pts (Desgaste medio en transmisión y ciclos de celdas; revisión de holguras).
-* **4.001 a 6.000 km**: -4.5 pts (Exige cambio de retenes, revisión de motor y batería mermada).
-* **Más de 6.000 km**: **LÍNEA ROJA ACTIVADA**. La nota final **NUNCA puede superar el 4.5/10**, sin importar cuadro o componentes.
+| Línea Roja Eliminatoria | Tope de Nota |
+|-------------------------|--------------|
+| Talla distinta de `M` (`S`, `L`, `XL`, etc.) | **0.0 / 10** (`DESCARTADA`) |
+| Batería interna/total `< 500 Wh` | **4.0 / 10** (`DESCARTADA`) |
+| Peso real o estimado `> 21.0 kg` | **4.0 / 10** (`DESCARTADA`) |
+| Kilometraje `> 6.000 km` | **4.5 / 10** (`DESCARTADA`) |
+| Anuncio genérico sin marca ni modelo identificable | **4.5 / 10** (`DESCARTADA`) |
 
-### 2. Penalizaciones y Bonificaciones por Peso
-* **< 19.0 kg**: +0.5 pts (Bonificación por peso pluma; menor fatiga estructural).
-* **19.1 a 20.0 kg**: -0.0 pts (Peso neutro ideal para Light e-MTB).
-* **20.1 a 21.0 kg**: -1.5 pts (Límite admisible; mayor inercia y consumo).
-* **> 21.0 kg**: **LÍNEA ROJA ACTIVADA**. Nota máxima limitada a **4.0/10**.
+### 1. Kilometraje y Desgaste (incluye contradicciones)
+* **0 a 1.000 km** (sin contradicciones): **-0.0 pts**
+* **1.001 a 2.000 km**: **-1.0 pt**
+* **2.001 a 4.000 km**: **-2.5 pts**
+* **4.001 a 6.000 km**: **-3.5 pts**
+* **> 6.000 km**: **-4.5 pts** (activa Línea Roja `4.5`)
+* **No especificado o contradicción** (`"NUEVA"` / `"ESTRENAR"` + `km > 50`): **-2.0 pts** (o mantiene la resta mayor de tramo si supera `2.000 km` mediante `min(delta_km, -2.0)`).
 
-### 3. Motor, Centralita, Telemetría SoH y Transparencia de Diagnóstico
-* **Shimano (EP8 / EP801 / EP6) o Bosch (Performance Line CX / SX)**: -0.0 pts (Permiten informe PDF pericial oficial mediante Shimano E-Tube PCE02 o Bosch DiagnosticTool 3).
-* **Telemetría empírica de Salud de Batería (SoH % y ciclos)**:
-  * **SoH ≥ 92%**: +0.5 pts (Celdas auditadas en estado excelente).
-  * **SoH 85% a 91%**: -0.0 pts (Degradación química normal).
-  * **SoH 80% a 84%**: -1.0 pt (Degradación apreciable de autonomía).
-  * **SoH < 80%**: -2.5 pts (Fatiga química severa de celdas).
-  * **> 250 ciclos de carga** (sin SoH explícito): -1.0 pt por desgaste acumulado de celdas.
-* **Bicicletas BH (iLynx, AtomX, Xtep, BH 2EXMAG)**: -2.0 pts base en Perito (-1.0 en evaluador heurístico) y **LÍNEA PREVENTIVA (nota máxima 8.5/10)** porque impiden extraer un informe pericial verificable en PDF y pueden ocultar desgaste mecánico/batería mayor al aparente aunque parezcan un chollo.
-* **BH con > 3.000 km**: -3.0 pts acumulativos en motor; **Brose > 3.000 km**: -1.5 pts extra por kilometraje elevado sin diagnóstico abierto.
+### 2. Peso Real Estimado (sin bonos y anti-optimismo)
+* **<= 19.0 kg**: **-0.0 pts**
+* **19.1 a 20.0 kg**: **-0.5 pts**
+* **20.1 a 21.0 kg**: **-1.5 pts**
+* **> 21.0 kg**: **-6.0 pts** (activa Línea Roja `4.0`)
 
-### 4. Precio frente a Kilometraje
-* **Rango base 2.000 € a 3.000 €**: -0.0 pts.
-* **Precio > 3.000 € y kilometraje > 2.000 km**: -1.5 pts (Sobrecoste penalizado frente al desgaste acumulado).
+### 3. Motor, Diagnosis y Batería (SoH / Ciclos)
+* **Shimano EP8 / EP801 / EP6** (incluida `BH iLynx+`) o **Specialized**: **-0.0 pts** (auditables vía app propia o PCE02).
+* **Bosch Performance CX / SX** sin informe oficial completo de taller: **-0.5 pts** (Bosch no expone ciclos ni SoH en la app de usuario).
+* **Motor propietario cerrado** (`BH 2EXMAG` sin `+`, `Brose` antiguo, otros): **-0.5 pts** (`<= 2.000 km`) o **-1.0 pt** (`> 2.000 km` / desconocido).
+* **Penalización extra sin SoH ni ciclos**: **-0.5 pts** adicionales si no aporta SoH/ciclos y tiene `> 1.500 km` o kilometraje desconocido.
+
+### 4. Garantía y Canal de Venta
+* **Tienda profesional en España** (`>= 1 año` garantía legal): **-0.0 pts**
+* **Tienda extranjera / sin reseñas verificadas**: **-1.0 pt**
+* **Particular con factura vigente** (`< 2 años`, detectada vía `tiene_factura`): **-1.0 pt**
+* **Particular sin garantía comercial ni mención de factura**: **-1.5 pts**
+
+### 5. Precio y Componentes Declarados
+* **2.000 € - 3.000 €** con transmisión 12v (SLX/XT/GX) y suspensiones gama media-alta: **-0.0 pts**
+* **Precio 3.001 € - 3.150 €** (margen negociable): **-0.5 pts** | **> 3.150 €**: **-2.0 pts**
+* **Montaje básico/obsoleto** (`10v/11v`, frenos `MT200/MT401`, horquilla básica) costando `> 2.400 €`: **-0.5 a -1.0 pt**
+* **Componentes principales no detallados** en el anuncio (`NO ESPECIFICADO`): **-1.5 pts**
 
 ---
 
@@ -101,8 +113,9 @@ El script usa la API de Telegram vía `requests` y envía un mensaje en **Markdo
 - **Desglose breve** de por qué sacó esa nota.
 - **Enlace directo de compra**.
 - **Segmentación sonora (TODO 3)**: Las ofertas normales y el Heartbeat se entregan en silencio (`disable_notification=True`). Únicamente los verdaderos **Mega Chollos** (Nota $\ge$ 9.0 y dto $\ge$ 50% vs PVP nuevo) disparan notificación sonora/prioritaria con timbre (`disable_notification=False`), configurable mediante `TELEGRAM_SILENCIAR_OFERTAS_NORMALES=true`.
+- **Canal exclusivo Black Friday (`Black_Bike_Beast`)**: Segundo bot independiente (`TELEGRAM_BOT_TOKEN_BLACK_FRIDAY` y `TELEGRAM_CHAT_ID_BLACK_FRIDAY`, con fallback a `TELEGRAM_CHAT_ID`) que vigila bicis **nuevas o de exposición (`<= 50 km`, Talla M, `< 21.0 kg`, `>= 500 Wh`, doble suspensión) hasta `3.500 €`** con descuento real **`>= 35%` sobre PVP** (`nota_bf >= 7.5/10`), sin alterar el techo diario de `3.300 €` ni la rotación del canal principal.
 
-Requiere configurar `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` en el archivo `.env`.
+Requiere configurar `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` en el archivo `.env` (y opcionalmente `TELEGRAM_BOT_TOKEN_BLACK_FRIDAY` / `TELEGRAM_CHAT_ID_BLACK_FRIDAY` para el canal Black Friday).
 
 ### Cómo conectar tu cuenta de Telegram (paso a paso)
 
@@ -216,15 +229,15 @@ El proyecto está separado en módulos con responsabilidad única:
 |---------|-----------------|
 | `config.py` | Configuración central: URLs objetivo optimizadas, filtros estrictos, credenciales Telegram/Gemini, user-agents rotatorios, proxies (opcional), flags operativos (`TELEGRAM_HEARTBEAT`), horario de ejecución. |
 | `models.py` | Dataclass `Bicicleta` con todos los campos necesarios para scoring, telemetría de batería (`bateria_salud_pct`, `bateria_ciclos`), `pvp_original` y notificación. |
-| `db.py` | Base de datos SQLite: registro de bicicletas ya enviadas, deduplicación por ID, detección de bajadas de precio, historial de catálogo (`historial_catalogo`), permanencia en stock (días) y métricas agregadas de mercado con PVP original. |
-| `evaluator.py` | Filtros estrictos (S1-S6), algoritmo de Nota de Oportunidad y ordenamiento por prioridad de modalidad (`prioridad_modalidad`: XC > Light e-MTB > Trail). |
+| `db.py` | Base de datos SQLite: registro de bicicletas ya enviadas, deduplicación por ID y tabla dedicada `bicis_black_friday_enviadas` para el segundo bot, detección de bajadas de precio, historial de catálogo (`historial_catalogo`), permanencia en stock y métricas agregadas con PVP original. |
+| `evaluator.py` | Filtros estrictos (S1-S6), algoritmo de Nota de Oportunidad, ordenamiento por prioridad de modalidad (`prioridad_modalidad`), más pre-filtro y rúbrica específica Black Friday (`evaluar_oportunidad_black_friday`) para nuevas/exposición `<= 3.500 €`. |
 | `gemini_classifier.py` | Motor Perito Mecánico Senior (`auditar_perito_mecanico`), catálogo técnico de e-MTB, desambiguación de motores BH (BH 2EXMAG vs Shimano EP801) y clasificador híbrido con Gemini Flash + caché thread-safe. |
-| `notifier.py` | Notificador de Telegram vía `requests`, mensaje Markdown con todos los campos requeridos (S9) y Heartbeat operativo diario (`enviar_heartbeat`). |
+| `notifier.py` | Notificador unificado de Telegram vía `requests` (`_enviar_telegram`), ficha diaria Markdown, alertas exclusivas de Black Friday para el segundo bot (`enviar_black_friday`) y Heartbeat operativo diario (`enviar_heartbeat`). |
 | `scraper_base.py` | Clase base con **motor Scrapling**: `Fetcher` (HTTP con impersonación TLS) → `StealthyFetcher` (navegador stealth con `solve_cloudflare=True`), con `usar_stealth_directo` y salto inmediato ante bloqueos HTTP 403/503 de Cloudflare. |
 | `scrapers/bike_ocasion.py` | Adaptador específico para Bike Ocasión. Extrae título limpio (`h3.s_title_block a`), talla, batería, km, marca del motor (`Km / <Marca>`), PVP original y doble suspensión directamente de la tarjeta del listado. Paginación de hasta 6 páginas (180+ bicis). |
 | `scrapers/buhobike.py` | Adaptador específico para Buhobike con modo stealth directo (`usar_stealth_directo=True`), rastreo combinado de `/3230-electricas-trail-dobles?order=product.price.asc` y `/9448-segunda-mano-montana-electricas`, y extracción en tarjeta de título completo (`img.thumbnail-img[alt]`), talla (`#/...-talla-m`), año, km desde SKU (`KM5000`) y PVP original. |
 | `scrapers/upway.py` | Adaptador específico para Upway sobre `/collections/doble-suspension`. Extrae año, kilometraje (`\u202fkm` y `< 5 km`), talla (desde el rango de estatura `1mXX-1mYY`), PVP original nuevo ('6.000 € nuevo') y doble suspensión directamente de la tarjeta en `< 1s`. |
-| `scrapers/mammoth.py` | Adaptador específico para Mammoth Bikes sobre `/bicicletas-electricas-mtb-dobles-rally-xc/c-3104` y `/bicicletas-electricas-mtb-trail-all-mountain-dobles/c-2139`. Extrae precio, tallas en stock (`M`), modalidad XC, año, PVP original, telemetría de bici nueva (km=0, SoH=100%, 0 ciclos) y filtro anti-rígidas directamente de `div.card-content` en `~2.5s`. |
+| `scrapers/mammoth.py` | Adaptador específico para Mammoth Bikes sobre `/bicicletas-electricas-mtb-dobles-rally-xc/c-3104` y `/bicicletas-electricas-mtb-trail-all-mountain-dobles/c-2139`. Extrae precio, tallas en stock (`M`), modalidad XC, año, PVP original tachado (`.is__old`), telemetría de bici nueva (km=0, SoH=100%, 0 ciclos) y filtro anti-rígidas directamente de `div.card-content` en `~2.5s`. |
 | `scrapers/enriquecedor_web.py` | Enriquecedor web paralelo con caché JSON en disco (`cache/fichas_detalle.json`), extracción de pares `<dt>/<dd>`, telemetría de batería (SoH % y ciclos), limpieza de DOM y regex con bordes de palabra (`\b`) y filtrado de pesos con embalaje. |
 | `main.py` | Orquestador: scrape de los sitios → **health check** → pre-filtro → **enriquecimiento paralelo** → auditoría Perito Mecánico Senior → ordenamiento por salud mecánica (`nota >= 6.0` y `km <= 4.000`), Línea Roja y prioridad de modalidad (`XC > Light e-MTB > Trail`) → SQLite → Telegram (`--once`, `--forzar`, `--stats`, `--heartbeat`). |
 | `test_buscador.py` | Suite de pruebas unitarias RED/GREEN con datos simulados para validar filtros, Perito Mecánico Senior, scrapers de tarjetas, prioridad de modalidades y dedup. |
@@ -611,6 +624,12 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
   * **Corrección estricta de motores**: `BH iLynx Race/Trail` sin `+` fijado a `BH 2EXMAG` (cerrado), `BH iLynx+` fijado a `Shimano EP801` (abierto), `Orbea Rise 2021-2022` a `Shimano EP8-RS`, `2025+` a `Shimano EP801-RS Gen2`, y Bosch marcado como dependiente de taller oficial (no muestra SoH/ciclos en app de usuario).
   * **5 Líneas Rojas y rúbrica sin bonos (`perito_v5`)**: Base `10.0` con 5 ejes estrictos incluyendo **Garantía/Canal** (`tienda España 0.0`, `extranjera -1.0`, `particular con factura -1.0`, `sin factura -1.5` con extracción `tiene_factura` en Wallapop) y topes: Talla != M (`0.0`), Batería < 500 Wh (`4.0`), Peso > 21.0 kg (`4.0`), Km > 6.000 (`4.5`) y Anuncio genérico (`4.5`), en formato `🧮 Auditoría Pericial`.
 
+### 20. Canal Exclusivo Black Friday (`<= 3.500 €`, `Black_Bike_Beast`) y PVP en Mammoth (`.is__old`)
+* **Por qué**: Las ofertas exclusivas de Black Friday en bicis **completamente nuevas (`0 km`) o de exposición (`<= 50 km`)** suelen situarse entre `3.000 €` y `3.500 €` y quedaban descartadas por el techo diario de segunda mano (`3.300 €`), además de que `scrapers/mammoth.py` no capturaba el PVP tachado porque Mammoth usa `<span class="price is__old">` (devolvía `0` bicis con PVP antes del fix vs `28/66` después).
+* **Cómo se construyó**:
+  * **Pre-filtro y rúbrica dedicada (`pasa_prefiltro_black_friday`, `evaluar_oportunidad_black_friday` en `evaluator.py`)**: rescata unidades nuevas/exposición entre `2.000 €` y `3.500 €` para enriquecimiento único en `_recolectar_oportunidades` sin contaminar el flujo diario (`<= 3.300 €`), exigiendo datos confirmados de **Talla M**, **doble suspensión**, **peso `< 21.0 kg`**, **batería `>= 500 Wh`**, **`km <= 50` sin contradicciones** (`km=None` queda descartado) y **descuento verificado `>= 35%` sobre PVP** (`nota_bf >= 7.5/10`).
+  * **Segundo bot independiente y tabla SQLite propia**: configurado mediante `TELEGRAM_BOT_TOKEN_BLACK_FRIDAY` y `TELEGRAM_CHAT_ID_BLACK_FRIDAY` (con fallback a `TELEGRAM_CHAT_ID`), notificador unificado `_enviar_telegram` + `enviar_black_friday` + pulso operativo `enviar_heartbeat_black_friday` en `notifier.py`, informe consolidado automático **Top 3 más interesantes fuera de tope/criterio** (`enviar_informe_respaldo_black_friday` cuando 0 unidades cumplen `<= 3.500 €`) y deduplicación aislada en `bicis_black_friday_enviadas` (`db.py`, con clave `respaldo:` separada para no bloquear futuras alertas estrictas si bajan a `<= 3.500 €`).
+
 ---
 
 ## Proceso de desarrollo y dificultades encontradas
@@ -653,32 +672,41 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 | **Cupos globales saturados por Wallapop ocultando tiendas profesionales** | `main.py` / `db.py` / `notifier.py` | Priorizar globalmente `estrictas_nuevas` sobre `estrictas_conocidas` y recortar a `[:3]` hacía que 3 anuncios nuevos de Wallapop (`6.5/10`) expulsaran bicis mejores ya vistas de Upway (`8.0/10`) o Bike Ocasión. | `seleccionar_por_portal` entrega **1 mejor opción de cada página** con stock apto sin degradar bicis ya conocidas frente a inferiores, con rotación diaria por portal `#1 -> #2 -> #1` persistida en `estado_portales` solo si el envío Telegram acierta. |
 | **Falsos positivos de genéricas/contradicciones y pesos irreales en Full Power** | `gemini_classifier.py` / `models.py` / `wallapop.py` | Anuncios vagos (`"BICI MONTAÑA ELECTRICA DOBLE CARBONO NUEVA"`), contradicciones `"NUEVA"` + km elevados, y baterías `>= 625 Wh` con peso optimista `< 21 kg` inflaban notas hasta `8.5/10`. | Nuevo **Perito Escéptico v2** (`perito_v5`): 5 Líneas Rojas (genérica `<= 4.5`, Talla `0.0`, `<500Wh 4.0`, `>21kg 4.0`, `>6000km 4.5`), física Full Power `>= 22.5 kg` post-Gemini, corrección `BH iLynx+`/`Orbea Rise`/Bosch, eje Garantía (`tiene_factura` en Wallapop) y aritmética sin bonos positivos. |
 
+| **Segundo bot bloqueado (`403`) hasta `/start` + Markdown v1 roto con `_`** | `notifier.py` / `.env` / Telegram | Telegram prohíbe a un bot nuevo (`@BlackBikeBeast_bot`) iniciar chat privado (`getUpdates = 0`) hasta que el usuario pulsa `/start`; además escribir `Black_Bike_Beast` dentro de `parse_mode='Markdown'` interpretaría `_Bike_` como cursiva. | Validación `getMe`/`getUpdates`, variables separadas (`TELEGRAM_BOT_TOKEN_BLACK_FRIDAY` y `TELEGRAM_CHAT_ID_BLACK_FRIDAY` con fallback a `TELEGRAM_CHAT_ID`), texto libre de guiones bajos (`Black Bike Beast`) y `enviar_heartbeat_black_friday` dedicado para confirmar pulso vivo. |
+| **PVP tachado invisible en Mammoth (`0/66` vs `28/66`) y orden DOM** | `scrapers/mammoth.py` | El selector antiguo (`.card-price-old / del`) ignoraba `<span class="price is__old">` dentro de `.card-product-price`, dejando `pvp_original=None`; además un selector unión sin `:not(.is__old)` en `precio_el` corría riesgo de coger el precio viejo según el orden del DOM y dejar `0.0` al fallar el parseo. | Añadido `.is__old, .price.is__old` con limpieza de `<= precio` / `0.0` a `None` (desbloqueando `28/66` bicis con PVP real en vivo) y selección secuencial en `precio_el` excluyendo `:not(.is__old)`. |
+| **Contaminación dedup `>3.300 €` y bypass de peso estimado / `suspension_trasera=None`** | `main.py` / `evaluator.py` / `gemini_classifier.py` | Unir `pre_aptas` y extras `>3.300 €` antes de `deduplicar_inter_portal` dejaba que una bici oficial no apta en flujo diario ocultara una Wallapop elegible; además `enriquecer_y_valorar_bici` rellenaba `peso_kg` con heurística/IA sin marca de origen y `suspension_trasera=None` pasaba `_pasa_requisitos_base_mecanicos`. | Deduplicación separada (`pre_aptas_dedup` vs `bf_extra_dedup`), marca `_peso_estimado = True` si no hubo dato empírico (ficha, catálogo o DuckDuckGo) rechazada en `evaluar_oportunidad_black_friday`, y exigencia explícita `suspension_trasera == "si"`. |
+| **Aislamiento de dedup entre Top 3 de respaldo (`>3.500 €`) y alertas futuras `<=3.500 €`** | `db.py` / `main.py` | Registrar el informe Top 3 fuera de tope con su `bici_id` real en `bicis_black_friday_enviadas` habría bloqueado alertas estrictas futuras si la bici bajaba a `<=3.500 €` o suprimido clones equivalentes (`±25 €`) de otro portal; además `with sqlite3.connect` no cerraba descriptores en Windows. | Registro bajo prefijo `respaldo:{bici_id}` y filtro `AND bici_id NOT LIKE 'respaldo:%'` en `_fue_enviada_equivalente_en_tabla`, más `@contextmanager` con `timeout=30.0`, `WAL` y `conn.close()` en `db.py`. |
+
 ---
 
 ## Estado actual y próximos pasos
 
-### Fotografía del estado actual (19/11/2026)
-- **Rendimiento de búsqueda multi-portal (5 fuentes, entrega por página en `31.9s`)**: **Wallapop** (`420` anuncios en geo-radio `<= 50 km`), **Bike Ocasión** (`180` bicis), **Mammoth Bikes** (`66` bicis), **Buhobike** (`49` bicis) y **Upway** (`21` bicis) — **121 candidatas pre-filtradas** -> **116 candidatas aptas** evaluadas en **`31.9s`**, entregando **1 mejor bici por portal** a Telegram (`4` páginas con candidatas en rango: `Wallapop #1: BH Ilynx race carbono` 2.000 € `8.0/10`, `Bike Ocasión #1: Orbea Rise H30` 2.543 € `7.0/10`, `Upway #1: BH iLynx Trail Carbon 8.6` 2.449 € `9.5/10 💥 MEGA CHOLLO`, `Buhobike #1: ORBEA RISE H10 T-M 2022` 2.599 € `5.5/10`).
+### Fotografía del estado actual (20/11/2026)
+- **Canal diario multi-portal (5 fuentes, entrega por página)**: **Wallapop** (geo-radio `<= 50 km`), **Bike Ocasión** (`180` bicis), **Mammoth Bikes** (`66` bicis, ahora con `28` PVP originales detectados), **Buhobike** (`49` bicis) y **Upway** (`22` bicis) — en la corrida `--once` de hoy procesó **118 candidatas diarias aptas**, notificó `4` opciones (`1 por portal`: *Wallapop*, *Upway*, *Buhobike* y *Bike Ocasión*) + Heartbeat diario.
+- **Canal exclusivo Black Friday (`@BlackBikeBeast_bot`) + Respaldo Top 3**: Activo en paralelo hasta `3.500 €` (`km <= 50`, Talla M, `< 21,0 kg` empírico, `>= 500 Wh`, doble confirmada, `>= 35% dto PVP`, `nota_bf >= 7,5/10`). Cuando `0` unidades cumplen todo el estricto en presupuesto, dispara automáticamente un informe consolidado **Top 3 más interesantes fuera de tope/criterio** (`Cannondale Moterra SL 2` `4.549,35 € -35%`, `Orbea Rise LT H10 2026` `4.499 € -27,4%`, `BH iLynx Trail Carbon 8.6` `2.449 € -62,9%` enviados hoy en vivo) más su propio pulso `enviar_heartbeat_black_friday`.
 - **Perito Mecánico Escéptico y Estricto v2 (`perito_v5`)**: Operativo tanto en Gemini Flash como en motor autónomo determinista con 5 ejes sin bonos (`Km`, `Peso`, `Motor/Bat`, `Garantía/Vendedor`, `Precio/Componentes`), detección de contradicciones (`"NUEVA" + >50 km`), bloqueo de genéricas `<= 4.5`, física anti-optimismo Full Power `>= 22.5 kg` y extracción de `tiene_factura` en Wallapop.
-- **Rotación ping-pong `#1 -> #2 -> #1` por portal (`seleccionar_por_portal`)**: Si la `#1` de un portal no varía respecto al análisis anterior, expone el `#2` al día siguiente (evitando anuncios genéricos descartados) y vuelve a confirmar el `#1` al tercer día, conservando `estado_portales` en SQLite (`analisis_ejecuciones`).
-- **Deduplicación inter-portal y caché DuckDuckGo**: Activa deduplicación entre portales oficiales y clones Wallapop dentro de `±25 €` (respetando talla `M` y disponibilidad), exclusión de clones equivalentes ya notificados en `bicis_enviadas`, heurísticas conservadoras sin falsos positivos en `AL`/`orbea rise m` y caché `ddg_v2:` segura ante concurrencia y fallos HTTP.
-- **Calidad de filtrado y telemetría**: Operativos los filtros estrictos `S0` (en stock, sin reservadas) a `S6`, detección de Range Extenders incluidos, lectura de odómetros en fotos con Gemini Vision en lote, telemetría real de batería (`SoH %` y ciclos de carga) para baterías originales y sustituidas, y clasificación matemática por milímetros de recorrido de suspensión (`≤130 mm` XC > `140 mm` Trail Ligero > `150-160 mm` All-Mountain).
-- **Detección de Mega Chollos y segmentación acústica**: Mega Chollo (`Nota >= 9.0` y `Descuento >= 50% vs PVP nuevo`) con alerta sonora prioritaria (`disable_notification=False`) en Upway (`BH iLynx Trail Carbon 8.6`, `9.5/10`), manteniendo silencio operativo (`disable_notification=True`) en ofertas estándar y Heartbeat.
-- **Radar de mercado y reportes**: Generación automática de `docs/radar_mercado.md` en cada corrida (**208 unidades activas** en seguimiento, **16 rebajas activas** con ahorro medio `-88 €`, **88 unidades en Zona de Vigilancia**) y modo CLI `python main.py --stats`.
-- **Resiliencia de red**: Integrado `ProxyRotator` nativo en `scraper_base.py` y `enriquecedor_web.py` con estrategias cíclica y aleatoria configurable vía `PROXY_LIST` en `.env`.
-- **Suite de tests**: `python test_buscador.py` 100% en **GREEN**.
-- **Automatización y logs**: Tarea `BuscadorBiciOcasion` activa a las 12:00 diarias con despertar automático (`WakeToRun: True`), ignorando `logs/buscador.log` en el control de versiones.
+- **Rotación ping-pong `#1 -> #2 -> #1` por portal (`seleccionar_por_portal`)**: Si la `#1` de un portal no varía respecto al análisis anterior, expone el `#2` al día siguiente y vuelve a confirmar el `#1` al tercer día, conservando `estado_portales` en SQLite (`analisis_ejecuciones`).
+- **Deduplicación inter-portal, aislamiento SQLite y caché DuckDuckGo**: Activa deduplicación separada por flujo (`pre_aptas` diario, `bf_extra` estricto y `bf_respaldo` fuera de tope), tabla dedicada `bicis_black_friday_enviadas` con prefijo `respaldo:` excluido de clones, conexiones cerradas vía `@contextmanager` (`WAL`) y caché `ddg_v2:` segura.
+- **Radar de mercado y reportes**: `docs/radar_mercado.md` actualizado hoy en vivo (**222 unidades activas**, **2.6 días** de stock medio, **17 rebajas activas** con Mammoth mostrando `~26% vs PVP`, **96 unidades en Zona de Vigilancia**) y modo CLI `python main.py --stats`.
+- **Resiliencia de red**: `ProxyRotator` nativo en `scraper_base.py` y `enriquecedor_web.py` configurable vía `PROXY_LIST` en `.env`.
+- **Suite de tests y verificación**: `python test_buscador.py` 100% en **GREEN** tras la última edición y auditoría independiente sin hallazgos abiertos.
+- **Automatización y logs**: Tarea `BuscadorBiciOcasion` activa a las 12:00 diarias con despertar automático (`WakeToRun: True`), ignorando `.env`, `*.db` y `logs/buscador.log`.
 
 ### Tareas completadas recientemente
 
-- [x] **Endurecimiento preventivo y TODO 2 (`dedup`, filtros Wallapop/`AL` y caché DuckDuckGo `ddg_v2:`)**: Omitidos clones de Buhobike en Wallapop, `_MODELOS_DOBLE_RE` con superíndice `²`, `AL` case-sensitive y caché resiliente sin fallos HTTP cacheados.
-- [x] **Selección por página (1 por portal) y rotación `#1 -> #2 -> #1` (`main.py`, `db.py`, `notifier.py`)**: Garantiza 1 mejor opción por tienda/portal con stock apto sin quedar tapada por Wallapop y alterna `#1 <-> #2` cuando la `#1` no varía.
-- [x] **Perito Mecánico Escéptico y Estricto v2 (`gemini_classifier.py`, `models.py`, `scrapers/wallapop.py`)**: Física Full Power `>= 22.5 kg`, corrección `BH iLynx+`/Rise/Bosch, Línea Roja para genéricas (`4.5`), contradicción `NUEVA + >50km`, eje de Garantía/factura, rúbrica Base `10.0` sin bonos y formato `🧮 Auditoría Pericial`.
+- [x] **Canal exclusivo Black Friday (`<= 3.500 €`) + segundo bot (`@BlackBikeBeast_bot`)**: Configuradas credenciales dedicadas en `.env`/`.env.example`, rúbrica dedicada sin alucinaciones de peso ni suspensión, tabla `bicis_black_friday_enviadas`, pulso `enviar_heartbeat_black_friday` e informe automático Top 3 de respaldo cuando no hay chollos en presupuesto.
+- [x] **Fix de PVP tachado en Mammoth (`.is__old` / `:not(.is__old)`)**: Desbloqueada la captura real de precios de tarifa y porcentajes de descuento (`28/66` bicis en vivo vs `0/66` previo).
+- [x] **Endurecimiento SQLite (`@contextmanager` + `WAL` + `respaldo:%`) y dedup separada en `main.py`**: Cierre explícito de conexiones en Windows e independencia total entre canal diario, canal Black Friday estricto y respaldo Top 3.
+- [x] **Endurecimiento preventivo, selección por portal (`#1/#2/#1`) y Perito Escéptico v2**: Desambiguación BH/Rise/Bosch, clones Wallapop/Buhobike, física Full Power `>= 22.5 kg` y entrega justa por portal.
 
-### Plan de trabajo propuesto (TODOs pendientes)
+### Plan de trabajo propuesto para mañana (TODOs pendientes)
 
+- [ ] **TODO 0 (Seguridad) — Rotar token de `@BlackBikeBeast_bot` en `@BotFather`**
+  - **Objetivo**: Regenerar el token del segundo bot con `/revoke` en `@BotFather` y actualizar únicamente `TELEGRAM_BOT_TOKEN_BLACK_FRIDAY` en el archivo local `.env`, dado que el token inicial quedó registrado en el historial de conversación.
 - [ ] **TODO 1 — Scoring de degradación de batería en el evaluador (`evaluator.py`)**
   - **Objetivo**: Incorporar formalmente en el algoritmo numérico de `evaluator.py` la penalización por `bateria_salud_pct` y `bateria_ciclos` cuando estén disponibles, alineándolo con el Perito Mecánico Escéptico v2.
+- [ ] **TODO 2 — Blindar rotación `#2` diaria frente a `Línea Roja > 6.000 km` y calibrar tope de batería Black Friday (`480 Wh` vs `500 Wh`)**
+  - **Objetivo**: Evitar en `seleccionar_por_portal` que unidades descartadas por `Km > 6.000` (ej. *Orbea Rise H15 XT 7.040 km*, `3.5/10`) ocupen la rotación `#2` cuando existan alternativas sanas, y decidir si para chollos extremos de exposición (ej. *Ghost Path Riot Fazua 480 Wh* al `-61%`/`-67%`) se admite `>= 480 Wh` en el canal Black Friday estricto.
 - [ ] **TODO 3 — Dashboard web interactivo o exportación HTML para el Radar de Mercado**
   - **Objetivo**: Desarrollar un visualizador web ligero (o exportación HTML interactiva) para consultar de forma gráfica la rotación de stock, curvas de permanencia y precios del catálogo SQLite.
 - [ ] **TODO 4 — Detección de chollos por degradación anómala de precio (Delta diario > 300 €)**
@@ -695,32 +723,19 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 
 | Componente | Estado |
 |------------|--------|
-| Lógica de filtros, Perito Mecánico Escéptico v2 (`perito_v5`), dedup, Telegram | ✅ Verificado (tests GREEN + corrida en vivo 31.9s) |
+| Canal exclusivo Black Friday (`<= 3.500 €`, `@BlackBikeBeast_bot`) | ✅ Verificado (alertas estrictas, informe Top 3 fuera de tope y heartbeat en vivo) |
+| Scraper Mammoth (`scrapers/mammoth.py`) | ✅ Fix `.is__old` / `:not(.is__old)` activo (`28/66` con PVP en vivo, SoH 100%) |
+| Lógica de filtros, Perito Mecánico Escéptico v2 (`perito_v5`), dedup, Telegram | ✅ Verificado (`python test_buscador.py` GREEN + `--once` en vivo) |
 | Entrega por página (`1 por portal`) y rotación `#1 -> #2 -> #1` | ✅ Verificado (`estado_portales` en SQLite, 4 portales notificados en vivo) |
-| Deduplicación inter-portal y caché DuckDuckGo (`ddg_v2:`) | ✅ Verificado en vivo |
+| Base de datos SQLite (`bicis_enviadas`, `bicis_black_friday_enviadas`, `WAL`) | ✅ Cierre seguro con `@contextmanager`, dedup separada con `respaldo:` |
 | Detección de Mega Chollos (dto >= 50% y Nota >= 9.0) | ✅ Activo en vivo (`Upway BH iLynx Trail Carbon 8.6`, 9.5/10) |
-| Segmentación sonora Telegram (silencioso vs prioritario) | ✅ Implementado (`disable_notification` según Mega Chollo) |
-| Scraper Wallapop geolocalizado (Fuenlabrada +50 km) | ✅ Verificado en vivo (`420` anuncios filtrados, Haversine `<= 50 km`, extracción `tiene_factura`) |
+| Segmentación sonora Telegram (silencioso vs prioritario) | ✅ Implementado (`disable_notification` según Mega Chollo / Black Friday) |
+| Scraper Wallapop geolocalizado (Fuenlabrada +50 km) | ✅ Verificado en vivo (geo-filtro Haversine `<= 50 km`, extracción `tiene_factura`) |
 | Prioridad de modalidad (XC > Light e-MTB > Trail) | ✅ Implementado (`prioridad_modalidad` en `evaluator.py` y `main.py`) |
 | Desambiguación de motores BH (BH 2EXMAG vs Shimano EP801) | ✅ Verificado (BH iLynx Race/Trail fijado a 2EXMAG, iLynx+ a EP801 + batería BH) |
-| Selectores Bike Ocasión | ✅ Verificados en HTML real (`h3.s_title_block a`, badge `Km / <Marca>`, PVP original, 6 páginas, 180+ bicis) |
-| Selectores Buhobike | ✅ Verificados en HTML real (`usar_stealth_directo=True`, `#/...-talla-m`, SKU `KM5000`, `img.thumbnail-img[alt]`, PVP original) |
-| Selectores Upway | ✅ Verificados en `/collections/doble-suspension` (extracción en tarjeta de año, km `\u202fkm`, PVP original 'nuevo' y talla desde `1mXX-1mYY`) |
-| Scraping real Upway | ✅ 21 e-MTB doble suspensión extraídas en ~0.8s (sin fetch secuencial redundante) |
-| Scraping real Buhobike | ✅ 34 e-MTB extraídas en ~12s combinando trail-dobles y segunda mano, detectando candidatas < 21 kg |
-| Scraping real Bike Ocasión | ✅ 182 bicis en 6 páginas con Scrapling Fetcher |
-| Scraping real Mammoth | ✅ Detección de bicis nuevas a estrenar, tallas M en stock, PVP original y telemetría SoH 100% |
-| Enriquecedor web (ficha del sitio + DuckDuckGo) | ✅ Paralelo (`ThreadPoolExecutor`), `<dt>/<dd>`, telemetría SoH/ciclos, regex con `\b` y filtro anti-peso de embalaje |
-| Caché de fichas de detalle | ✅ Implementado (`cache/fichas_detalle.json`, thread-safe) |
-| Health check de scrapers | ✅ Implementado (alerta por log y Telegram) |
-| Automatización diaria Windows 12:00 | ✅ Tarea programada `BuscadorBiciOcasion` (`main.py --once` con `WakeToRun` y `StartWhenAvailable`) |
-| Heartbeat operativo de Telegram | ✅ Implementado (`enviar_heartbeat`, `TELEGRAM_HEARTBEAT` en config y `--heartbeat` CLI) |
-| Logging a archivo | ✅ Implementado (`logs/buscador.log`) |
-| Proxies rotatorios (ProxyRotator) | ✅ Implementado (configurable vía `PROXY_LIST`) |
-| Paginación | ✅ Implementada (Bike Ocasión: 6 páginas, 180+ bicis) |
-| Historial de catálogo y rebajas (`historial_catalogo`) | ✅ Implementado en SQLite (`db.py` con días en stock, PVP original y cálculo de ahorro) |
-| Recorrido físico de suspensión en mm | ✅ Implementado (`enriquecedor_web.py`, modelo y `prioridad_modalidad`) |
-| Radar de mercado CLI y Markdown (`--stats`, `docs/radar_mercado.md`) | ✅ Implementado con permanencia en stock, ahorro medio y descuento vs PVP original |
+| Selectores Bike Ocasión / Buhobike / Upway | ✅ Verificados en vivo (`180` / `49` / `22` unidades extraídas en la corrida de hoy) |
+| Enriquecedor web paralelo, caché `fichas_detalle.json` y `ddg_v2:` | ✅ Paralelo (`ThreadPoolExecutor`), `<dt>/<dd>`, telemetría SoH/ciclos y filtro de embalaje |
+| Health check, Task Scheduler 12:00, Heartbeat dual y Radar (`--stats`) | ✅ Operativos (`docs/radar_mercado.md` actualizado con `222` unidades en seguimiento) |
 
 ---
 
