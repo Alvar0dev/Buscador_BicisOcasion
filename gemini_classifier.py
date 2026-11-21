@@ -115,8 +115,8 @@ CATALOGO_EMTB = [
     },
     {
         "patrones": [
-            "orbea rise m10", "orbea rise m20", "orbea rise m-team", "orbea rise m-ltd",
-            "orbea rise sl m10", "orbea rise m-pro", "orbea rise carbon", "orbea rise sl",
+            "orbea rise m10", "orbea rise m15", "orbea rise m20", "orbea rise m-team", "orbea rise m-ltd",
+            "orbea rise sl m10", "orbea rise sl m20", "orbea rise m-pro", "orbea rise carbon", "orbea rise sl",
         ],
         "peso_kg": 18.3,
         "bateria_wh_default": 540,
@@ -337,11 +337,21 @@ CATALOGO_EMTB = [
         "recorrido_mm": 150,
     },
     {
-        "patrones": ["focus jam2 sl", "focus jam 2 sl", "focus jam2", "focus jam 2"],
+        "patrones": ["focus jam2 sl", "focus jam 2 sl", "focus jam2 8.", "focus jam 2 8."],
         "peso_kg": 18.5,
         "bateria_wh_default": 430,
         "motor": "Fazua Ride 60",
         "cuadro_material": "Carbono",
+        "suspension_trasera": "si",
+        "modalidad": "Trail",
+        "recorrido_mm": 150,
+    },
+    {
+        "patrones": ["focus jam2", "focus jam 2"],
+        "peso_kg": 23.8,
+        "bateria_wh_default": 625,
+        "motor": "Bosch Performance Line CX",
+        "cuadro_material": "Aluminio",
         "suspension_trasera": "si",
         "modalidad": "Trail",
         "recorrido_mm": 150,
@@ -536,13 +546,14 @@ CATALOGO_EMTB = [
         "modalidad": "Trail",
     },
     {
-        "patrones": ["berria mako hybrid"],
-        "peso_kg": 21.2,
+        "patrones": ["berria mako hybrid", "mako hybrid"],
+        "peso_kg": 20.6,
         "bateria_wh_default": 720,
-        "motor": "Polini / Bosch",
+        "motor": "Polini / Bafang M500",
         "cuadro_material": "Carbono",
         "suspension_trasera": "si",
         "modalidad": "Trail",
+        "recorrido_mm": 150,
     },
     {
         "patrones": ["mondraker dusk"],
@@ -802,7 +813,9 @@ def _es_excepcion_ligera(bici: Bicicleta) -> bool:
         re.search(
             r"\b(?:orbea\s+)?rise\b|\bilynx\s+(?:race|trail)\b|\bmoterra\s+sl\b|"
             r"\bamflow\s+pl\b|\blevo\s+sl\b|\bkenevo\s+sl\b|\bfuel[\s\-]*exe\b|"
-            r"\bscott\s+lumen\b|\bbmc\s+fourstroke\b|\bwilier\s+urta\b|\burta\s+hybrid\b|\bams\s+hybrid\b|\be-?zesty\b|\b(?:vam|jam)\s*2(?:\s*sl)?\b|\bmacina\s+scarp\b",
+            r"\bscott\s+lumen\b|\bbmc\s+fourstroke\b|\bwilier\s+urta\b|\burta\s+hybrid\b|"
+            r"\bams\s+hybrid\b|\be-?zesty\b|\bvam\s*2(?:\s*sl)?\b|\bjam\s*2\s*sl\b|"
+            r"\bmacina\s+scarp\b|\bmako\s+hybrid\b",
             txt,
         )
     )
@@ -843,6 +856,9 @@ def completar_con_catalogo(bici: Bicicleta, aplicar_heuristica_peso: bool = True
                 bici.cuadro_material = entrada["cuadro_material"]
             if bici.suspension_trasera is None:
                 bici.suspension_trasera = entrada["suspension_trasera"]
+            if "scott lumen" in texto and bici.recorrido_mm == 140:
+                # Cuadro Scott Lumen es 130 mm XC/Downcountry aunque monte horquilla de 140 mm
+                bici.recorrido_mm = 130
             if bici.recorrido_mm is None and entrada.get("recorrido_mm") is not None:
                 bici.recorrido_mm = entrada["recorrido_mm"]
             es_cat_xc = (entrada.get("recorrido_mm") or 999) <= cfg.RECORRIDO_MAX_XC_MM
@@ -1384,12 +1400,12 @@ def enriquecer_y_valorar_bici(bici: Bicicleta) -> Tuple[Bicicleta, float, str]:
     cache_ia = _cargar_cache_ia()
     if cache_key in cache_ia:
         entry = cache_ia[cache_key]
-        km_nuevo_descubierto = (bici.km is not None and entry.get("km") != bici.km)
+        km_cambio = entry.get("km") != bici.km
         peso_corregido = (bici.peso_kg is not None and entry.get("peso_kg") != bici.peso_kg)
-        if not km_nuevo_descubierto and not peso_corregido:
+        if not km_cambio and not peso_corregido:
             for campo in ("talla", "modalidad", "peso_kg", "bateria_wh", "range_extender_wh",
                           "bateria_salud_pct", "bateria_ciclos", "cuadro_material",
-                          "motor", "km", "ano", "componentes", "suspension_trasera", "recorrido_mm"):
+                          "motor", "ano", "componentes", "suspension_trasera", "recorrido_mm"):
                 if entry.get(campo) is not None and getattr(bici, campo, None) is None:
                     setattr(bici, campo, entry[campo])
             bici = completar_con_catalogo(bici, aplicar_heuristica_peso=True)

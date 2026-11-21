@@ -27,6 +27,22 @@ _RE_MODALIDAD_NO_XC = re.compile(
     re.IGNORECASE,
 )
 
+_RE_MODALIDAD_NO_MTB = re.compile(
+    r"\b(?:gravel|carretera|road|urbana|urban|paseo|trekking|ciudad|plegable)\b",
+    re.IGNORECASE,
+)
+
+
+def es_modalidad_mtb_doble_valida(bici: Bicicleta) -> bool:
+    """
+    True si la bicicleta pertenece a una modalidad e-MTB válida (XC/Downcountry,
+    Trail ligera o MTB doble suspensión), rechazando carretera, gravel, urbana o trekking.
+    """
+    mod = (bici.modalidad or "").strip().lower()
+    if mod and _RE_MODALIDAD_NO_MTB.search(mod):
+        return False
+    return True
+
 _PATRONES_MODELO_TRAIL_ENDURO = (
     "orbea rise",
     "ilynx trail",
@@ -164,6 +180,7 @@ def _pasa_requisitos_base_mecanicos(
     precio_max: int,
     bateria_estricta_gt: bool = True,
     permitir_fazua_extender: bool = False,
+    permitir_trail_respaldo: bool = False,
 ) -> Tuple[bool, str]:
     """
     Valida compatibilidad física y de presupuesto base compartida entre el flujo
@@ -177,14 +194,18 @@ def _pasa_requisitos_base_mecanicos(
     if bici.talla and bici.talla.strip().upper() != cfg.TALLA_OBJETIVO.upper():
         return False, f"Talla no es M: {bici.talla}"
 
-    # S2: Modalidad estrictamente XC / Cross Country / Downcountry (sin Trail/Enduro)
-    if bici.modalidad and not es_modalidad_xc(bici.modalidad):
-        return False, f"Modalidad no válida para XC: {bici.modalidad}"
+    # S2: Modalidad estrictamente XC en diario; en Black Friday permite Trail ligera / MTB como respaldo
+    if permitir_trail_respaldo:
+        if not es_modalidad_mtb_doble_valida(bici):
+            return False, f"Modalidad no válida para MTB: {bici.modalidad}"
+    else:
+        if bici.modalidad and not es_modalidad_xc(bici.modalidad):
+            return False, f"Modalidad no válida para XC: {bici.modalidad}"
 
-    if es_modelo_trail_o_enduro(bici):
-        return False, f"Modelo Trail/Enduro descartado (objetivo XC <= {cfg.RECORRIDO_MAX_XC_MM} mm): {bici.titulo}"
+        if es_modelo_trail_o_enduro(bici):
+            return False, f"Modelo Trail/Enduro descartado (objetivo XC <= {cfg.RECORRIDO_MAX_XC_MM} mm): {bici.titulo}"
 
-    # S4: Batería > 500 Wh en flujo diario, o >= 500 Wh en BF (salvo Fazua 420-430 Wh ampliable en presupuesto)
+    # S4: Batería > 500 Wh estricta
     if bici.bateria_wh is not None:
         if permitir_fazua_extender and es_xc_ampliable_en_presupuesto(bici, precio_max):
             pass
@@ -201,8 +222,8 @@ def _pasa_requisitos_base_mecanicos(
     if bici.suspension_trasera is not None and str(bici.suspension_trasera).lower() in ("false", "no", "0"):
         return False, "No tiene suspensión trasera (no es doble suspensión)"
 
-    # S2bis: Si el recorrido supera 130 mm, se descarta (Trail/Enduro/Freeride)
-    if bici.recorrido_mm is not None and bici.recorrido_mm > cfg.RECORRIDO_MAX_XC_MM:
+    # S2bis: En modo estricto XC, si el recorrido supera 130 mm se descarta
+    if not permitir_trail_respaldo and bici.recorrido_mm is not None and bici.recorrido_mm > cfg.RECORRIDO_MAX_XC_MM:
         return False, f"Recorrido de suspensión excesivo para XC (>{cfg.RECORRIDO_MAX_XC_MM} mm): {bici.recorrido_mm} mm"
 
     # S5/S6: Rango de presupuesto según canal (hasta 3.500 € para Unicornios XC >=600 Wh, <=500 km)
@@ -509,16 +530,46 @@ def clasificar_estado_nueva_exposicion(bici: Bicicleta) -> Tuple[bool, str, str]
     return True, f"EXPOSICIÓN / KM 0 ({km} km)", f"Unidad de exposición/test con {km} km"
 
 
+_RE_OCASION_TEXTO = re.compile(
+    r"\b(?:reacondicionad[oa]s?|refurbished|segunda\s+mano|valor\s+de\s+recompra|medio\s+uso|de\s+ocasi[oó]n)\b",
+    re.IGNORECASE,
+)
+
+_SITIOS_OCASION = ("bike ocasión", "bike ocasion", "upway")
+
+
+def es_bici_de_ocasion(bici: Bicicleta) -> bool:
+    """
+    True si la bicicleta proviene de un portal de segunda mano / ocasión
+    (Bike Ocasión, Upway, sección segunda mano de Buhobike) o si el anuncio
+    indica explícitamente reacondicionada / segunda mano / medio uso.
+    """
+    if getattr(bici, "es_ocasion", False):
+        return True
+    sitio_low = (bici.sitio or "").strip().lower()
+    if sitio_low in _SITIOS_OCASION:
+        return True
+    url_low = (bici.url or "").lower()
+    if any(tok in url_low for tok in ("segunda-mano", "segundamano", "reacondicionad", "/ocasion")):
+        return True
+    texto = f"{bici.titulo or ''} {bici.componentes or ''}"
+    return bool(_RE_OCASION_TEXTO.search(texto))
+
+
 def pasa_prefiltro_black_friday(bici: Bicicleta) -> Tuple[bool, str]:
     """
     Pre-filtro previo al enriquecimiento para rescatar bicis nuevas/exposición
-    de 2.000-3.500 € (incluyendo la franja 3.301-3.500 € del Black Friday).
+    de 2.000-3.500 € (doble suspensión, > 500 Wh, < 21 kg, XC preferente o Trail ligera/MTB).
     """
+    if es_bici_de_ocasion(bici):
+        return False, "Anuncio/portal de ocasión o reacondicionada (solo nuevas/seminuevas)"
+
     apto_base, motivo_base = _pasa_requisitos_base_mecanicos(
         bici,
         precio_max=cfg.PRECIO_MAX_BLACK_FRIDAY_EUR,
-        bateria_estricta_gt=False,
-        permitir_fazua_extender=True,
+        bateria_estricta_gt=True,
+        permitir_fazua_extender=False,
+        permitir_trail_respaldo=True,
     )
     if not apto_base:
         return False, motivo_base
@@ -620,14 +671,19 @@ def evaluar_oportunidad_black_friday(
 ) -> Tuple[bool, float, Optional[float], str, str]:
     """
     Evalúa post-enriquecimiento si una bicicleta califica como oportunidad super
-    exclusiva de Black Friday para el segundo chat de Telegram.
+    exclusiva de Black Friday para el segundo chat de Telegram:
+    doble suspensión, batería > 500 Wh, peso < 21 kg, Talla M, <= 3.500 €, nueva/exposición.
     Devuelve (califica, nota_bf, descuento_pct, etiqueta_estado, desglose).
     """
+    if es_bici_de_ocasion(bici):
+        return False, 0.0, None, "OCASIÓN", "Portal o anuncio de ocasión/reacondicionada (solo nuevas/seminuevas)"
+
     apto_base, motivo_base = _pasa_requisitos_base_mecanicos(
         bici,
         precio_max=cfg.PRECIO_MAX_BLACK_FRIDAY_EUR,
-        bateria_estricta_gt=False,
-        permitir_fazua_extender=True,
+        bateria_estricta_gt=True,
+        permitir_fazua_extender=False,
+        permitir_trail_respaldo=True,
     )
     if not apto_base:
         return False, 0.0, None, "DESCARTADA", motivo_base
@@ -641,12 +697,8 @@ def evaluar_oportunidad_black_friday(
         return False, 0.0, None, "DESCARTADA", f"Peso estimado por heurística/IA sin verificación real ({bici.peso_kg} kg)"
     if bici.peso_kg is None or bici.peso_kg >= cfg.PESO_DESCARTE_KG:
         return False, 0.0, None, "DESCARTADA", f"Peso real no confirmado < 21.0 kg ({bici.peso_kg})"
-    bat_ok = bici.bateria_wh is not None and (
-        bici.bateria_wh >= cfg.BATERIA_MIN_WH
-        or es_xc_ampliable_en_presupuesto(bici, cfg.PRECIO_MAX_BLACK_FRIDAY_EUR)
-    )
-    if not bat_ok:
-        return False, 0.0, None, "DESCARTADA", f"Batería no confirmada >= 500 Wh ({bici.bateria_wh})"
+    if bici.bateria_wh is None or bici.bateria_wh <= cfg.BATERIA_MIN_WH:
+        return False, 0.0, None, "DESCARTADA", f"Batería no confirmada > 500 Wh ({bici.bateria_wh})"
 
     es_nueva, etiqueta_estado, motivo_estado = clasificar_estado_nueva_exposicion(bici)
     if not es_nueva:
@@ -679,94 +731,108 @@ def evaluar_oportunidad_black_friday(
 
 def pasa_prefiltro_respaldo_black_friday(bici: Bicicleta) -> Tuple[bool, str]:
     """
-    Pre-filtro previo al enriquecimiento para localizar el Top 3 XC puro más
-    interesante aunque supere 3.500 € o tenga batería ligera >= 360 Wh (ej. TQ HPR50).
+    Pre-filtro previo al enriquecimiento para localizar el Top 3 de nuevas y seminuevas
+    más interesantes: doble suspensión, Talla M, batería > 500 Wh, peso < 21 kg,
+    precio <= 3.500 € (respaldo hasta 4.000 €), priorizando XC y luego Trail ligera / MTB.
     """
+    if es_bici_de_ocasion(bici):
+        return False, "Anuncio/portal de ocasión o reacondicionada (solo nuevas/seminuevas)"
     if getattr(bici, "disponible", True) is False:
         return False, "Bicicleta reservada o agotada"
     if bici.talla and bici.talla.strip().upper() != cfg.TALLA_OBJETIVO.upper():
         return False, f"Talla no es M: {bici.talla}"
-    if bici.modalidad and not es_modalidad_xc(bici.modalidad):
-        return False, f"Modalidad no válida para XC: {bici.modalidad}"
-    if es_modelo_trail_o_enduro(bici):
-        return False, f"Modelo Trail/Enduro descartado (objetivo XC): {bici.titulo}"
+    if not es_modalidad_mtb_doble_valida(bici):
+        return False, f"Modalidad no válida para MTB: {bici.modalidad}"
     if bici.suspension_trasera is not None and str(bici.suspension_trasera).lower() in ("false", "no", "0"):
         return False, "No tiene suspensión trasera"
-    if bici.recorrido_mm is not None and bici.recorrido_mm > cfg.RECORRIDO_MAX_XC_MM:
-        return False, f"Recorrido > {cfg.RECORRIDO_MAX_XC_MM} mm: {bici.recorrido_mm} mm"
-    if bici.bateria_wh is not None and bici.bateria_wh < 360:
-        return False, f"Batería < 360 Wh: {bici.bateria_wh} Wh"
+    if bici.bateria_wh is not None and bici.bateria_wh <= cfg.BATERIA_MIN_WH:
+        return False, f"Batería <= {cfg.BATERIA_MIN_WH} Wh: {bici.bateria_wh} Wh"
     if bici.peso_kg is not None and bici.peso_kg >= cfg.PESO_DESCARTE_KG:
         return False, f"Peso >= 21 kg: {bici.peso_kg} kg"
     if bici.precio < cfg.PRECIO_MIN_EUR:
         return False, f"Precio < {cfg.PRECIO_MIN_EUR} €"
-    if bici.km is not None and bici.km > 2000:
-        return False, "Kilometraje > 2.000 km en respaldo Black Friday"
+    precio_tope_resp = getattr(cfg, "PRECIO_RESPALDO_BLACK_FRIDAY_EUR", 4000)
+    if bici.precio > precio_tope_resp:
+        return False, f"Precio > {precio_tope_resp} €: {bici.precio} €"
+    km_max_semi = getattr(cfg, "KM_MAX_SEMINUEVA_BLACK_FRIDAY", 1000)
+    if bici.km is not None and bici.km > km_max_semi:
+        return False, f"Kilometraje > {km_max_semi} km (ocasión/usada)"
     return True, "OK"
 
 
 def evaluar_respaldo_black_friday(
     bici: Bicicleta,
     nota_perito: Optional[float] = None,
+    requerir_descuento_pvp: bool = True,
 ) -> Tuple[bool, Optional[float], float, str, tuple]:
     """
-    Evalúa alternativas XC puras ligeras (<= 130 mm, < 21.0 kg, Talla M, doble,
-    km <= 2.000, >= 360 Wh, dto >= 20% nueva o >= 25% usada) para el informe
-    de respaldo cuando 0 bicis pasan el tope estricto <= 3.500 €.
+    Evalúa candidatas para el canal de nuevas/seminuevas (Black Bike Beast):
+    - Requisitos innegociables: doble suspensión confirmada, batería > 500 Wh,
+      peso < 21.0 kg, Talla M, sin ocasión/reacondicionadas, km <= KM_MAX_SEMINUEVA_BLACK_FRIDAY.
+    - Presupuesto: tramo principal <= 3.500 €; respaldo 3.501 - 4.000 € si no hay suficientes
+      <= 3.500 € (rechazo estricto > 4.000 €).
+    - Modalidad: prioriza siempre XC / Downcountry (<= 130 mm, nivel 3) y, si no hay XC,
+      admite Trail ligera (nivel 2) o MTB doble suspensión (nivel 1).
     Devuelve (califica, dto_pct, nota_ref, motivo_fuera, clave_orden).
     """
+    if es_bici_de_ocasion(bici):
+        return False, None, 0.0, "Ocasión o reacondicionada (solo nuevas/seminuevas)", ()
     if getattr(bici, "disponible", True) is False:
         return False, None, 0.0, "No disponible", ()
     if not bici.talla or bici.talla.strip().upper() != cfg.TALLA_OBJETIVO.upper():
         return False, None, 0.0, "Talla no M", ()
-    if bici.modalidad and not es_modalidad_xc(bici.modalidad):
-        return False, None, 0.0, f"Modalidad no XC: {bici.modalidad}", ()
-    if es_modelo_trail_o_enduro(bici):
-        return False, None, 0.0, "Modelo Trail/Enduro (solo XC)", ()
+    if not es_modalidad_mtb_doble_valida(bici):
+        return False, None, 0.0, f"Modalidad no MTB: {bici.modalidad}", ()
     if str(bici.suspension_trasera or "").strip().lower() not in ("si", "sí", "true", "1"):
         return False, None, 0.0, "Doble suspensión no confirmada", ()
-    if bici.recorrido_mm is not None and bici.recorrido_mm > cfg.RECORRIDO_MAX_XC_MM:
-        return False, None, 0.0, f"Recorrido > {cfg.RECORRIDO_MAX_XC_MM} mm", ()
     if bici.peso_kg is None or bici.peso_kg >= cfg.PESO_DESCARTE_KG:
         return False, None, 0.0, "Peso >= 21 kg o desconocido", ()
-    if bici.bateria_wh is None or bici.bateria_wh < 360:
-        return False, None, 0.0, "Batería < 360 Wh", ()
-    if bici.km is None or bici.km > 2000:
-        return False, None, 0.0, "Kilometraje > 2.000 km o no confirmado", ()
+    if bici.bateria_wh is None or bici.bateria_wh <= cfg.BATERIA_MIN_WH:
+        return False, None, 0.0, f"Batería <= {cfg.BATERIA_MIN_WH} Wh", ()
+    km_max_semi = getattr(cfg, "KM_MAX_SEMINUEVA_BLACK_FRIDAY", 1000)
+    if bici.km is None or bici.km > km_max_semi:
+        return False, None, 0.0, f"Kilometraje > {km_max_semi} km o no confirmado", ()
     if bici.precio < cfg.PRECIO_MIN_EUR:
         return False, None, 0.0, "Precio < mínimo", ()
+    precio_tope_resp = getattr(cfg, "PRECIO_RESPALDO_BLACK_FRIDAY_EUR", 4000)
+    if bici.precio > precio_tope_resp:
+        return False, None, 0.0, f"Precio > {precio_tope_resp} €", ()
 
     dto_pct = calcular_descuento_pvp_pct(bici)
     min_dto_resp = 20.0 if bici.km <= cfg.KM_MAX_BLACK_FRIDAY else 25.0
-    if dto_pct is None or dto_pct < min_dto_resp:
+    tiene_dto_verificado = dto_pct is not None and dto_pct >= min_dto_resp
+    if requerir_descuento_pvp and not tiene_dto_verificado:
         return False, dto_pct, 0.0, f"Descuento < {min_dto_resp:.0f}% o sin PVP", ()
 
+    prio_mod = prioridad_modalidad(bici)
     razones: List[str] = []
     if bici.precio > cfg.PRECIO_MAX_BLACK_FRIDAY_EUR:
-        razones.append(f"+{bici.precio - cfg.PRECIO_MAX_BLACK_FRIDAY_EUR:.0f} € sobre tope 3.500 €")
+        razones.append(f"+{bici.precio - cfg.PRECIO_MAX_BLACK_FRIDAY_EUR:.0f} € sobre tope 3.500 € (<= 4.000 €)")
+    if prio_mod == 2:
+        razones.append("Trail ligera (< 21 kg, respaldo XC)")
+    elif prio_mod < 2:
+        razones.append("e-MTB doble (< 21 kg, respaldo XC)")
     if bici.km > cfg.KM_MAX_BLACK_FRIDAY:
         razones.append(f"{bici.km} km (seminueva)")
-    if bici.bateria_wh < cfg.BATERIA_MIN_WH:
-        razones.append(f"batería {bici.bateria_wh} Wh (< 500 Wh)")
-    if dto_pct < cfg.DESCUENTO_MIN_BLACK_FRIDAY_PCT:
+    if dto_pct is None:
+        razones.append("sin PVP original verificado")
+    elif dto_pct < cfg.DESCUENTO_MIN_BLACK_FRIDAY_PCT:
         razones.append(f"dto -{dto_pct:.0f}% (< 35%)")
     if getattr(bici, "_peso_estimado", False):
         razones.append("peso est. sin báscula")
 
-    motivo_fuera = " | ".join(razones) if razones else "Alternativa XC cercana"
-    cumple_salvo_precio = (
-        bici.bateria_wh >= cfg.BATERIA_MIN_WH
-        and bici.km <= cfg.KM_MAX_BLACK_FRIDAY
-        and dto_pct >= cfg.DESCUENTO_MIN_BLACK_FRIDAY_PCT
-        and not getattr(bici, "_peso_estimado", False)
-    )
+    motivo_fuera = " | ".join(razones) if razones else "Cumple requisitos (< 21 kg, > 500 Wh, <= 3.500 €)"
+    en_tramo_3500 = 1 if bici.precio <= cfg.PRECIO_MAX_BLACK_FRIDAY_EUR else 0
+    tramo_km = 2 if bici.km <= cfg.KM_MAX_BLACK_FRIDAY else (1 if bici.km <= 500 else 0)
+    nota_ref = round(nota_perito if nota_perito is not None else 0.0, 2)
     clave_orden = (
-        1 if cumple_salvo_precio else 0,
-        1 if bici.bateria_wh >= cfg.BATERIA_MIN_WH else 0,
-        1 if bici.km <= cfg.KM_MAX_BLACK_FRIDAY else 0,
-        round(dto_pct, 1),
+        en_tramo_3500,
+        prio_mod,
+        tramo_km,
+        1 if tiene_dto_verificado else 0,
+        round(dto_pct, 1) if tiene_dto_verificado else nota_ref,
+        nota_ref,
         -(bici.peso_kg or 21.0),
         -float(bici.precio),
     )
-    nota_ref = round(nota_perito if nota_perito is not None else 0.0, 2)
     return True, dto_pct, nota_ref, motivo_fuera, clave_orden

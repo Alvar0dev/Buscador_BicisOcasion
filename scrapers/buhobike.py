@@ -22,6 +22,7 @@ class BuhobikeScraper(BaseScraper):
 
     URLS_ADICIONALES: List[str] = [
         "https://www.buhobike.com/3230-electricas-trail-dobles?order=product.price.asc&page=2",
+        "https://www.buhobike.com/3229-enduro-electricas?order=product.price.asc",
         "https://www.buhobike.com/3230-electricas-trail-dobles?q=MODELO-LUMEN",
         "https://www.buhobike.com/9448-segunda-mano-montana-electricas",
         "https://www.buhobike.com/3225-segunda-mano-electricas",
@@ -117,13 +118,18 @@ class BuhobikeScraper(BaseScraper):
                         "carretera", "gravel", "gravelx", "urbana", "paseo",
                         "trekking", "plegable", "rigida", "rígida", "montaa-rgidas",
                         "gain", "e-sensium", "esensium", "keram", "marlin+",
+                        "aspect", "scale", "talon", "ebig", "bignine", "alltrack",
+                        "reach ht", "reach-ht", "overvolt ht", "overvolt-ht",
+                        "garantia-1-ao", "garantia 1 año",
                     ]
                 )
                 es_doble = not es_no_mtb_doble and (
                     "trail-dobles" in url.lower()
                     or "trail-dobles" in url_listado.lower()
+                    or "enduro-electricas" in url.lower()
+                    or "enduro-electricas" in url_listado.lower()
                     or "doble-suspension" in url.lower()
-                    or any(k in titulo.lower() for k in ["ilynx", "lynx", "lumen", "fourstroke", "rise", "strike", "zesty", "overvolt tr", "crafty", "thron", "jam", "stereo", "lt "])
+                    or any(k in titulo.lower() for k in ["ilynx", "lynx", "lumen", "fourstroke", "rise", "strike", "zesty", "overvolt tr", "overvolt am", "crafty", "thron", "jam", "stereo", "eone sixty", "eone-sixty", "lt "])
                 )
 
                 reg_el = p.select_one(".regular-price, del, .price-before-discount")
@@ -153,14 +159,16 @@ class BuhobikeScraper(BaseScraper):
     @staticmethod
     def _extraer_talla_tarjeta(url: str, titulo: str) -> Optional[str]:
         """
-        Extrae la talla desde el fragmento de URL de PrestaShop (ej. '#/16856-talla-m', '#/17675-talla-l_43')
+        Extrae la talla desde el fragmento de URL de PrestaShop (ej. '#/16856-talla-m', '#/16906-talla-s_m')
         o desde el propio título ('T-M', 'TALLA M').
         """
+        if re.search(r"talla-(?:s[_\-]m|m[_\-]l)(?:[_\-/]|$)", url, re.IGNORECASE):
+            return "M"
         match_url = re.search(r"talla-([a-z]{1,3})(?:[_\-/]|$)", url, re.IGNORECASE)
         if match_url:
             talla = match_url.group(1).upper()
             if talla in ("XS", "S", "M", "L", "XL", "XXL", "SM", "ML", "MD", "LG"):
-                return "M" if talla == "MD" else ("L" if talla == "LG" else talla)
+                return "M" if talla in ("MD", "SM", "ML") else ("L" if talla == "LG" else talla)
 
         match_tit = re.search(r"\b(?:TALLA|T)[\s\-:]+(XS|S|M|L|XL|SM|ML)\b", titulo, re.IGNORECASE)
         if match_tit:

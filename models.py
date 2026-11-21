@@ -34,6 +34,7 @@ class Bicicleta:
     ubicacion: Optional[str] = None          # Municipio / distancia (ej. "Getafe (4.1 km)" en Wallapop)
     imagenes: Optional[List[str]] = None     # URLs de galería pre-cargadas (APIs estructuradas como Wallapop)
     tiene_factura: bool = False              # True si el vendedor particular menciona factura de compra
+    es_ocasion: bool = False                 # True si es reacondicionada, segunda mano o de ocasión declared
 
     def to_dict(self) -> dict:
         return asdict(self)

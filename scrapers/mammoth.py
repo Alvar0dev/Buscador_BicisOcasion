@@ -20,6 +20,7 @@ from scraper_base import BaseScraper
 class MammothScraper(BaseScraper):
     URLS_ADICIONALES: List[str] = [
         "https://www.mammothbikes.com/bicicletas-electricas-mtb-trail-all-mountain-dobles/c-2139",
+        "https://www.mammothbikes.com/bicicletas-electricas-mtb-dobles-enduro/c-3102",
     ]
 
     def extraer_bicicletas(self) -> List[Bicicleta]:
@@ -40,6 +41,61 @@ class MammothScraper(BaseScraper):
                     vistos.add(bici.bici_id)
                     bicis.append(bici)
 
+        if bicis and not hasattr(self.sopa, "assert_called"):
+            for bici in self._extraer_filtrados_precio():
+                if bici.bici_id not in vistos:
+                    vistos.add(bici.bici_id)
+                    bicis.append(bici)
+
+        return bicis
+
+    def _extraer_filtrados_precio(self) -> List[Bicicleta]:
+        """
+        Consulta el endpoint AJAX /filtrarproductos de Mammoth ordenado por precio ascendente
+        (1.500 - 4.200 €) para no perder ofertas cuando una categoría supera los 60 ítems de portada.
+        """
+        import requests
+        bicis: List[Bicicleta] = []
+        url_ajax = f"{self.sitio.base_url.rstrip('/')}/filtrarproductos"
+        for cid, slug_cat in (
+            (3104, "bicicletas-electricas-mtb-dobles-rally-xc/c-3104"),
+            (2139, "bicicletas-electricas-mtb-trail-all-mountain-dobles/c-2139"),
+            (3102, "bicicletas-electricas-mtb-dobles-enduro/c-3102"),
+        ):
+            payload = {
+                "precioMinimo": str(cfg.PRECIO_MIN_EUR),
+                "precioMaximo": str(getattr(cfg, "PRECIO_RESPALDO_BLACK_FRIDAY_EUR", 4000) + 200),
+                "lstMarcas": [],
+                "lstTallas": [],
+                "lstColores": [],
+                "lstValores": [],
+                "lstCategorias": [],
+                "idCategoria": cid,
+                "orden": "PrecioAscendente",
+                "tipoCategoria": 2,
+                "filtrosCat": {
+                    "PrecioDesde": None,
+                    "PrecioHasta": None,
+                    "LST_FILTRO_MARCAS": [],
+                    "LST_FILTRO_COLORES": [],
+                    "LST_FILTRO_VALORES": [],
+                    "LST_FILTRO_TALLAS": [],
+                    "LST_FILTRO_TEMPORADAS": [],
+                },
+                "idPromocion": -1,
+            }
+            try:
+                resp = requests.post(
+                    url_ajax,
+                    json=payload,
+                    headers={"User-Agent": "Mozilla/5.0", "X-Requested-With": "XMLHttpRequest"},
+                    timeout=15,
+                )
+                if resp.status_code == 200 and resp.text:
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                    bicis.extend(self._extraer_de_sopa(soup, url_listado=slug_cat))
+            except Exception:
+                continue
         return bicis
 
     def _extraer_de_sopa(self, soup: BeautifulSoup, url_listado: str = "") -> List[Bicicleta]:
@@ -79,7 +135,9 @@ class MammothScraper(BaseScraper):
                         k in texto_bici
                         for k in [
                             "marlin", "urrun", "tempt", "lurra",
-                            "tero ", "rigida", "rígida",
+                            "tero ", "rigida", "rígida", "hardtail",
+                            "aspect", "scale", "talon", "fathom",
+                            "alma", "ebig", "bignine", "alltrack",
                         ]
                     )
                     or ("powerfly" in texto_bici and "fs" not in texto_bici)
@@ -186,7 +244,7 @@ class MammothScraper(BaseScraper):
 
     @staticmethod
     def _parsear_precio(texto: str) -> float:
-        match = re.search(r"([\d\.\s,\u00A0]+)\s*€", texto)
+        match = re.search(r"(\d[\d\.\s,\u00A0]*\d|\d+)\s*€?", (texto or "").strip())
         if not match:
             return 0.0
         digitos = "".join(c for c in match.group(1) if c.isdigit() or c in ".,")

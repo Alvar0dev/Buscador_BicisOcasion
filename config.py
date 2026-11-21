@@ -32,11 +32,17 @@ class SitioObjetivo:
 WALLAPOP_LAT: float = float(os.getenv("WALLAPOP_LAT", "40.2842"))
 WALLAPOP_LON: float = float(os.getenv("WALLAPOP_LON", "-3.7942"))
 WALLAPOP_RADIO_KM: int = int(os.getenv("WALLAPOP_RADIO_KM", "50"))
+WALLAPOP_PERMITIR_NACIONAL: bool = False  # Estricto <= WALLAPOP_RADIO_KM (50 km de Fuenlabrada)
 WALLAPOP_UNICORN_QUERIES: List[str] = [
     "BH iLynx Race",
-    "Wilier Urta Hybrid",
+    "BH iLynx Trail",
+    "Orbea Rise",
+    "Berria Mako",
+    "Cannondale Moterra SL",
     "Scott Lumen",
+    "Wilier Urta Hybrid",
     "Focus VAM2",
+    "Focus Jam2 SL",
     "BMC Fourstroke AMP",
 ]
 
@@ -105,9 +111,11 @@ PRECIO_MAX_EUR: int = 3000  # Rango principal 3.000 € (S5)
 PRECIO_MAX_EXCEPCIONAL_EUR: int = 3300  # Oportunidad excepcional hasta 3.300 € (S6)
 PRECIO_MAX_UNICORNIO_XC_EUR: int = 3500  # Margen <= 3.500 € para unicornios XC >= 600 Wh y <= 500 km / o BF + extender
 
-# Canal exclusivo Black Friday (bicis nuevas o de exposición hasta 3.500 €)
+# Canal exclusivo Black Friday (bicis nuevas o seminuevas <= 3.500 €, respaldo hasta 4.000 €)
 PRECIO_MAX_BLACK_FRIDAY_EUR: int = 3500
+PRECIO_RESPALDO_BLACK_FRIDAY_EUR: int = 4000
 KM_MAX_BLACK_FRIDAY: int = 50
+KM_MAX_SEMINUEVA_BLACK_FRIDAY: int = 500
 DESCUENTO_MIN_BLACK_FRIDAY_PCT: float = 35.0
 NOTA_MIN_BLACK_FRIDAY: float = 7.5
 BLACK_FRIDAY_TOP_N: int = 5

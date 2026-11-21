@@ -497,10 +497,17 @@ def formatear_heartbeat_black_friday(resumen: dict) -> str:
     precio_max = getattr(cfg, "PRECIO_MAX_BLACK_FRIDAY_EUR", 3500)
     dto_min = getattr(cfg, "DESCUENTO_MIN_BLACK_FRIDAY_PCT", 35.0)
 
-    if bf_notificadas > 0:
+    if bf_notificadas > 0 and resumen.get("black_friday_respaldo_enviado"):
+        resp_cnt = resumen.get("black_friday_respaldo_count", 0)
+        res_linea = (
+            f"🔥 Chollos exclusivos enviados: *{bf_notificadas}* (elegibles: *{bf_encontradas}*) "
+            f"+ 📊 Top *{resp_cnt}* complemento nuevas/seminuevas"
+        )
+    elif bf_notificadas > 0:
         res_linea = f"🔥 Chollos exclusivos enviados: *{bf_notificadas}* (elegibles: *{bf_encontradas}*)"
     elif resumen.get("black_friday_respaldo_enviado"):
-        res_linea = "📊 *0* en presupuesto <= 3.500 € — enviado *Informe Top 3 más interesantes fuera de tope*"
+        resp_cnt = resumen.get("black_friday_respaldo_count", 3)
+        res_linea = f"📊 Enviado *Informe Top {resp_cnt} nuevas/seminuevas más interesantes* (sin repetir ya mostradas)"
     elif bf_encontradas > 0:
         res_linea = f"✅ *{bf_encontradas}* elegible(s) ya notificada(s) previamente (sin rebaja extra)"
     else:
@@ -536,10 +543,10 @@ def enviar_heartbeat_black_friday(resumen: dict) -> bool:
     )
 
 
-def formatear_informe_respaldo_black_friday(items: list) -> str:
+def formatear_informe_respaldo_black_friday(items: list, subtitulo: Optional[str] = None) -> str:
     """
     Formatea un informe consolidado con el Top N (hasta 3) de bicis ligeras más
-    interesantes encontradas cuando 0 unidades cumplen el tope estricto <= 3.500 €.
+    interesantes encontradas (nuevas/seminuevas <= 2.000 km) para completar el canal.
     Cada elemento es (bici, dto_pct, nota_perito, motivo_fuera).
     """
     bloques = []
@@ -555,34 +562,43 @@ def formatear_informe_respaldo_black_friday(items: list) -> str:
         peso_tag = "~" if getattr(bici, "_peso_estimado", False) else ""
         peso_txt = f"{peso_tag}{bici.peso_kg:.1f} kg" if bici.peso_kg is not None else "peso n/d"
         km_txt = "NUEVA 0 km" if bici.km == 0 else (f"EXPO {bici.km} km" if (bici.km or 0) <= 50 else f"{bici.km} km")
+        bat_txt = f"{bici.bateria_wh} Wh" if bici.bateria_wh is not None else "bat. n/d"
         motivo_seguro = str(motivo_fuera).replace("_", "-").replace("*", "").replace("`", "'")
 
         bloques.append(
             f"*{idx}. {bici.titulo}* ({bici.sitio})\n"
             f"💰 *{bici.precio:.0f} €*{linea_pvp}\n"
-            f"⚙️ {km_txt} | ⚖️ {peso_txt} | 🔋 {bici.bateria_wh} Wh | ⚡ {bici.motor or 'n/d'} | 📏 {bici.talla}\n"
+            f"⚙️ {km_txt} | ⚖️ {peso_txt} | 🔋 {bat_txt} | ⚡ {bici.motor or 'n/d'} | 📏 {bici.talla}\n"
             f"⚠️ _Fuera de filtro:_ {motivo_seguro}\n"
             f"🔗 [Ver oferta en {bici.sitio}]({bici.url})"
         )
 
     cuerpo = "\n\n".join(bloques)
+    contexto = subtitulo or (
+        f"Doble suspensión, Talla {cfg.TALLA_OBJETIVO}, < 21 kg, batería > {cfg.BATERIA_MIN_WH} Wh, "
+        f"hasta {cfg.PRECIO_MAX_BLACK_FRIDAY_EUR} € (respaldo hasta {getattr(cfg, 'PRECIO_RESPALDO_BLACK_FRIDAY_EUR', 4000)} €), "
+        f"priorizando XC y como respaldo Trail ligera / MTB (Wallapop <= 50 km Fuenlabrada / nuevas online España):"
+    )
     return (
-        f"📊⚡ *Black Bike Beast — Top {len(items)} XC Puro Más Interesantes (Fuera de Tope / Criterio)*\n"
-        f"_Solo e-MTB XC/Downcountry (<= {getattr(cfg, 'RECORRIDO_MAX_XC_MM', 130)} mm), Talla {cfg.TALLA_OBJETIVO}, doble suspensión y < 21 kg. "
-        f"Ninguna unidad cumplió hoy todos los límites estrictos (<= 3.500 €, km <= 50, >= 500 Wh, -35% PVP):_\n\n"
+        f"📊⚡ *Black Bike Beast — Top {len(items)} Nuevas y Seminuevas Más Interesantes*\n"
+        f"_{contexto}_\n\n"
         f"{cuerpo}"
     )
 
 
-def enviar_informe_respaldo_black_friday(items: list, silencioso: bool = False) -> bool:
-    """Envía al segundo bot el Top 3 de bicicletas más interesantes fuera de presupuesto."""
+def enviar_informe_respaldo_black_friday(
+    items: list,
+    silencioso: bool = False,
+    subtitulo: Optional[str] = None,
+) -> bool:
+    """Envía al segundo bot el Top 3 de bicicletas nuevas/seminuevas más interesantes."""
     if not items:
         return False
     token_bf = getattr(cfg, "TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", "")
     chat_bf = getattr(cfg, "TELEGRAM_CHAT_ID_BLACK_FRIDAY", "") or getattr(cfg, "TELEGRAM_CHAT_ID", "")
     if not token_bf or not chat_bf:
         return False
-    texto = formatear_informe_respaldo_black_friday(items)
+    texto = formatear_informe_respaldo_black_friday(items, subtitulo=subtitulo)
     return _enviar_telegram(
         token=token_bf,
         chat_id=chat_bf,

@@ -359,7 +359,11 @@ def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str, km_ya_conocido: bool
                     detalle["bateria_wh"] += extender
 
     # --- Kilometraje ---
-    if "km" not in detalle:
+    es_tienda_nueva_ficha = (
+        sitio_nombre.lower() == "mammoth"
+        or (sitio_nombre.lower() == "buhobike" and "segunda-mano" not in url.lower())
+    )
+    if "km" not in detalle and not (es_tienda_nueva_ficha and km_ya_conocido):
         km = _extraer_km(texto_completo)
         if km is not None:
             detalle["km"] = km
@@ -731,7 +735,7 @@ def _extraer_range_extender(texto: str) -> Optional[int]:
     texto_lower = texto_norm.lower()
 
     terminos_extender = (
-        "extender", "range extender", "batería externa", "bateria externa",
+        "extender", "extensor", "range extender", "batería externa", "bateria externa",
         "batería adicional", "bateria adicional", "batería suplementaria", "bateria suplementaria",
         "segunda batería", "segunda bateria", "2 baterías", "2 baterias",
         "batería extra", "bateria extra", "xpro", "x-pro", "powermore",
@@ -742,7 +746,7 @@ def _extraer_range_extender(texto: str) -> Optional[int]:
     palabras_exclusion = PALABRAS_EXCLUSION_EXTENDER
 
     termino_bateria = (
-        r"(?:range\s*extender|extender|"
+        r"(?:range\s*extender|extender|extensor(?:\s+de\s+(?:rango|bater[ií]a))?|"
         r"bater[ií]a\s+(?:externa|adicional|extra|suplementaria|secundaria)|"
         r"(?:segunda|2ª|2a)\s+bater[ií]a|"
         r"x-?pro|powermore)"
@@ -788,10 +792,10 @@ def _extraer_range_extender(texto: str) -> Optional[int]:
 
     # 2. Patrón de inclusión nominal sin Wh explícito -> inferir por marca/modelo
     patrones_inclusion = (
-        r"\+\s*(?:range\s*extender|extender|bater[ií]a\s+externa|x-?pro|powermore)\b",
-        r"\bincluye\s+(?:range\s*extender|extender|bater[ií]a\s+externa|segunda\s+bater[ií]a|x-?pro|powermore)\b",
-        r"\bcon\s+(?:range\s*extender|extender|bater[ií]a\s+externa|bater[ií]a\s+adicional|x-?pro|powermore)\b",
-        r"\b(?:range\s*extender|extender|bater[ií]a\s+externa|x-?pro|powermore)\s+incluid[oa]\b",
+        r"\+\s*(?:range\s*extender|extender|extensor(?:\s+de\s+(?:rango|bater[ií]a))?|bater[ií]a\s+externa|x-?pro|powermore)\b",
+        r"\bincluye\s+(?:range\s*extender|extender|extensor(?:\s+de\s+(?:rango|bater[ií]a))?|bater[ií]a\s+externa|segunda\s+bater[ií]a|x-?pro|powermore)\b",
+        r"\bcon\s+(?:range\s*extender|extender|extensor(?:\s+de\s+(?:rango|bater[ií]a))?|bater[ií]a\s+externa|bater[ií]a\s+adicional|x-?pro|powermore)\b",
+        r"\b(?:range\s*extender|extender|extensor(?:\s+de\s+(?:rango|bater[ií]a))?|bater[ií]a\s+externa|x-?pro|powermore)\s+incluid[oa]\b",
         r"\b(?:2|dos)\s+bater[ií]as\s+incluidas\b",
     )
 

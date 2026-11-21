@@ -114,21 +114,32 @@ _MODELOS_DOBLE_RE = re.compile(
 
 _UNICORNIOS_NACIONALES_PATRONES = {
     "bh ilynx race": re.compile(r"\bi[\-\s]?lynx\s+race\b", re.IGNORECASE),
+    "bh ilynx trail": re.compile(r"\bi[\-\s]?lynx\+?\s+trail\b", re.IGNORECASE),
+    "orbea rise": re.compile(r"\borbea\s+rise\b", re.IGNORECASE),
+    "berria mako": re.compile(r"\bberria\s+mako\b|\bmako\s+hybrid\b", re.IGNORECASE),
+    "cannondale moterra sl": re.compile(r"\bmoterra\s+sl\b", re.IGNORECASE),
     "wilier urta hybrid": re.compile(r"\bwilier\s+urta\b|\burta\s+hybrid\b", re.IGNORECASE),
     "scott lumen": re.compile(r"\bscott\s+lumen\b", re.IGNORECASE),
     "focus vam2": re.compile(r"\bfocus\s+vam\s*2?(?:\s*sl|\s*8\.|\s*9\.)?\b", re.IGNORECASE),
+    "focus jam2 sl": re.compile(r"\bfocus\s+jam\s*2\s*sl\b", re.IGNORECASE),
     "bmc fourstroke amp": re.compile(r"\bbmc\s+fourstroke\b|\bfourstroke\s+amp\b", re.IGNORECASE),
 }
 
 
 def _extraer_pvp_wallapop(texto: str, precio: float) -> Optional[float]:
     """Extrae el PVP original si el vendedor lo declara explícitamente en el texto."""
-    m = re.search(
+    patrones_pvp = (
         r"\bp\.?v\.?p\.?(?:\s+en\s+20\d{2}|\s+original|\s+nuevo|\s+de|\s+aprox\.?)?\s*[:\-]?\s*"
-        r"(?:de\s+)?(\d{1,2}[.,]\d{3}|\d{4,5})(?:[.,]\d{2})?\s*(?:€|eur|euros)?\b",
-        texto or "",
-        re.IGNORECASE,
+        r"(?:de\s+)?(\d{1,2}[.,]\d{3}|\d{4,5})(?:[.,]\d{2})?\s*(?:€|\b(?:eur|euros)\b)?",
+        r"\b(?:antes|cost[oó](?:\s+nueva)?|me\s+cost[oó](?:\s+nueva)?|nueva\s+cost[oó]|"
+        r"precio\s+(?:nueva|en\s+tienda|original)|valorada\s+en)\s*[:\-]?\s*"
+        r"(\d{1,2}[.,]\d{3}|\d{4,5})(?:[.,]\d{2})?\s*(?:€|\b(?:eur|euros)\b)",
     )
+    m = None
+    for pat in patrones_pvp:
+        m = re.search(pat, texto or "", re.IGNORECASE)
+        if m:
+            break
     if not m:
         return None
     raw = m.group(1)
@@ -261,7 +272,7 @@ class WallapopScraper(BaseScraper):
             "longitude": cfg.WALLAPOP_LON,
             "distance_in_km": cfg.WALLAPOP_RADIO_KM,
             "min_sale_price": cfg.PRECIO_MIN_EUR,
-            "max_sale_price": 3500,  # Incluye Zona de Vigilancia (3.301-3.500 €)
+            "max_sale_price": getattr(cfg, "PRECIO_RESPALDO_BLACK_FRIDAY_EUR", 4000),
         }
 
         pagina = 0
@@ -312,7 +323,12 @@ class WallapopScraper(BaseScraper):
     def _buscar_unicornios_nacionales(
         self, ids_vistos: set, bicis_locales: List[Bicicleta]
     ) -> List[Bicicleta]:
-        """Busca unicornios XC específicos en toda España deduplicando clones multi-ciudad."""
+        """
+        Busca modelos ligeros clave por keyword en Wallapop:
+        - Por defecto (WALLAPOP_PERMITIR_NACIONAL=False): restringido estrictamente a <= 50 km de Fuenlabrada.
+        - Si WALLAPOP_PERMITIR_NACIONAL=True: permite alcance nacional deduplicando por cercanía.
+        """
+        permitir_nac = bool(getattr(cfg, "WALLAPOP_PERMITIR_NACIONAL", False))
         queries = getattr(cfg, "WALLAPOP_UNICORN_QUERIES", [])
         if not queries:
             return []
@@ -326,6 +342,10 @@ class WallapopScraper(BaseScraper):
         nacionales_por_clave: Dict[int, tuple] = {}
         orden_claves: List[int] = []
         seq = 0
+        precio_tope_kw = max(
+            int(getattr(cfg, "PRECIO_MAX_BLACK_FRIDAY_EUR", 3500)),
+            int(getattr(cfg, "PRECIO_RESPALDO_BLACK_FRIDAY_EUR", 4000)),
+        )
 
         for kw in queries:
             regex_modelo = _UNICORNIOS_NACIONALES_PATRONES.get(kw.lower())
@@ -336,10 +356,12 @@ class WallapopScraper(BaseScraper):
                 "subcategory_ids": WALLAPOP_SUBCATEGORIA_ELECTRICAS,
                 "keywords": kw,
                 "min_sale_price": cfg.PRECIO_MIN_EUR,
-                "max_sale_price": cfg.PRECIO_MAX_BLACK_FRIDAY_EUR,
+                "max_sale_price": precio_tope_kw,
                 "latitude": cfg.WALLAPOP_LAT,
                 "longitude": cfg.WALLAPOP_LON,
             }
+            if not permitir_nac:
+                params_q["distance_in_km"] = cfg.WALLAPOP_RADIO_KM
             data = self._obtener_pagina_api(params_q)
             if not data:
                 continue
@@ -361,7 +383,7 @@ class WallapopScraper(BaseScraper):
                 ids_vistos.add(item_id)
 
                 try:
-                    bici = self._parsear_item(item, permitir_nacional=True)
+                    bici = self._parsear_item(item, permitir_nacional=permitir_nac)
                 except Exception:
                     continue
                 if bici is None:
@@ -436,7 +458,10 @@ class WallapopScraper(BaseScraper):
             )
         except (TypeError, ValueError):
             return None
-        if not permitir_nacional and dist_km > float(cfg.WALLAPOP_RADIO_KM):
+        permitir_fuera_radio = bool(
+            permitir_nacional and getattr(cfg, "WALLAPOP_PERMITIR_NACIONAL", False)
+        )
+        if not permitir_fuera_radio and dist_km > float(cfg.WALLAPOP_RADIO_KM):
             return None
 
         titulo = self.limpiar_texto(item.get("title") or "") or ""
@@ -480,11 +505,20 @@ class WallapopScraper(BaseScraper):
         if range_extender_wh and bateria_wh is not None and bateria_wh <= 600:
             bateria_wh += range_extender_wh
 
+        es_ocasion = bool(
+            (item.get("is_refurbished") or {}).get("flag")
+            or re.search(
+                r"\b(?:reacondicionad[oa]s?|refurbished|segunda\s+mano|valor\s+de\s+recompra|medio\s+uso|de\s+ocasi[oó]n)\b",
+                texto_completo,
+                re.IGNORECASE,
+            )
+        )
+
         salud_pct, ciclos_bat = _extraer_salud_bateria(texto_completo)
         km = _extraer_km(texto_completo)
-        if km is None and re.search(r"\bkm\.?\s*0\b", texto_completo, re.IGNORECASE):
+        if km is None and not es_ocasion and re.search(r"\bkm\.?\s*0\b", texto_completo, re.IGNORECASE):
             km = 0
-        if km is None:
+        if km is None and not es_ocasion:
             for m_est in re.finditer(
                 r"\b(?:sin\s+estrenar|nueva\s+a\s+estrenar|a\s+estrenar)\b",
                 texto_completo,
@@ -497,6 +531,34 @@ class WallapopScraper(BaseScraper):
                 ):
                     km = 0
                     break
+        if (
+            km is None
+            and not es_ocasion
+            and re.search(
+                r"\b(?:oferta\s+[uú]ltima\s+unidad|[uú]ltima\s+unidad|bicicleta\s+nueva|bici\s+nueva)\b",
+                texto_completo,
+                re.IGNORECASE,
+            )
+            and not re.search(
+                r"\b(?:usad[ao]|seminuev[ao]|como\s+nueva|casi\s+nueva|salidas?|rutas?|temporadas?)\b",
+                texto_completo,
+                re.IGNORECASE,
+            )
+        ):
+            km = 0
+        if km is None and not es_ocasion:
+            if (
+                re.search(r"\bmotor\s+a\s+estrenar\b", texto_completo, re.IGNORECASE)
+                and ciclos_bat is not None
+                and 0 < ciclos_bat <= 10
+            ):
+                km = ciclos_bat * 50
+            elif re.search(
+                r"\b(?:utilizada\s+en\s+la\s+talajara|usada\s+una\s+(?:sola\s+)?vez|una\s+sola\s+salida|1\s+sola\s+salida)\b",
+                texto_completo,
+                re.IGNORECASE,
+            ):
+                km = 120
 
         ano = _extraer_ano(texto_completo)
         peso_kg = _extraer_peso(texto_completo)
@@ -572,4 +634,5 @@ class WallapopScraper(BaseScraper):
             ubicacion=ubicacion,
             imagenes=imagenes or None,
             tiene_factura=tiene_factura,
+            es_ocasion=es_ocasion,
         )
