@@ -405,3 +405,37 @@ class BaseScraper(ABC):
                 return True
 
         return False
+
+
+_PATRONES_NO_MTBD_COMUNES = (
+    "carretera", "gravel", "gravelx", "urbana", "paseo",
+    "trekking", "plegable", "rigida", "rígida", "hardtail",
+    "infantil", "junior", "kids", "24\"", "24''", "rookie",
+    "gain", "e-sensium", "esensium", "keram", "marlin+",
+    "aspect", "scale", "talon", "ebig", "bignine", "alltrack",
+    "reach ht", "reach-ht", "overvolt ht", "overvolt-ht",
+)
+
+
+def parsear_precio_euro(texto: Optional[str]) -> float:
+    """Extrae un importe en EUR manejando separadores de miles y coma decimal."""
+    match = re.search(r"(\d[\d\.\s,\u00A0]*\d|\d+)", (texto or "").strip())
+    if not match:
+        return 0.0
+    digitos = "".join(c for c in match.group(1) if c.isdigit() or c in ".,")
+    if "," in digitos:
+        digitos = digitos.replace(".", "").replace(",", ".")
+    elif digitos.count(".") >= 1 and all(len(p) == 3 for p in digitos.split(".")[1:]):
+        digitos = digitos.replace(".", "")
+    try:
+        return float(digitos)
+    except ValueError:
+        return 0.0
+
+
+def es_modelo_no_mtb_doble(titulo: str, url: str = "") -> bool:
+    """Detecta bicicletas rígidas, carretera, gravel, urbanas o infantiles."""
+    txt = f"{titulo} {url}".lower()
+    return any(k in txt for k in _PATRONES_NO_MTBD_COMUNES) or (
+        "powerfly" in txt and "fs" not in txt and "+" not in txt
+    )

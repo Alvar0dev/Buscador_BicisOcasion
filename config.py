@@ -90,6 +90,20 @@ SITIOS: List[SitioObjetivo] = [
         garantia_anos=3,
         es_tienda_nueva=True,
     ),
+    SitioObjetivo(
+        nombre="Escapa",
+        base_url="https://www.escapa.com",
+        seccion_emtb="https://www.escapa.com/electricas/electrica-btt/btt-doble?sort=priceasc",
+        garantia_anos=3,
+        es_tienda_nueva=True,
+    ),
+    SitioObjetivo(
+        nombre="Fabregues",
+        base_url="https://fabreguesbicicletas.com",
+        seccion_emtb="https://fabreguesbicicletas.com/es/bicicletas/electricas/e-bike-btt/dobles?order=product.price.asc",
+        garantia_anos=3,
+        es_tienda_nueva=True,
+    ),
 ]
 
 _TOKENS_NO_NUEVA = (

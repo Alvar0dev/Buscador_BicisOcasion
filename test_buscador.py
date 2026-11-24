@@ -3383,6 +3383,95 @@ def test_t3_bicimarket_scraper():
     assert bicis[2].suspension_trasera == "no"
 
 
+def test_t4_escapa_y_fabregues_scrapers():
+    """T4: EscapaScraper (BigCommerce + Avísame) y FabreguesScraper (PrestaShop + Test Ride)."""
+    from bs4 import BeautifulSoup
+    from main import SCRAPERS
+    from scrapers.escapa import EscapaScraper
+    from scrapers.fabregues import FabreguesScraper
+
+    sitio_es = next(s for s in cfg.SITIOS if s.nombre == "Escapa")
+    sitio_fb = next(s for s in cfg.SITIOS if s.nombre == "Fabregues")
+    assert cfg.SITIOS.index(sitio_es) == 7
+    assert cfg.SITIOS.index(sitio_fb) == 8
+    assert sitio_es.es_tienda_nueva is True and sitio_es.garantia_anos == 3
+    assert sitio_fb.es_tienda_nueva is True and sitio_fb.garantia_anos == 3
+    assert "Escapa" in SCRAPERS and "Fabregues" in SCRAPERS
+
+    html_es = """
+    <div>
+      <article class="card has-sale-price">
+        <a class="card-link" data-product-id="68127" href="https://www.escapa.com/electricas/bicicleta-orbea-rise-sl-h30-2026/"></a>
+        <h4 class="card-title"><a href="https://www.escapa.com/electricas/bicicleta-orbea-rise-sl-h30-2026/">Bicicleta Orbea Rise SL H30 2026</a></h4>
+        <div class="price-section price-section--withTax non-sale-price--withTax">
+          <div class="old-price"><span class="price price--non-sale">4.699,00€</span></div>
+        </div>
+        <div class="price-section price-section--withTax">
+          <span class="price red">3.524,00€</span>
+        </div>
+      </article>
+      <article class="card">
+        <a class="card-link" data-product-id="72630" href="/electricas/bicicleta-scott-lumen-910/"></a>
+        <h4 class="card-title"><a href="/electricas/bicicleta-scott-lumen-910/">Bicicleta Scott Lumen eRIDE 910</a></h4>
+        <div class="price-section price-section--withTax"><span class="price price--withTax">3.899,00€</span></div>
+      </article>
+      <article class="card">
+        <a class="card-link" data-product-id="92985" href="/electricas/bicicleta-bh-ilynx-agotada/"></a>
+        <h4 class="card-title"><a>BH iLynx Sin Stock</a></h4>
+        <div class="price-section price-section--withTax"><span class="price price--withTax">3.899,90€</span></div>
+        <a class="button button--primary">Avísame</a>
+      </article>
+    </div>
+    """
+    sc_es = EscapaScraper(sitio_es)
+    assert sc_es.usar_requests_primero is True
+    assert "sort=priceasc" in sc_es.construir_url_pagina(2) and "page=2" in sc_es.construir_url_pagina(2)
+    bicis_es = sc_es._extraer_de_sopa(BeautifulSoup(html_es, "html.parser"), url_listado=sitio_es.seccion_emtb)
+    assert len(bicis_es) == 2
+    assert bicis_es[0].bici_id == "escapa-68127"
+    assert bicis_es[0].precio == 3524.0 and bicis_es[0].pvp_original == 4699.0
+    assert bicis_es[0].km == 0 and bicis_es[0].talla is None and bicis_es[0].garantia_anos == 3
+    assert bicis_es[1].bici_id == "escapa-72630" and bicis_es[1].precio == 3899.0 and bicis_es[1].pvp_original is None
+
+    html_fb = """
+    <div>
+      <article class="product-miniature" data-id-product="694120">
+        <a class="thumbnail product-thumbnail" href="https://fabreguesbicicletas.com/es/dobles/bicicleta-bh-electrica-ilynx-trail-79-2026-ec796#/35-talla-xl/123-color-azul"></a>
+        <h2 class="h3 product-title">
+          <a href="https://fabreguesbicicletas.com/es/dobles/bicicleta-bh-electrica-ilynx-trail-79-2026-ec796#/35-talla-xl/123-color-azul">Bicicleta BH Eléctrica Ilynx Trail 7.9 2026 |EC796|</a>
+        </h2>
+        <div class="product-price-and-shipping">
+          <span class="product-price">2.974,92 €</span>
+          <span class="regular-price">3.500,00 €</span>
+        </div>
+      </article>
+      <article class="product-miniature" data-id-product="700555">
+        <h2 class="h3 product-title">
+          <a href="https://fabreguesbicicletas.com/es/dobles/bicicleta-test-ride-orbea-rise-m10-2025#/33-talla-m">Bicicleta TEST RIDE Orbea Rise M10 2025 |S397|</a>
+        </h2>
+        <div class="product-price-and-shipping">
+          <span class="product-price">3.799,00 €</span>
+          <span class="regular-price">7.999,00 €</span>
+        </div>
+      </article>
+    </div>
+    """
+    sc_fb = FabreguesScraper(sitio_fb)
+    bicis_fb = sc_fb._extraer_de_sopa(BeautifulSoup(html_fb, "html.parser"), url_listado=sitio_fb.seccion_emtb)
+    assert len(bicis_fb) == 2
+    assert bicis_fb[0].bici_id == "fabregues-694120"
+    assert bicis_fb[0].titulo == "Bicicleta BH Eléctrica Ilynx Trail 7.9 2026"
+    assert bicis_fb[0].talla is None, "No debe fijar XL desde el fragmento por defecto"
+    assert "#" not in bicis_fb[0].url
+    assert bicis_fb[0].km == 0 and bicis_fb[0].precio == 2974.92 and bicis_fb[0].pvp_original == 3500.0
+    assert bicis_fb[1].km is None, "Unidades TEST RIDE no deben asumir 0 km"
+    assert cfg.es_sitio_tienda_nueva("Fabregues", bicis_fb[1].url, bicis_fb[1].titulo) is False
+
+    from evaluator import es_full_power_o_pesada
+    for tit_fp in ("Bicicleta Eléctrica Mondraker SCREE S 600 2026", "Raymon TrailRay 170 Ultra", "Raymon Ridok Comp 2027"):
+        assert es_full_power_o_pesada(bici_prueba(sitio="Fabregues", titulo=tit_fp))[0] is True
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -3418,4 +3507,5 @@ if __name__ == "__main__":
     test_t1_centralizacion_tienda_nueva_stock_talla_y_frenos()
     test_t2_sanferbike_y_prestashop_base()
     test_t3_bicimarket_scraper()
+    test_t4_escapa_y_fabregues_scrapers()
     print("Todas las pruebas pasaron (GREEN).")

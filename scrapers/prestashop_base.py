@@ -11,16 +11,7 @@ from bs4 import BeautifulSoup
 
 import config as cfg
 from models import Bicicleta
-from scraper_base import BaseScraper
-
-_PATRONES_NO_MTBD = (
-    "carretera", "gravel", "gravelx", "urbana", "paseo",
-    "trekking", "plegable", "rigida", "rígida", "hardtail",
-    "infantil", "junior", "kids", "24\"", "24''", "rookie",
-    "gain", "e-sensium", "esensium", "keram", "marlin+",
-    "aspect", "scale", "talon", "ebig", "bignine", "alltrack",
-    "reach ht", "reach-ht", "overvolt ht", "overvolt-ht",
-)
+from scraper_base import BaseScraper, parsear_precio_euro, es_modelo_no_mtb_doble
 
 
 class PrestaShopBaseScraper(BaseScraper):
@@ -201,25 +192,11 @@ class PrestaShopBaseScraper(BaseScraper):
 
     @staticmethod
     def _es_no_mtb_doble(titulo: str, url: str) -> bool:
-        txt = f"{titulo} {url}".lower()
-        return any(k in txt for k in _PATRONES_NO_MTBD) or (
-            "powerfly" in txt and "fs" not in txt and "+" not in txt
-        )
+        return es_modelo_no_mtb_doble(titulo, url)
 
     @staticmethod
     def _parsear_precio(texto: str) -> float:
-        match = re.search(r"(\d[\d\.\s,\u00A0]*\d|\d+)", (texto or "").strip())
-        if not match:
-            return 0.0
-        digitos = "".join(c for c in match.group(1) if c.isdigit() or c in ".,")
-        if "," in digitos:
-            digitos = digitos.replace(".", "").replace(",", ".")
-        elif digitos.count(".") >= 1 and all(len(p) == 3 for p in digitos.split(".")[1:]):
-            digitos = digitos.replace(".", "")
-        try:
-            return float(digitos)
-        except ValueError:
-            return 0.0
+        return parsear_precio_euro(texto)
 
     @staticmethod
     def _extraer_ano_texto(titulo: str) -> Optional[int]:

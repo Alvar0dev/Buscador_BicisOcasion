@@ -29,13 +29,17 @@ Cuando encuentra bicicletas aptas tras superar los filtros estrictos, las audita
 
 ## ¿Qué hace este proyecto?
 
-Este script rastrea diariamente las secciones de e-MTB doble suspensión de cuatro tiendas profesionales de bicicletas con garantía oficial y los anuncios geolocalizados de Wallapop (radio de 50 km desde Fuenlabrada, Madrid):
+Este script rastrea diariamente las secciones de e-MTB doble suspensión de portales de reacondicionado, anuncios geolocalizados de Wallapop (radio de 50 km desde Fuenlabrada, Madrid) y **6 tiendas oficiales españolas online de bicicletas nuevas (`0 km`, 3 años de garantía)** para compra en toda España:
 
 - **Bike Ocasión** (bike-ocasion.com)
-- **Buhobike** (buhobike.com)
+- **Buhobike** (buhobike.com — nuevas + segunda mano)
 - **Upway** (upway.es)
-- **Mammoth Bikes** (mammothbikes.com)
-- **Wallapop** (es.wallapop.com — radio 50 km desde Fuenlabrada + búsqueda nacional dedicada para unicornios XC: `BH iLynx Race`, `Wilier Urta Hybrid`, `Scott Lumen`, `Focus VAM²`, `BMC Fourstroke AMP`)
+- **Mammoth Bikes** (mammothbikes.com — nuevas `0 km`)
+- **Sanferbike** (sanferbike.com — nuevas `0 km`, stock en vivo por talla)
+- **Bicimarket** (bicimarket.com — nuevas `0 km`, faceta Doble Suspensión)
+- **Escapa** (escapa.com — nuevas `0 km`, BigCommerce + stock por `BCData`)
+- **Fabregues Bicicletas** (fabreguesbicicletas.com — nuevas `0 km` + *Test Ride*)
+- **Wallapop** (es.wallapop.com — radio estricto `<= 50 km` desde Fuenlabrada + búsqueda local por modelos clave)
 
 Para cada bicicleta encontrada aplica una serie de filtros estrictos y, si pasa, le asigna una **Nota de Oportunidad del 0 al 10**. Solo las bicicletas con nota **≥ 8.0** se guardan en una base de datos local SQLite y se envían por Telegram para evitar alertas duplicadas (salvo que bajen de precio).
 
@@ -213,13 +217,17 @@ Consulta [CRON.md](CRON.md) para ver tanto la configuración de cronjob en Linux
 
 ## Plataformas objetivo y garantía
 
-El scraper rastrea cuatro tiendas profesionales con garantía mínima de 1–3 años más Wallapop (con auditoría de factura y sin garantía comercial cuando es particular):
+El scraper rastrea tiendas profesionales y portales de ocasión en España con garantía mínima de 1–3 años más Wallapop (con auditoría de factura y sin garantía comercial cuando es particular):
 
-- bike-ocasion.com
-- buhobike.com
-- upway.es
-- mammothbikes.com
-- wallapop.com (geo-radio `<= 50 km` desde Fuenlabrada + búsqueda nacional dedicada de unicornios XC `<= 3.500 €`)
+- bike-ocasion.com (ocasión, 1 año garantía)
+- upway.es (reacondicionadas, 1 año garantía)
+- wallapop.com (geo-radio `<= 50 km` desde Fuenlabrada)
+- buhobike.com (nuevas `0 km` + segunda mano)
+- mammothbikes.com (nuevas `0 km`, 3 años garantía)
+- sanferbike.com (nuevas `0 km`, 3 años garantía)
+- bicimarket.com (nuevas `0 km`, 3 años garantía)
+- escapa.com (nuevas `0 km`, 3 años garantía)
+- fabreguesbicicletas.com (nuevas `0 km` + *Test Ride*, 3 años garantía)
 
 ---
 
@@ -240,9 +248,14 @@ El proyecto está separado en módulos con responsabilidad única:
 | `scrapers/buhobike.py` | Adaptador específico para Buhobike con modo stealth directo (`usar_stealth_directo=True`), rastreo combinado de `/3230-electricas-trail-dobles` (págs. 1 y 2 + `?q=MODELO-LUMEN`) y segunda mano (`/9448-...`, `/3225-...`), y extracción de título, talla (`#/...-talla-m`), año, km en SKU y PVP original. |
 | `scrapers/upway.py` | Adaptador específico para Upway sobre `/collections/doble-suspension`. Extrae año, kilometraje (`km` y `< 5 km`), talla (desde el rango de estatura `1mXX-1mYY`), PVP original nuevo ('6.000 € nuevo') y doble suspensión directamente de la tarjeta en `< 1s`. |
 | `scrapers/mammoth.py` | Adaptador específico para Mammoth Bikes sobre `/bicicletas-electricas-mtb-dobles-rally-xc/c-3104` y `/bicicletas-electricas-mtb-trail-all-mountain-dobles/c-2139`. Extrae precio (`:not(.is__old)`), tallas en stock (`M`), modalidad XC, año, PVP original tachado (`.is__old`), telemetría de bici nueva (`km=0`, `SoH=100%`) y filtro anti-rígidas en `~2.5s`. |
-| `scrapers/wallapop.py` | Adaptador para API v3 de Wallapop (`source="quick_filters"`, geo-radio `<= 50 km` desde Fuenlabrada) + búsqueda nacional dedicada de los 5 unicornios XC (`_buscar_unicornios_nacionales`), dedup multi-ciudad por talla/precio, `_extraer_pvp_wallapop`, `tiene_factura` y detección segura de `km=0` / `SIN ESTRENAR`. |
-| `scrapers/enriquecedor_web.py` | Enriquecedor web paralelo con caché JSON en disco (`cache/fichas_detalle.json` y `ddg_v2:`), extracción de `<dt>/<dd>`, SoH/ciclos, recorrido (`mm`), `_extraer_km` acotado por oración sin falsos positivos de autonomía/horquilla y visión multimodal por lotes. |
-| `main.py` | Orquestador: scrape paralelo de los 5 portales → **health check** → pre-filtro con `CATALOGO_EMTB` → dedup separada (`pre_aptas` / `bf_extra` / `bf_respaldo` / `vigilancia`) → enriquecimiento → bloqueo post-enriquecimiento Trail/Enduro → selección por portal (`#1/#2/#1`) + Black Friday → SQLite → Telegram + Radar (`docs/radar_mercado.md`). |
+| `scrapers/wallapop.py` | Adaptador para API v3 de Wallapop (`source="quick_filters"`, geo-radio `<= 50 km` desde Fuenlabrada) + búsqueda local por modelo (`WALLAPOP_UNICORN_QUERIES`), dedup por talla/precio, `_extraer_pvp_wallapop`, `tiene_factura` y detección segura de `km=0` / `SIN ESTRENAR`. |
+| `scrapers/prestashop_base.py` | Base reutilizable para tiendas PrestaShop: paginación con preservación de parámetros, extracción de título sin contaminación de badges, precio/PVP, detección `TEST RIDE` / `DEMO` y guardas anti-rígidas. |
+| `scrapers/sanferbike.py` | Adaptador PrestaShop para Sanferbike con stock real por talla desde `.js-miniature-product-variants` (`data-qty-*` / `attribute-not-in-stock`) y precio desde `span.product-price[content]`. |
+| `scrapers/bicimarket.py` | Adaptador PrestaShop para Bicimarket sobre faceta de Doble Suspensión ordenada por precio ascendente (`PVPR`), delegando validación real de talla M a la ficha del producto. |
+| `scrapers/escapa.py` | Adaptador BigCommerce para Escapa con descarga HTTP directa vía `requests`, descarte preventivo de tarjetas `Avísame` y validación de stock talla `M`/`MD` por `BCData.in_stock_attributes`. |
+| `scrapers/fabregues.py` | Adaptador PrestaShop para Fabregues Bicicletas con limpieza de códigos SKU BH (`\|EC796\|`), tratamiento de unidades *Test Ride* y verificación real de talla `M`/`MD` en ficha. |
+| `scrapers/enriquecedor_web.py` | Enriquecedor web paralelo con caché JSON (`cache/fichas_detalle.json`, TTL 6h para stock en tiendas nuevas) y DuckDuckGo; extrae variantes en stock (`PrestaShop` / `BCData`), `<dt>/<dd>`, SoH/ciclos, recorrido (`mm` ignorando rotores de freno `180 mm`) y `_extraer_km` sin falsos positivos. |
+| `main.py` | Orquestador: scrape paralelo de los 9 portales → **health check** → pre-filtro con `CATALOGO_EMTB` → dedup separada → enriquecimiento → selección por portal + Black Bike Beast (`<= 3.500/4.000 €`) → SQLite → Telegram + Radar (`docs/radar_mercado.md`). |
 | `test_buscador.py` | Suite de pruebas unitarias e integración con mocks para validar filtros XC vs Trail, Fazua ampliable, unicornios XC `<= 3.500 €`, Perito `perito_v6_xc`, scrapers (incluyendo Wallapop nacional y `_extraer_km`), rotación por portal y dedup SQLite. |
 | `CRON.md` | Instrucciones para ejecutar mediante cronjob en Linux/Mac o Programador de tareas de Windows. |
 | `.env.example` | Plantilla de variables de entorno. |
