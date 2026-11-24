@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 
 import config as cfg
 from models import Bicicleta
-from scraper_base import BaseScraper, parsear_precio_euro, es_modelo_no_mtb_doble
+from scraper_base import BaseScraper, parsear_precio_euro, es_modelo_no_mtb_doble, es_unidad_test_o_demo
 
 
 class PrestaShopBaseScraper(BaseScraper):
@@ -185,10 +185,7 @@ class PrestaShopBaseScraper(BaseScraper):
 
     @staticmethod
     def _es_test_ride(titulo: str, url: str) -> bool:
-        txt = f"{titulo} {url}".lower()
-        if "test ride" in txt or "test-ride" in txt:
-            return True
-        return bool(re.search(r"\bdemo\b", txt))
+        return es_unidad_test_o_demo(titulo, url)
 
     @staticmethod
     def _es_no_mtb_doble(titulo: str, url: str) -> bool:

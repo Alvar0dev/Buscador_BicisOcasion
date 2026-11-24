@@ -147,8 +147,8 @@ def es_sitio_tienda_nueva(
 _MAPA_TALLAS = {
     "XS": "XS", "S1": "XS",
     "S": "S", "SM": "S", "SMALL": "S", "PEQUEÑA": "S", "PEQUENA": "S", "S2": "S",
-    "M": "M", "MD": "M", "S/M": "M", "S_M": "M", "M/L": "M", "M_L": "M", "ML": "M",
-    "MEDIUM": "M", "MEDIANA": "M", "S3": "M",
+    "M": "M", "MD": "M", "S/M": "M", "S_M": "M", "MEDIUM": "M", "MEDIANA": "M", "S3": "M",
+    "ML": "ML", "M/L": "ML", "M_L": "ML",
     "L": "L", "LA": "L", "LG": "L", "LARGE": "L", "GRANDE": "L", "S4": "L",
     "XL": "XL", "S5": "XL",
     "XXL": "XXL", "S6": "XXL",

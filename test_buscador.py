@@ -3178,10 +3178,10 @@ def test_t1_centralizacion_tienda_nueva_stock_talla_y_frenos():
         )
         assert _encontrar_equivalente_idx(b_nueva_col2, [b_cat]) == 0
 
-    # 2. Normalización de talla (MD -> M, SM -> S sin confundir con S/M!)
+    # 2. Normalización de talla (MD -> M, M/L -> ML fuera de M, SM -> S sin confundir con S/M)
     assert cfg.normalizar_codigo_talla("MD") == "M"
     assert cfg.normalizar_codigo_talla("S/M") == "M"
-    assert cfg.normalizar_codigo_talla("M/L") == "M"
+    assert cfg.normalizar_codigo_talla("M/L") == "ML"
     assert cfg.normalizar_codigo_talla("SM") == "S"
     assert cfg.normalizar_codigo_talla("LA") == "L"
 
@@ -3472,6 +3472,129 @@ def test_t4_escapa_y_fabregues_scrapers():
         assert es_full_power_o_pesada(bici_prueba(sitio="Fabregues", titulo=tit_fp))[0] is True
 
 
+def test_regresion_nuevas_tiendas_bordes_y_ttl():
+    """S1, S3, S4, S5, S6, S7: caché TTL 6h/#fragment, stock BC/PS, Rise SL H Alu, Test Ride y E2E Black Friday."""
+    import time
+    from bs4 import BeautifulSoup
+    from evaluator import clasificar_estado_nueva_exposicion, es_full_power_o_pesada
+    from main import _recolectar_oportunidades, _despachar_alertas_black_friday
+    from scrapers.enriquecedor_web import (
+        FICHA_TIENDA_TTL_SEG,
+        _extraer_desde_ficha_sitio,
+        _extraer_recorrido,
+        _extraer_talla,
+        _extraer_tallas_disponibles_ficha,
+    )
+    from scrapers.sanferbike import SanferbikeScraper
+    from scrapers.escapa import EscapaScraper
+
+    # S3: word boundary en 'demo', TTL 6h y caché sin fragmento
+    assert cfg.es_sitio_tienda_nueva("Bicimarket", "https://www.bicimarket.com/es/1.html", "Sin demostracion") is True
+    assert cfg.es_sitio_tienda_nueva("Bicimarket", "https://www.bicimarket.com/es/1.html", "Orbea Rise DEMO") is False
+
+    mem_cache = {}
+    html_nueva = (
+        "<html><body><main><h1>Scott Lumen</h1>"
+        "<p>Permite 100 km con una carga. Peso: 17,6 kg. Recorrido: 130 mm.</p>"
+        "<div class='product-variants-item'><span class='control-label'>Talla</span><ul>"
+        "<li><span class='radio-label'>MD</span></li></ul></div></main></body></html>"
+    )
+    with patch("scrapers.enriquecedor_web._buscar_en_cache", side_effect=lambda k: mem_cache.get(k)), \
+         patch("scrapers.enriquecedor_web._guardar_en_cache", side_effect=lambda k, v: mem_cache.__setitem__(k, v)), \
+         patch("scrapers.enriquecedor_web.SCRAPLING_AVAILABLE", True), \
+         patch("scrapers.enriquecedor_web.Fetcher.get", return_value=MagicMock(status=200, html_content=html_nueva)) as m_fetch:
+        det1 = _extraer_desde_ficha_sitio("https://fabreguesbicicletas.com/es/1-lumen#/35-talla-xl", "Fabregues", km_ya_conocido=True)
+        assert "https://fabreguesbicicletas.com/es/1-lumen" in mem_cache
+        assert "km" not in det1 and det1.get("talla") == "M"
+        _extraer_desde_ficha_sitio("https://fabreguesbicicletas.com/es/1-lumen#/10-color-rojo", "Fabregues", km_ya_conocido=True)
+        assert m_fetch.call_count == 0
+        mem_cache["https://fabreguesbicicletas.com/es/1-lumen"]["cache_ts"] = int(time.time()) - FICHA_TIENDA_TTL_SEG - 5
+        _extraer_desde_ficha_sitio("https://fabreguesbicicletas.com/es/1-lumen", "Fabregues", km_ya_conocido=True)
+        assert m_fetch.call_count == 1
+
+    # S4: _extraer_talla (preserva M/L -> ML de línea base), <label><span class='radio-label disabled'>, PS agotado, BCData
+    assert _extraer_talla("Talla M/L disponible") == "ML"
+    assert _extraer_talla("Talla MD disponible") == "M"
+    assert _extraer_tallas_disponibles_ficha(BeautifulSoup(
+        "<div class='product-variants-item'><span class='control-label'>Tallas</span><ul>"
+        "<li><label><span class='radio-label disabled'>M</span></label></li>"
+        "<li><label><span class='radio-label'>L</span></label></li></ul></div>", "html.parser"
+    )) == ("L", True)
+    assert _extraer_tallas_disponibles_ficha(BeautifulSoup(
+        "<div class='product-variants-item'><span class='control-label'>Talla</span><ul>"
+        "<li class='attribute-not-in-stock'><span class='radio-label'>M</span></li></ul></div>", "html.parser"
+    )) == (None, False)
+    assert _extraer_tallas_disponibles_ficha(BeautifulSoup(
+        "<div data-product-attribute><label class='form-label'>Talla</label>"
+        "<input type='radio' id='a1' name='attribute[1]' value='10'/><label for='a1'>M</label></div>"
+        "<script>var BCData = {\n\"product_attributes\":{\"instock\":false,\"in_stock_attributes\":[10]}};</script>", "html.parser"
+    )) == (None, False)
+    assert _extraer_recorrido("Discos SRAM Centerline 180/180 mm") is None
+    assert _extraer_recorrido("Horquilla SR Suntour XCR34 120 mm. Frenos Tektro 180/180 mm") == 120
+
+    # Orbea Rise SL H30 = Aluminio ~20.2 kg (no Carbono 18.3 kg)
+    b_sl_h = completar_con_catalogo(bici_prueba(sitio="Escapa", titulo="Bicicleta Orbea Rise SL H30 2026", cuadro_material=None, peso_kg=None, km=0), aplicar_heuristica_peso=False)
+    assert b_sl_h.cuadro_material == "Aluminio" and b_sl_h.peso_kg == 20.2
+
+    # S5 + S7: Sanferbike dedup multi-página; Escapa requests directo + DEMO km=None + prioridad PVP
+    sc_sf = SanferbikeScraper(cfg.SITIOS[5])
+    p1 = BeautifulSoup(
+        "<article class='product-miniature' data-id-product='101'><div class='product-title'><a href='/es/101.html'>BH iLynx Race 8.6</a></div>"
+        "<div class='product-price-and-shipping'><span class='product-price' content='3100.00'>3.100,00 €</span></div>"
+        "<div class='js-miniature-product-variants'><div class='product-variants-item'><p class='control-label'>Tallas</p>"
+        "<ul><li><label><input title='MD' data-qty-1='1'/></label></li></ul></div></div></article>", "html.parser"
+    )
+    p2 = BeautifulSoup(str(p1).replace("3100.00", "2999.00"), "html.parser")
+    with patch.object(sc_sf, "sopa", side_effect=[p1, p2]):
+        sf_res = sc_sf.extraer_bicicletas()
+    assert len(sf_res) == 1 and sf_res[0].precio == 2999.0
+
+    sc_es = EscapaScraper(cfg.SITIOS[7])
+    html_es = (
+        "<article class='card'><a class='card-link' data-product-id='11' href='/electricas/lumen-demo/'></a>"
+        "<h4 class='card-title'><a href='/electricas/lumen-demo/'>Scott Lumen 910 DEMO</a></h4>"
+        "<div class='price--non-sale'>6.200,00€</div>"
+        "<div class='old-price'><span class='price price--non-sale'>6.500,00€</span></div>"
+        "<div class='price-section--withTax'><span class='price red'>4.500,00€</span></div></article>"
+    )
+    with patch("scraper_base.obtener_html_requests_simple", return_value=html_es) as m_req, \
+         patch("scraper_base.Fetcher.get") as m_f_es:
+        es_res = sc_es.extraer_bicicletas()
+        assert m_req.call_count == 1 and not m_f_es.called and len(es_res) == 1
+        assert es_res[0].km is None and es_res[0].pvp_original == 6500.0
+
+    # S1: E2E Black Friday priorizando XC <=3500 > Trail <=3500 > XC respaldo <=4000 y excluyendo Full Power nuevas
+    fd_db, tmp_db = tempfile.mkstemp(suffix=".db")
+    os.close(fd_db)
+    try:
+        db = BaseDatos(ruta=tmp_db)
+        b_xc = bici_prueba(sitio="Sanferbike", bici_id="sf-xc", titulo="Scott Lumen eRIDE 910 2025", precio=3450.0, pvp_original=5999.0, url="https://www.sanferbike.com/es/lumen.html", talla="M", peso_kg=17.6, bateria_wh=540, km=0, garantia_anos=3, bateria_salud_pct=100, bateria_ciclos=0, modalidad="XC", recorrido_mm=130, componentes="Fox 34 / XT 12v")
+        b_fp = bici_prueba(sitio="Bicimarket", bici_id="bm-fp", titulo="Megamo Reason AL 05 2026", precio=3100.0, pvp_original=5000.0, url="https://www.bicimarket.com/es/reason.html", talla="M", km=0, garantia_anos=3)
+        b_resp = bici_prueba(sitio="Fabregues", bici_id="fb-resp", titulo="BH iLynx Race Carbon 8.6", precio=3850.0, pvp_original=5999.0, url="https://fabreguesbicicletas.com/es/bh.html", talla="M", peso_kg=18.2, bateria_wh=540, km=0, garantia_anos=3, bateria_salud_pct=100, bateria_ciclos=0, modalidad="XC", recorrido_mm=120, componentes="Fox 34 / XT")
+        assert es_full_power_o_pesada(b_fp)[0] is True
+        assert clasificar_estado_nueva_exposicion(b_xc)[:2] == (True, "NUEVA (0 km)")
+        tel = {}
+        with patch("main._scrapear_sitio", side_effect=lambda s: [b_xc] if s.nombre == "Sanferbike" else ([b_fp] if s.nombre == "Bicimarket" else ([b_resp] if s.nombre == "Fabregues" else []))), \
+             patch("scrapers.enriquecedor_web._buscar_en_cache", return_value=None), \
+             patch("scrapers.enriquecedor_web._guardar_en_cache"), \
+             patch("scrapers.enriquecedor_web._extraer_desde_ficha_sitio", return_value={}), \
+             patch("scrapers.enriquecedor_web.completar_desde_duckduckgo", side_effect=lambda b: b), \
+             patch("gemini_classifier.completar_desde_duckduckgo", side_effect=lambda b: b):
+            _recolectar_oportunidades(db, telemetria=tel)
+        assert [x[0].bici_id for x in tel["black_friday_pool"]] == ["sf-xc"]
+        assert [x[0].bici_id for x in tel["black_friday_respaldo_pool"]] == ["fb-resp"]
+        sent = []
+        with patch("main.enviar_black_friday", side_effect=lambda **kw: sent.append(kw["bici"].bici_id) or True), \
+             patch("main.enviar_informe_respaldo_black_friday", side_effect=lambda items, **kw: sent.extend([x[0].bici_id for x in items]) or True):
+            _despachar_alertas_black_friday(db, tel["black_friday_pool"], forzar_envio=True, bf_respaldo_pool=tel["black_friday_respaldo_pool"], bf_suplemento_pool=tel["black_friday_suplemento_pool"])
+        assert sent == ["sf-xc", "fb-resp"]
+    finally:
+        try:
+            os.unlink(tmp_db)
+        except OSError:
+            pass
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -3508,4 +3631,5 @@ if __name__ == "__main__":
     test_t2_sanferbike_y_prestashop_base()
     test_t3_bicimarket_scraper()
     test_t4_escapa_y_fabregues_scrapers()
+    test_regresion_nuevas_tiendas_bordes_y_ttl()
     print("Todas las pruebas pasaron (GREEN).")

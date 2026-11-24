@@ -231,7 +231,7 @@ def _extraer_tallas_bc(soup: BeautifulSoup) -> Tuple[Optional[str], bool, bool]:
     for sc in soup.find_all("script"):
         st = sc.string or ""
         if "BCData" in st and "product_attributes" in st:
-            m = re.search(r"var\s+BCData\s*=\s*(\{.*?\});", st)
+            m = re.search(r"var\s+BCData\s*=\s*(\{.*?\});", st, re.DOTALL)
             if m:
                 try:
                     pa = json.loads(m.group(1)).get("product_attributes", {})
@@ -301,9 +301,11 @@ def _extraer_tallas_prestashop(soup: BeautifulSoup) -> Tuple[Optional[str], bool
         hay_grupo = True
         for el in elementos:
             inp = el.select_one("input") if hasattr(el, "select_one") else None
-            lbl_sub = el.select_one("label, .radio-label, span.radio-label") if hasattr(el, "select_one") else None
+            lbl_sub = el.select_one("label") if hasattr(el, "select_one") else None
+            span_sub = el.select_one(".radio-label, span.radio-label") if hasattr(el, "select_one") else None
             txt = (
-                (lbl_sub.get_text(" ", strip=True) if lbl_sub else "")
+                (span_sub.get_text(" ", strip=True) if span_sub else "")
+                or (lbl_sub.get_text(" ", strip=True) if lbl_sub else "")
                 or (inp.get("title", "") if inp else "")
                 or el.get_text(" ", strip=True)
             )
@@ -314,7 +316,7 @@ def _extraer_tallas_prestashop(soup: BeautifulSoup) -> Tuple[Optional[str], bool
             if qtys:
                 en_stock = any(q > 0 for q in qtys)
             else:
-                en_stock = not (_tiene_marca_sin_stock(el) or _tiene_marca_sin_stock(inp) or _tiene_marca_sin_stock(lbl_sub))
+                en_stock = not any(_tiene_marca_sin_stock(n) for n in (el, inp, lbl_sub, span_sub))
             if en_stock:
                 tallas_ps.append(norm)
 
@@ -1255,9 +1257,9 @@ def _extraer_talla(texto: str) -> Optional[str]:
 
     patrones_directos = [
         r"\btalla\s*:\s*([A-Za-z0-9]+)\b",
-        r"\b(?:Talla|Size)\s*[:.\-]?\s*(XXL|XL|XS|SM|ML|S|M|L)\b",
-        r"(?<!\w)[tT]\.(?!\d)\s*(XXL|XL|XS|SM|ML|S|M|L)\b",
-        r"\b(?:Talla|T)[\s\-]+(XXL|XL|XS|SM|ML|S|M|L)\b",
+        r"\b(?:Talla|Size)\s*[:.\-]?\s*(XXL|XL|XS|SM|ML|MD|LA|LG|S|M|L)\b",
+        r"(?<!\w)[tT]\.(?!\d)\s*(XXL|XL|XS|SM|ML|MD|LA|LG|S|M|L)\b",
+        r"\b(?:Talla|T)[\s\-]+(XXL|XL|XS|SM|ML|MD|LA|LG|S|M|L)\b",
     ]
     for p in patrones_directos:
         m = re.search(p, texto, re.IGNORECASE)

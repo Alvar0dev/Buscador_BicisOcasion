@@ -439,3 +439,11 @@ def es_modelo_no_mtb_doble(titulo: str, url: str = "") -> bool:
     return any(k in txt for k in _PATRONES_NO_MTBD_COMUNES) or (
         "powerfly" in txt and "fs" not in txt and "+" not in txt
     )
+
+
+def es_unidad_test_o_demo(titulo: str, url: str = "") -> bool:
+    """True si el anuncio corresponde a unidad Test Ride o Demo (no 0 km a estrenar)."""
+    txt = f"{titulo} {url}".lower()
+    if "test ride" in txt or "test-ride" in txt:
+        return True
+    return bool(re.search(r"\bdemo\b", txt))

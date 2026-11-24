@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 
 import config as cfg
 from models import Bicicleta
-from scraper_base import BaseScraper, parsear_precio_euro, es_modelo_no_mtb_doble
+from scraper_base import BaseScraper, parsear_precio_euro, es_modelo_no_mtb_doble, es_unidad_test_o_demo
 
 
 class EscapaScraper(BaseScraper):
@@ -96,13 +96,18 @@ class EscapaScraper(BaseScraper):
                 if precio <= 0:
                     continue
 
-                old_el = card.select_one(".old-price .price.price--non-sale, .price--non-sale, .price--rrp")
+                old_el = (
+                    card.select_one(".old-price .price.price--non-sale")
+                    or card.select_one(".price--non-sale")
+                    or card.select_one(".price--rrp")
+                )
                 pvp_original = parsear_precio_euro(old_el.get_text()) if old_el else None
                 if not pvp_original or pvp_original <= precio:
                     pvp_original = None
 
                 ano_m = re.search(r"\b(20[12]\d)\b", titulo)
                 es_no_mtbd = es_modelo_no_mtb_doble(titulo, url)
+                es_demo = es_unidad_test_o_demo(titulo, url)
 
                 bicis.append(Bicicleta(
                     sitio=self.sitio.nombre,
@@ -112,9 +117,9 @@ class EscapaScraper(BaseScraper):
                     url=url,
                     talla=None,
                     ano=int(ano_m.group(1)) if ano_m else None,
-                    km=0,
-                    bateria_salud_pct=100,
-                    bateria_ciclos=0,
+                    km=None if es_demo else 0,
+                    bateria_salud_pct=None if es_demo else 100,
+                    bateria_ciclos=None if es_demo else 0,
                     suspension_trasera="no" if es_no_mtbd else "si",
                     garantia_anos=self.sitio.garantia_anos,
                     pvp_original=pvp_original,

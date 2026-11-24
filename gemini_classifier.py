@@ -180,6 +180,17 @@ CATALOGO_EMTB = [
         "componentes_default": "Fox 36 Float / Fox Float X / Shimano SLX-XT 12v",
     },
     {
+        "patrones": ["orbea rise sl h", "orbea rise sl h10", "orbea rise sl h20", "orbea rise sl h30"],
+        "peso_kg": 20.2,
+        "bateria_wh_default": 540,
+        "motor": "Shimano EP801-RS Gen2",
+        "cuadro_material": "Aluminio",
+        "suspension_trasera": "si",
+        "modalidad": "Trail",
+        "recorrido_mm": 140,
+        "componentes_default": "Fox 34 Float / Shimano Deore-SLX 12v",
+    },
+    {
         "patrones": [
             "orbea rise m10", "orbea rise m15", "orbea rise m20", "orbea rise m-team", "orbea rise m-ltd",
             "orbea rise sl m10", "orbea rise sl m20", "orbea rise m-pro", "orbea rise carbon", "orbea rise sl",
