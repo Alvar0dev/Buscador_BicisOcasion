@@ -147,9 +147,11 @@ class PrestaShopBaseScraper(BaseScraper):
         txt_title = self.limpiar_texto(link_el.get("title")) or ""
         txt_img = self.limpiar_texto(img_el.get("alt")) if img_el else ""
 
-        candidatos = [t for t in (txt_title, txt_a, txt_img) if t and not t.endswith("...")]
-        if candidatos:
-            titulo = max(candidatos, key=len)
+        candidatos_enlace = [t for t in (txt_title, txt_a) if t and not t.endswith("...")]
+        if candidatos_enlace:
+            titulo = max(candidatos_enlace, key=len)
+        elif txt_img and not txt_img.endswith("..."):
+            titulo = txt_img
         else:
             titulo = txt_title or txt_a or (txt_img or None)
         return titulo, href
@@ -193,7 +195,9 @@ class PrestaShopBaseScraper(BaseScraper):
     @staticmethod
     def _es_test_ride(titulo: str, url: str) -> bool:
         txt = f"{titulo} {url}".lower()
-        return "test ride" in txt or "test-ride" in txt
+        if "test ride" in txt or "test-ride" in txt:
+            return True
+        return bool(re.search(r"\bdemo\b", txt))
 
     @staticmethod
     def _es_no_mtb_doble(titulo: str, url: str) -> bool:

@@ -3332,6 +3332,57 @@ def test_t2_sanferbike_y_prestashop_base():
         assert es_full_power_o_pesada(bici_prueba(sitio="Sanferbike", titulo=tit_sf))[0] is True
 
 
+def test_t3_bicimarket_scraper():
+    """T3: BicimarketScraper sobre PrestaShopBaseScraper (PVPR, faceta Doble Suspensión, talla=None para ficha)."""
+    from bs4 import BeautifulSoup
+    from main import SCRAPERS
+    from scrapers.bicimarket import BicimarketScraper
+
+    sitio_bm = next(s for s in cfg.SITIOS if s.nombre == "Bicimarket")
+    assert cfg.SITIOS.index(sitio_bm) == 6
+    assert sitio_bm.es_tienda_nueva is True and sitio_bm.garantia_anos == 3
+    assert "Bicimarket" in SCRAPERS
+
+    html_bm = """
+    <div>
+      <article class="product-miniature" data-id-product="54681">
+        <a class="product-thumbnail" href="/es/bicicleta-electrica/ebike-mtb-29/54681-bh-ilynx-trail-carbon-8-7.html">
+          <img alt="eBike MTB 29 BH iLynx Trail Carbon 8.7" />
+        </a>
+        <h3 class="product-title"><a href="/es/bicicleta-electrica/ebike-mtb-29/54681-bh-ilynx-trail-carbon-8-7.html">BH iLynx Trail Carbon 8.7</a></h3>
+        <div class="product-price-and-shipping">
+          <span class="price">3.499&nbsp;€</span>
+          <span class="regular-price">PVPR: 6.300&nbsp;€</span>
+        </div>
+      </article>
+      <article class="product-miniature" data-id-product="65558">
+        <a class="product-thumbnail" href="/es/bicicleta-electrica/ebike-mtb-29/65558-pardus-demo.html">
+          <img alt="eBike MTB 29 Pardus E-Cyclone S3 Avinox M2 2027" />
+        </a>
+        <h3 class="product-title"><a href="/es/bicicleta-electrica/ebike-mtb-29/65558-pardus-demo.html">Pardus E-Cyclone S3 Avinox M2 DEMO</a></h3>
+        <div class="product-price-and-shipping"><span class="price">3.999&nbsp;€</span></div>
+      </article>
+      <article class="product-miniature" data-id-product="90001">
+        <h3 class="product-title"><a href="/es/90001-scale-rigida.html">Scott Scale Rígida eBike</a></h3>
+        <div class="product-price-and-shipping"><span class="price">2.200&nbsp;€</span></div>
+      </article>
+    </div>
+    """
+    sc = BicimarketScraper(sitio_bm)
+    u2 = sc.construir_url_pagina(2)
+    assert "order=product.price.asc" in u2 and "page=2" in u2 and "Doble" in u2
+    bicis = sc._extraer_de_sopa(BeautifulSoup(html_bm, "html.parser"), url_listado=sitio_bm.seccion_emtb)
+    assert len(bicis) == 3
+    assert bicis[0].bici_id == "bicimarket-54681"
+    assert bicis[0].titulo == "BH iLynx Trail Carbon 8.7", f"Título no debe contaminarse con img alt: {bicis[0].titulo}"
+    assert bicis[0].precio == 3499.0 and bicis[0].pvp_original == 6300.0
+    assert bicis[0].talla is None and bicis[0].km == 0 and bicis[0].garantia_anos == 3
+    assert bicis[0].suspension_trasera == "si"
+    assert bicis[1].titulo == "Pardus E-Cyclone S3 Avinox M2 DEMO" and bicis[1].km is None
+    assert cfg.es_sitio_tienda_nueva("Bicimarket", bicis[1].url, bicis[1].titulo) is False
+    assert bicis[2].suspension_trasera == "no"
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -3366,4 +3417,5 @@ if __name__ == "__main__":
     test_black_friday_siempre_top3_omitiendo_ya_mostradas()
     test_t1_centralizacion_tienda_nueva_stock_talla_y_frenos()
     test_t2_sanferbike_y_prestashop_base()
+    test_t3_bicimarket_scraper()
     print("Todas las pruebas pasaron (GREEN).")

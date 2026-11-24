@@ -83,6 +83,13 @@ SITIOS: List[SitioObjetivo] = [
         garantia_anos=3,
         es_tienda_nueva=True,
     ),
+    SitioObjetivo(
+        nombre="Bicimarket",
+        base_url="https://www.bicimarket.com",
+        seccion_emtb="https://www.bicimarket.com/es/585-ebike-mtb-29?q=Tipo+eBike+MTB+29-Doble+Suspensi%C3%B3n&order=product.price.asc",
+        garantia_anos=3,
+        es_tienda_nueva=True,
+    ),
 ]
 
 _TOKENS_NO_NUEVA = (
@@ -106,7 +113,7 @@ def es_sitio_tienda_nueva(
 ) -> bool:
     """True si el portal corresponde a una tienda oficial nueva (0 km) sin indicios de ocasión/test-ride."""
     txt_norm = f"{url or ''} {texto or ''}".lower()
-    if any(tok in txt_norm for tok in _TOKENS_NO_NUEVA):
+    if any(tok in txt_norm for tok in _TOKENS_NO_NUEVA) or re.search(r"\bdemo\b", txt_norm):
         return False
 
     sitio_low = (sitio or "").strip().lower()
