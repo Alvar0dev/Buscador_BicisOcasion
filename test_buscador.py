@@ -3506,11 +3506,12 @@ def test_regresion_nuevas_tiendas_bordes_y_ttl():
         det1 = _extraer_desde_ficha_sitio("https://fabreguesbicicletas.com/es/1-lumen#/35-talla-xl", "Fabregues", km_ya_conocido=True)
         assert "https://fabreguesbicicletas.com/es/1-lumen" in mem_cache
         assert "km" not in det1 and det1.get("talla") == "M"
+        assert m_fetch.call_count == 1
         _extraer_desde_ficha_sitio("https://fabreguesbicicletas.com/es/1-lumen#/10-color-rojo", "Fabregues", km_ya_conocido=True)
-        assert m_fetch.call_count == 0
+        assert m_fetch.call_count == 1
         mem_cache["https://fabreguesbicicletas.com/es/1-lumen"]["cache_ts"] = int(time.time()) - FICHA_TIENDA_TTL_SEG - 5
         _extraer_desde_ficha_sitio("https://fabreguesbicicletas.com/es/1-lumen", "Fabregues", km_ya_conocido=True)
-        assert m_fetch.call_count == 1
+        assert m_fetch.call_count == 2
 
     # S4: _extraer_talla (preserva M/L -> ML de línea base), <label><span class='radio-label disabled'>, PS agotado, BCData
     assert _extraer_talla("Talla M/L disponible") == "ML"
