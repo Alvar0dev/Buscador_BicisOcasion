@@ -34,9 +34,12 @@ except ImportError:
     SCRAPLING_AVAILABLE = False
 
 try:
-    from scraper_base import crear_proxy_rotator
+    from scraper_base import crear_proxy_rotator, obtener_html_requests_simple
 except Exception:
     crear_proxy_rotator = lambda: None
+    obtener_html_requests_simple = lambda url, timeout=15: None
+
+FICHA_TIENDA_TTL_SEG = 6 * 3600
 
 
 import threading
@@ -206,6 +209,142 @@ def _recolectar_urls_imagenes_ficha(soup: BeautifulSoup, url_ficha: str = "") ->
     return img_urls[:8]
 
 
+def _tiene_marca_sin_stock(el) -> bool:
+    """Detecta si un elemento o sus nodos internos indican variante agotada/deshabilitada."""
+    if el is None:
+        return False
+    if hasattr(el, "has_attr") and el.has_attr("disabled"):
+        return True
+    clases = " ".join(el.get("class") or []).lower() if hasattr(el, "get") else ""
+    return any(
+        tok in clases
+        for tok in ("attribute-not-in-stock", "not-in-stock", "out-of-stock", "out_of_stock", "unavailable", "no-stock", "disabled")
+    )
+
+
+def _extraer_tallas_bc(soup: BeautifulSoup) -> Tuple[Optional[str], bool, bool]:
+    """Extrae tallas en stock de fichas BigCommerce via BCData.in_stock_attributes.
+    Devuelve (talla_elegida, hay_stock, se_detecto_grupo).
+    """
+    in_stock_ids = None
+    bc_instock = True
+    for sc in soup.find_all("script"):
+        st = sc.string or ""
+        if "BCData" in st and "product_attributes" in st:
+            m = re.search(r"var\s+BCData\s*=\s*(\{.*?\});", st)
+            if m:
+                try:
+                    pa = json.loads(m.group(1)).get("product_attributes", {})
+                    if pa.get("instock") is False:
+                        bc_instock = False
+                    if isinstance(pa.get("in_stock_attributes"), list):
+                        in_stock_ids = {str(x) for x in pa.get("in_stock_attributes") or []}
+                    break
+                except Exception:
+                    pass
+
+    tallas_bc: List[str] = []
+    hay_grupo = False
+    for campo in soup.select("[data-product-attribute]"):
+        lbl = campo.select_one(".form-label")
+        lbl_txt = lbl.get_text(" ", strip=True).lower() if lbl else ""
+        inputs = campo.select("input[name^='attribute[']")
+        if not inputs:
+            continue
+        es_talla = bool(re.search(r"\b(?:talla|size|cuadro)\b", lbl_txt))
+        if not es_talla:
+            muestras = [
+                (soup.select_one(f"label[for='{inp.get('id')}']").get_text(" ", strip=True)
+                 if inp.get("id") and soup.select_one(f"label[for='{inp.get('id')}']") else "")
+                for inp in inputs
+            ]
+            es_talla = any(cfg.normalizar_codigo_talla(mt) for mt in muestras if mt)
+        if not es_talla:
+            continue
+
+        hay_grupo = True
+        for inp in inputs:
+            opt_lbl = soup.select_one(f"label[for='{inp.get('id')}']") if inp.get("id") else None
+            norm = cfg.normalizar_codigo_talla(opt_lbl.get_text(" ", strip=True) if opt_lbl else "")
+            if not norm:
+                continue
+            attr_val = str(inp.get("value", ""))
+            deshab = _tiene_marca_sin_stock(inp) or _tiene_marca_sin_stock(opt_lbl)
+            if in_stock_ids is not None and attr_val not in in_stock_ids:
+                deshab = True
+            if bc_instock and not deshab:
+                tallas_bc.append(norm)
+
+    if not hay_grupo:
+        return None, True, False
+    if not tallas_bc:
+        return None, False, True
+    return cfg.seleccionar_talla_disponible(tallas_bc), True, True
+
+
+def _extraer_tallas_prestashop(soup: BeautifulSoup) -> Tuple[Optional[str], bool, bool]:
+    """Extrae tallas en stock de variantes PrestaShop (.product-variants-item / js-miniature)."""
+    tallas_ps: List[str] = []
+    hay_grupo = False
+    for grupo in soup.select(".product-variants-item, .js-miniature-product-variants .clearfix"):
+        lbl = grupo.select_one(".control-label, p, span.control-label")
+        lbl_txt = lbl.get_text(" ", strip=True).lower() if lbl else ""
+        if any(k in lbl_txt for k in ("color", "acabado")):
+            continue
+        elementos = grupo.select("ul li") or grupo.select("option")
+        es_talla = bool(re.search(r"\b(?:talla|size|tallas)\b", lbl_txt)) or any(
+            cfg.normalizar_codigo_talla(el.get_text(" ", strip=True)) for el in elementos
+        )
+        if not es_talla or not elementos:
+            continue
+
+        hay_grupo = True
+        for el in elementos:
+            inp = el.select_one("input") if hasattr(el, "select_one") else None
+            lbl_sub = el.select_one("label, .radio-label, span.radio-label") if hasattr(el, "select_one") else None
+            txt = (
+                (lbl_sub.get_text(" ", strip=True) if lbl_sub else "")
+                or (inp.get("title", "") if inp else "")
+                or el.get_text(" ", strip=True)
+            )
+            norm = cfg.normalizar_codigo_talla(txt)
+            if not norm:
+                continue
+            qtys = [int(v) for k, v in (inp.attrs if inp else {}).items() if k.startswith("data-qty-") and str(v).isdigit()]
+            if qtys:
+                en_stock = any(q > 0 for q in qtys)
+            else:
+                en_stock = not (_tiene_marca_sin_stock(el) or _tiene_marca_sin_stock(inp) or _tiene_marca_sin_stock(lbl_sub))
+            if en_stock:
+                tallas_ps.append(norm)
+
+    if not hay_grupo:
+        return None, True, False
+    if not tallas_ps:
+        return None, False, True
+    return cfg.seleccionar_talla_disponible(tallas_ps), True, True
+
+
+def _extraer_tallas_disponibles_ficha(soup: BeautifulSoup) -> Tuple[Optional[str], bool]:
+    """
+    Inspecciona selectores de variantes en fichas PrestaShop y BigCommerce (BCData)
+    para determinar si Talla M ('M', 'MD', 'S/M', 'M/L') está realmente en stock.
+    Devuelve (talla_seleccionada_o_None, hay_stock_disponible).
+    """
+    if soup is None:
+        return None, True
+
+    talla_bc, disp_bc, hallado_bc = _extraer_tallas_bc(soup)
+    if hallado_bc:
+        return talla_bc, disp_bc
+
+    talla_ps, disp_ps, hallado_ps = _extraer_tallas_prestashop(soup)
+    if hallado_ps:
+        return talla_ps, disp_ps
+
+    return None, True
+
+
 def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str, km_ya_conocido: bool = False) -> dict:
     """
     Entra a la ficha de producto del sitio y extrae los campos que pueda:
@@ -214,46 +353,66 @@ def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str, km_ya_conocido: bool
     Devuelve un dict con los campos encontrados (puede estar parcialmente vacio).
     """
     detalle: dict = {}
-    if not SCRAPLING_AVAILABLE:
+    es_tienda_nueva_ficha = cfg.es_sitio_tienda_nueva(sitio_nombre, url)
+    url_fetch = url.split("#")[0] if "#" in url else url
+    cache_key = url_fetch if es_tienda_nueva_ficha else url
+    usar_requests_directo = "escapa.com" in url_fetch.lower()
+    if not SCRAPLING_AVAILABLE and not usar_requests_directo:
         return detalle
 
     # --- Caché: verificar si ya consultamos esta ficha antes ---
-    # Si la bicicleta no tiene km (ni en tarjeta ni en caché) y nunca se verificaron
-    # sus imágenes con Visión IA, no cortocircuitar para poder inspeccionar la galería.
-    cache_hit = _buscar_en_cache(url)
+    cache_hit = _buscar_en_cache(cache_key)
     if cache_hit:
         tiene_km_cache = _normalizar_km_existente(cache_hit.get("km")) is not None
         vision_ya_verificada = bool(cache_hit.get("km_vision_checked"))
-        if km_ya_conocido or tiene_km_cache or vision_ya_verificada or not cfg.GEMINI_API_KEY:
-            log.info(f"[Caché] Ficha ya consultada: {url} -> {list(cache_hit.keys())}")
+        cache_ts = cache_hit.get("cache_ts")
+        stock_fresco = (
+            not es_tienda_nueva_ficha
+            or (isinstance(cache_ts, (int, float)) and (time.time() - cache_ts) <= FICHA_TIENDA_TTL_SEG)
+        )
+        if stock_fresco and (km_ya_conocido or tiene_km_cache or vision_ya_verificada or not cfg.GEMINI_API_KEY):
+            log.info(f"[Caché] Ficha ya consultada: {cache_key} -> {list(cache_hit.keys())}")
             return dict(cache_hit)
-        log.info(f"[Caché] Re-analizando ficha para extraer km desde imágenes: {url}")
+        log.info(f"[Caché] Re-analizando ficha (stock/km actualizado): {cache_key}")
 
-    try:
-        rotator = crear_proxy_rotator()
-        kwargs_fetcher = {"impersonate": "chrome120", "timeout": 30}
-        kwargs_stealth = {"headless": True, "solve_cloudflare": True, "timeout": 60}
-        if rotator is not None:
-            kwargs_fetcher["proxy_rotator"] = rotator
-            kwargs_stealth["proxy_rotator"] = rotator
+    html: Optional[str] = None
+    if usar_requests_directo:
+        html = obtener_html_requests_simple(url_fetch, timeout=15)
 
-        es_buhobike = "buhobike.com" in url.lower() or sitio_nombre.lower() == "buhobike"
-        if es_buhobike:
-            page = StealthyFetcher.fetch(url, **kwargs_stealth)
-        else:
-            page = Fetcher.get(url, **kwargs_fetcher)
-            if page.status != 200:
-                # Fallback a stealth si el sitio tiene Cloudflare
-                page = StealthyFetcher.fetch(url, **kwargs_stealth)
-        if page.status != 200:
-            log.warning(f"[Enriquecedor] No se pudo abrir ficha {url} (status {page.status})")
+    if html is None:
+        if not SCRAPLING_AVAILABLE:
             return dict(cache_hit) if cache_hit else detalle
-    except Exception as e:
-        log.warning(f"[Enriquecedor] Error abriendo ficha {url}: {e}")
-        return dict(cache_hit) if cache_hit else detalle
+        try:
+            rotator = crear_proxy_rotator()
+            kwargs_fetcher = {"impersonate": "chrome120", "timeout": 30}
+            kwargs_stealth = {"headless": True, "solve_cloudflare": True, "timeout": 60}
+            if rotator is not None:
+                kwargs_fetcher["proxy_rotator"] = rotator
+                kwargs_stealth["proxy_rotator"] = rotator
 
-    html = str(page.html_content)
+            es_buhobike = "buhobike.com" in url_fetch.lower() or sitio_nombre.lower() == "buhobike"
+            if es_buhobike:
+                page = StealthyFetcher.fetch(url_fetch, **kwargs_stealth)
+            else:
+                page = Fetcher.get(url_fetch, **kwargs_fetcher)
+                if page.status != 200:
+                    page = StealthyFetcher.fetch(url_fetch, **kwargs_stealth)
+            if page.status != 200:
+                log.warning(f"[Enriquecedor] No se pudo abrir ficha {url_fetch} (status {page.status})")
+                return dict(cache_hit) if cache_hit else detalle
+            html = str(page.html_content)
+        except Exception as e:
+            log.warning(f"[Enriquecedor] Error abriendo ficha {url_fetch}: {e}")
+            return dict(cache_hit) if cache_hit else detalle
+
     soup = BeautifulSoup(html, "html.parser")
+
+    # 0. Stock real por talla antes de descomponer scripts (BCData vive en <script>)
+    talla_var, stock_var_ok = _extraer_tallas_disponibles_ficha(soup)
+    if not stock_var_ok:
+        detalle["disponible"] = False
+    elif talla_var:
+        detalle["talla"] = talla_var
 
     # 0. Recolectar URLs de imágenes de la galería antes de descomponer nodos del DOM
     img_urls_galeria = _recolectar_urls_imagenes_ficha(soup, url_ficha=url)
@@ -281,8 +440,10 @@ def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str, km_ya_conocido: bool
             if cic_dt is not None:
                 detalle["bateria_ciclos"] = cic_dt
         elif "talla" in label and "talla" not in detalle:
-            talla_limpia = val.split(":")[0].strip() if ":" in val else val.split()[0].strip()
-            if talla_limpia in ("XS", "S", "M", "L", "XL", "XXL"):
+            talla_limpia = cfg.normalizar_codigo_talla(
+                val.split(":")[0].strip() if ":" in val else val.split()[0].strip()
+            )
+            if talla_limpia:
                 detalle["talla"] = talla_limpia
         elif "motor" in label and "motor" not in detalle:
             detalle["motor"] = _extraer_motor(val) or val
@@ -359,10 +520,6 @@ def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str, km_ya_conocido: bool
                     detalle["bateria_wh"] += extender
 
     # --- Kilometraje ---
-    es_tienda_nueva_ficha = (
-        sitio_nombre.lower() == "mammoth"
-        or (sitio_nombre.lower() == "buhobike" and "segunda-mano" not in url.lower())
-    )
     if "km" not in detalle and not (es_tienda_nueva_ficha and km_ya_conocido):
         km = _extraer_km(texto_completo)
         if km is not None:
@@ -421,7 +578,9 @@ def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str, km_ya_conocido: bool
 
     # --- Guardar en caché para futuras consultas ---
     if detalle:
-        _guardar_en_cache(url, detalle)
+        detalle_cache = dict(detalle)
+        detalle_cache["cache_ts"] = int(time.time())
+        _guardar_en_cache(cache_key, detalle_cache)
 
     return detalle
 
@@ -1103,14 +1262,15 @@ def _extraer_talla(texto: str) -> Optional[str]:
     for p in patrones_directos:
         m = re.search(p, texto, re.IGNORECASE)
         if m:
-            t = m.group(1).upper()
-            if t in ("XS", "S", "M", "L", "XL", "XXL", "SM", "ML"):
-                return t
-            if t in ("50", "51", "52", "53", "54", "55", "56", "57", "58", "59", "60", "61", "62", "17", "18", "19", "20", "21"):
+            t_raw = m.group(1).upper()
+            t_norm = cfg.normalizar_codigo_talla(t_raw)
+            if t_norm and t_raw in ("XS", "S", "M", "L", "XL", "XXL", "SM", "ML", "MD", "LA", "LG"):
+                return t_norm
+            if t_raw in ("50", "51", "52", "53", "54", "55", "56", "57", "58", "59", "60", "61", "62", "17", "18", "19", "20", "21"):
                 m_eq = re.search(r"\b(?:5\d|1\d)\s*\(\s*(XS|S|M|L|XL)\b", texto, re.IGNORECASE)
                 if m_eq:
                     return m_eq.group(1).upper()
-                return t
+                return t_raw
 
     m_spec = re.search(
         r"\b(?:Talla|Size|Cuadro)\s*[:.\-]?\s*S([1-6])\b(?:\s*\(\s*(XS|S|M|L|XL|XXL)\s*\))?",
@@ -1194,43 +1354,51 @@ def _extraer_componentes(texto: str) -> Optional[str]:
     return None
 
 
+_RE_CONTEXTO_FRENO_MM = re.compile(
+    r"\b(?:freno|frenos|disco|discos|rotor|rotores|brake|brakes|shimano\s+(?:mt|br)|"
+    r"tektro|magura|sram\s+(?:db|level|code|guide)|pinza|sm-?rt|centerline)\b",
+    re.IGNORECASE,
+)
+
+
 def _extraer_recorrido(texto: str) -> Optional[int]:
     """
     Extrae el recorrido de suspensión en mm (ej. 100, 120, 130, 140, 150, 160 mm).
-    Prioriza etiquetas explícitas de recorrido/travel o suspensiones reconocidas.
+    Prioriza etiquetas explícitas de recorrido/travel o suspensiones reconocidas,
+    descartando diámetros de disco de freno (ej. '180/180 mm').
     Rango válido e-MTB: 100 <= mm <= 180.
     """
     texto_norm = texto.replace("\u202f", " ")
 
     # 1. Patrones explícitos con etiqueta de recorrido / travel
-    patrones_etiqueta = [
+    for p in (
         r"\b(?:recorrido(?:\s+(?:de\s+)?suspensi[oó]n|\s+horquilla|\s+delantero|\s+trasero)?|travel)\s*[:\-]?\s*(\d{2,3})\s*mm\b",
         r"\b(\d{2,3})\s*mm\s*(?:de\s+)?(?:recorrido|travel)\b",
-        r"\b(\d{2,3})\s*/\s*\d{2,3}\s*mm\b",
-    ]
-    for p in patrones_etiqueta:
-        m = re.search(p, texto_norm, re.IGNORECASE)
-        if m:
-            try:
-                val = int(m.group(1))
-                if 100 <= val <= 180:
-                    return val
-            except ValueError:
-                pass
+    ):
+        for m in re.finditer(p, texto_norm, re.IGNORECASE):
+            val = int(m.group(1))
+            if 100 <= val <= 180:
+                return val
 
-    # 2. Patrones con marcas/modelos de suspensión y recorrido
+    # 2. Patrones con marcas/modelos de suspensión o cuadro y recorrido explícito
     m_susp = re.search(
-        r"\b(?:fox\s*(?:32|34|36|38|float)?|rock\s*shox\s*(?:sid|pike|lyrik|revelation|yari|deluxe)?|marzocchi|ohlins)\b.{0,25}?\b(\d{2,3})\s*mm\b",
+        r"\b(?:fox\s*(?:32|34|36|38|float)?|rock\s*shox\s*(?:sid|pike|lyrik|revelation|yari|deluxe)?|sr\s+suntour\s*\w*|marzocchi|ohlins|horquilla|amortiguador|cuadro)\b.{0,30}?\b(\d{2,3})\s*mm\b",
         texto_norm,
         re.IGNORECASE,
     )
     if m_susp:
-        try:
-            val = int(m_susp.group(1))
-            if 100 <= val <= 180:
-                return val
-        except ValueError:
-            pass
+        val = int(m_susp.group(1))
+        if 100 <= val <= 180:
+            return val
+
+    # 3. Patrón '140/140 mm' excluyendo contexto de frenos ('FRENOS Shimano MT201 180/180 mm')
+    for m in re.finditer(r"\b(\d{2,3})\s*/\s*\d{2,3}\s*mm\b", texto_norm, re.IGNORECASE):
+        ctx = texto_norm[max(0, m.start() - 45):m.start()]
+        if _RE_CONTEXTO_FRENO_MM.search(ctx):
+            continue
+        val = int(m.group(1))
+        if 100 <= val <= 180:
+            return val
 
     return None
 
@@ -1386,7 +1554,7 @@ def enriquecer_bici(
                     log.info(f"[Enriquecedor/Wallapop] Odómetro en imagen para {bici.titulo}: {km_vis} km")
             except Exception as e:
                 log.warning(f"[Enriquecedor/Wallapop] Error en Visión IA para {bici.titulo}: {e}")
-    elif url_ficha and SCRAPLING_AVAILABLE:
+    elif url_ficha:
         try:
             detalle = _extraer_desde_ficha_sitio(
                 url_ficha,
@@ -1424,7 +1592,7 @@ def _aplicar_detalle(bici: Bicicleta, detalle: dict) -> Bicicleta:
                 bici.bateria_wh += extender
 
     for campo, valor in detalle.items():
-        if campo in ("range_extender_wh", "bateria_wh", "disponible", "km_vision_checked"):
+        if campo in ("range_extender_wh", "bateria_wh", "disponible", "km_vision_checked", "cache_ts"):
             continue
         if valor is not None and getattr(bici, campo, None) is None:
             setattr(bici, campo, valor)

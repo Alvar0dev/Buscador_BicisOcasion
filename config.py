@@ -8,7 +8,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from dotenv import load_dotenv
 
@@ -22,6 +22,7 @@ class SitioObjetivo:
     base_url: str
     seccion_emtb: str
     garantia_anos: int = 1  # Tiendas profesionales: garantía mecánica mínima 1 año
+    es_tienda_nueva: bool = False  # Tiendas oficiales con stock nuevo 0 km en España
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +56,7 @@ SITIOS: List[SitioObjetivo] = [
         nombre="Buhobike",
         base_url="https://www.buhobike.com",
         seccion_emtb="https://www.buhobike.com/3230-electricas-trail-dobles?order=product.price.asc",
+        es_tienda_nueva=True,
     ),
     SitioObjetivo(
         nombre="Upway",
@@ -66,6 +68,7 @@ SITIOS: List[SitioObjetivo] = [
         base_url="https://www.mammothbikes.com",
         seccion_emtb="https://www.mammothbikes.com/bicicletas-electricas-mtb-dobles-rally-xc/c-3104",
         garantia_anos=3,
+        es_tienda_nueva=True,
     ),
     SitioObjetivo(
         nombre="Wallapop",
@@ -74,6 +77,73 @@ SITIOS: List[SitioObjetivo] = [
         garantia_anos=0,  # Particulares por defecto (1 si is_refurbished / has_warranty)
     ),
 ]
+
+_TOKENS_NO_NUEVA = (
+    "segunda-mano",
+    "segunda mano",
+    "segundamano",
+    "reacondicionad",
+    "/ocasion",
+    "test-ride",
+    "test ride",
+    "medio uso",
+    "medio-uso",
+    "valor de recompra",
+)
+
+
+def es_sitio_tienda_nueva(
+    sitio: Optional[str],
+    url: Optional[str] = None,
+    texto: Optional[str] = None,
+) -> bool:
+    """True si el portal corresponde a una tienda oficial nueva (0 km) sin indicios de ocasión/test-ride."""
+    txt_norm = f"{url or ''} {texto or ''}".lower()
+    if any(tok in txt_norm for tok in _TOKENS_NO_NUEVA):
+        return False
+
+    sitio_low = (sitio or "").strip().lower()
+    url_low = (url or "").strip().lower()
+    for s in SITIOS:
+        if not s.es_tienda_nueva:
+            continue
+        if sitio_low and s.nombre.lower() == sitio_low:
+            return True
+        if url_low:
+            dom = s.base_url.lower().replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0]
+            if dom and dom in url_low:
+                return True
+    return False
+
+
+_MAPA_TALLAS = {
+    "XS": "XS", "S1": "XS",
+    "S": "S", "SM": "S", "SMALL": "S", "PEQUEÑA": "S", "PEQUENA": "S", "S2": "S",
+    "M": "M", "MD": "M", "S/M": "M", "S_M": "M", "M/L": "M", "M_L": "M", "ML": "M",
+    "MEDIUM": "M", "MEDIANA": "M", "S3": "M",
+    "L": "L", "LA": "L", "LG": "L", "LARGE": "L", "GRANDE": "L", "S4": "L",
+    "XL": "XL", "S5": "XL",
+    "XXL": "XXL", "S6": "XXL",
+}
+
+
+def normalizar_codigo_talla(raw: Optional[str]) -> Optional[str]:
+    """Normaliza códigos de talla ('MD'/'M/L' -> 'M', 'SM' -> 'S', 'LA'/'LG' -> 'L')."""
+    if not raw:
+        return None
+    limpio = re.sub(r"\s+", "", raw.strip().upper())
+    return _MAPA_TALLAS.get(limpio)
+
+
+def seleccionar_talla_disponible(tallas: List[str]) -> Optional[str]:
+    """Devuelve TALLA_OBJETIVO ('M') si está entre las disponibles; si no, la primera disponible."""
+    normalizadas = [t for t in (normalizar_codigo_talla(x) for x in tallas) if t]
+    if not normalizadas:
+        return None
+    objetivo = TALLA_OBJETIVO.upper()
+    if objetivo in normalizadas:
+        return objetivo
+    return normalizadas[0]
 
 
 # ---------------------------------------------------------------------------

@@ -229,22 +229,12 @@ class MammothScraper(BaseScraper):
         Si la talla objetivo ('M') está disponible en stock, devuelve 'M';
         en caso contrario devuelve la primera talla disponible para que el filtro S1 descarte.
         """
-        tallas: List[str] = []
-        for lbl in card.select(".card--product-sizes label, .form-sizes-group label"):
-            t = self.limpiar_texto(lbl.get_text()).upper()
-            if t in ("XS", "S", "M", "L", "XL", "XXL", "SM", "ML", "MD", "LG", "S/M", "M/L"):
-                if t in ("MD", "S/M", "M/L"):
-                    t = "M"
-                elif t == "LG":
-                    t = "L"
-                tallas.append(t)
-
-        if not tallas:
-            return None
-        objetivo = cfg.TALLA_OBJETIVO.upper()
-        if objetivo in tallas:
-            return objetivo
-        return tallas[0]
+        tallas = [
+            self.limpiar_texto(lbl.get_text())
+            for lbl in card.select(".card--product-sizes label, .form-sizes-group label")
+            if self.limpiar_texto(lbl.get_text())
+        ]
+        return cfg.seleccionar_talla_disponible(tallas)
 
     @staticmethod
     def _extraer_ano_texto(titulo: str) -> Optional[int]:

@@ -20,11 +20,34 @@ from abc import ABC, abstractmethod
 from typing import List, Optional
 from urllib.parse import urljoin
 
+import requests
 from bs4 import BeautifulSoup
 from models import Bicicleta
 import config as cfg
 
 log = logging.getLogger("scraper")
+
+
+def obtener_html_requests_simple(url: str, timeout: int = 15) -> Optional[str]:
+    """Descarga HTML vía requests con cabeceras de Chrome estándar (evita 403 por TLS en BigCommerce/WAF)."""
+    ua = (
+        cfg.USER_AGENTS[0]
+        if getattr(cfg, "USER_AGENTS", None)
+        else "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    )
+    headers = {
+        "User-Agent": ua,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "es-ES,es;q=0.9",
+    }
+    try:
+        resp = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+        if resp.status_code == 200 and resp.text:
+            return resp.text
+        log.warning(f"[HTTP requests] Status {resp.status_code} para {url}")
+    except Exception as e:
+        log.warning(f"[HTTP requests] Error para {url}: {e}")
+    return None
 
 # Scrapling: Fetcher (HTTP stealth) y StealthyFetcher (navegador + Cloudflare solver)
 try:
@@ -76,6 +99,7 @@ def crear_proxy_rotator(
 
 class BaseScraper(ABC):
     usar_stealth_directo: bool = False
+    usar_requests_primero: bool = False
 
     def __init__(self, sitio: cfg.SitioObjetivo) -> None:
         self.sitio = sitio
@@ -165,12 +189,17 @@ class BaseScraper(ABC):
     def obtener_html(self, url: str, reintentos: int = 2) -> Optional[str]:
         """
         Descarga el HTML con capas de fallback usando Scrapling.
-        Orden: Fetcher (HTTP rapido) -> StealthyFetcher (Cloudflare/JS).
+        Orden: (requests directo si usar_requests_primero) -> Fetcher (HTTP rapido) -> StealthyFetcher.
         Si `usar_stealth_directo` es True o Fetcher recibe bloqueo 403/503 de Cloudflare,
         salta directamente a StealthyFetcher sin malgastar reintentos HTTP.
         Devuelve None si todas las capas fallan (S13).
         """
         self._espera_cortesa()
+
+        if self.usar_requests_primero:
+            html_req = obtener_html_requests_simple(url)
+            if html_req:
+                return html_req
 
         if not self.usar_stealth_directo:
             # --- Capa 1: Fetcher (reintentos con backoff) ---
@@ -360,6 +389,9 @@ class BaseScraper(ABC):
                 )
                 if badge_no_disp is not None:
                     return True
+                for btn in elemento_tag.select("a.button, button, .notify-me"):
+                    if re.search(r"\b(?:av[ií]same|sin\s+stock|agotad[oa])\b", btn.get_text(" ", strip=True), re.IGNORECASE):
+                        return True
 
             if not texto_tarjeta and hasattr(elemento_tag, "get_text"):
                 texto_tarjeta = elemento_tag.get_text(" ", strip=True)

@@ -47,6 +47,12 @@ _PATRONES_MODELO_FULL_POWER_PESADA = (
     "orbea rise lt h",
     "bh ilynx 9.",
     "bh ilynx+ 9.",
+    "bh ilynx+ dl",
+    "ilynx+ dl",
+    "bh ilynx+ nx",
+    "ilynx+ nx",
+    "olympia hekton",
+    "megamo reason al",
     "bh atomx",
     "atomx",
     "bh xtep",
@@ -639,12 +645,7 @@ def clasificar_estado_nueva_exposicion(bici: Bicicleta) -> Tuple[bool, str, str]
     if km is None:
         return False, "KM_NO_CONFIRMADO", "Kilometraje no especificado para garantizar estado nuevo/exposición"
 
-    sitio_lower = (bici.sitio or "").lower()
-    url_lower = (bici.url or "").lower()
-    es_tienda_nueva = (
-        sitio_lower == "mammoth"
-        or (sitio_lower == "buhobike" and "segunda-mano" not in url_lower and "segunda mano" not in texto.lower())
-    )
+    es_tienda_nueva = cfg.es_sitio_tienda_nueva(bici.sitio, bici.url, texto)
     if km == 0 and es_tienda_nueva:
         return True, "NUEVA (0 km)", "Tienda oficial con 0 km confirmados"
     if km == 0:

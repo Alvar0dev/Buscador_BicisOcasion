@@ -772,7 +772,7 @@ def _encontrar_equivalente_idx(bici, lista_bicis: list) -> int:
     t_b = (bici.titulo or "").strip().lower()
     s_b = (bici.sitio or "").strip().lower()
     talla_b = (bici.talla or "").strip().upper()
-    es_tienda_nueva_b = s_b in ("mammoth", "buhobike") and not es_bici_de_ocasion(bici)
+    es_tienda_nueva_b = cfg.es_sitio_tienda_nueva(bici.sitio, bici.url, bici.titulo) and not es_bici_de_ocasion(bici)
     for idx, s in enumerate(lista_bicis):
         s_s = (s.sitio or "").strip().lower()
         t_s = (s.titulo or "").strip().lower()

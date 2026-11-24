@@ -3116,6 +3116,153 @@ def test_black_friday_siempre_top3_omitiendo_ya_mostradas():
             os.unlink(ruta_tmp)
 
 
+def test_t1_centralizacion_tienda_nueva_stock_talla_y_frenos():
+    """T1: Centralización es_tienda_nueva, stock real talla M/MD, rotor 180 mm y Full Power nuevas."""
+    from bs4 import BeautifulSoup
+    from evaluator import (
+        clasificar_estado_nueva_exposicion,
+        es_full_power_o_pesada,
+    )
+    from main import _encontrar_equivalente_idx
+    from scrapers.enriquecedor_web import (
+        _extraer_tallas_disponibles_ficha,
+        _aplicar_detalle,
+    )
+
+    # 1. Centralización de tiendas nuevas oficiales (preserve indices 0..4!)
+    assert len(cfg.SITIOS) >= 5
+    assert cfg.SITIOS[0].nombre == "Bike Ocasión" and getattr(cfg.SITIOS[0], "es_tienda_nueva", False) is False
+    assert cfg.SITIOS[1].nombre == "Buhobike" and getattr(cfg.SITIOS[1], "es_tienda_nueva", False) is True
+    assert cfg.SITIOS[3].nombre == "Mammoth" and getattr(cfg.SITIOS[3], "es_tienda_nueva", False) is True
+    assert cfg.SITIOS[4].nombre == "Wallapop" and getattr(cfg.SITIOS[4], "es_tienda_nueva", False) is False
+
+    sitio_nuevo_fake = cfg.SitioObjetivo(
+        nombre="TiendaNuevaDemo",
+        base_url="https://www.tiendanuevademo.es",
+        seccion_emtb="https://www.tiendanuevademo.es/dobles",
+        garantia_anos=3,
+        es_tienda_nueva=True,
+    )
+    with patch.object(cfg, "SITIOS", cfg.SITIOS + [sitio_nuevo_fake]):
+        assert cfg.es_sitio_tienda_nueva("TiendaNuevaDemo", "https://www.tiendanuevademo.es/bici-1") is True
+        assert cfg.es_sitio_tienda_nueva("TiendaNuevaDemo", "https://www.tiendanuevademo.es/bicicleta-test-ride-rise") is False
+        assert cfg.es_sitio_tienda_nueva("Buhobike", "https://www.buhobike.com/9448-segunda-mano-montana-electricas/1") is False
+
+        b_nueva = Bicicleta(
+            sitio="TiendaNuevaDemo",
+            bici_id="tnd-1",
+            titulo="Orbea Rise H30 2026",
+            precio=3450.0,
+            pvp_original=4699.0,
+            url="https://www.tiendanuevademo.es/orbea-rise-h30",
+            talla="M",
+            km=0,
+            suspension_trasera="si",
+            garantia_anos=3,
+        )
+        ok_est, etiq_est, _ = clasificar_estado_nueva_exposicion(b_nueva)
+        assert ok_est is True and etiq_est == "NUEVA (0 km)"
+
+        b_cat = completar_con_catalogo(b_nueva, aplicar_heuristica_peso=False)
+        assert b_cat.componentes, "Debe completar componentes OEM en tiendas nuevas oficiales configuradas"
+
+        b_nueva_col2 = Bicicleta(
+            sitio="TiendaNuevaDemo",
+            bici_id="tnd-2",
+            titulo="Orbea Rise H30 2026",
+            precio=3490.0,
+            url="https://www.tiendanuevademo.es/orbea-rise-h30-verde",
+            talla="M",
+            km=0,
+            suspension_trasera="si",
+        )
+        assert _encontrar_equivalente_idx(b_nueva_col2, [b_cat]) == 0
+
+    # 2. Normalización de talla (MD -> M, SM -> S sin confundir con S/M!)
+    assert cfg.normalizar_codigo_talla("MD") == "M"
+    assert cfg.normalizar_codigo_talla("S/M") == "M"
+    assert cfg.normalizar_codigo_talla("M/L") == "M"
+    assert cfg.normalizar_codigo_talla("SM") == "S"
+    assert cfg.normalizar_codigo_talla("LA") == "L"
+
+    # 3. Stock real de tallas en fichas PrestaShop y BigCommerce
+    html_ps_disabled = """
+    <div class="product-variants">
+      <div class="product-variants-item">
+        <span class="control-label">Tallas</span>
+        <ul>
+          <li><input type="radio" class="input-radio disabled" value="20"/><span class="radio-label disabled">M</span></li>
+          <li><input type="radio" class="input-radio" value="21" checked="checked"/><span class="radio-label">L</span></li>
+        </ul>
+      </div>
+    </div>
+    """
+    talla_ps, disp_ps = _extraer_tallas_disponibles_ficha(BeautifulSoup(html_ps_disabled, "html.parser"))
+    assert talla_ps == "L" and disp_ps is True
+
+    html_ps_md_ok = """
+    <div class="product-variants">
+      <div class="product-variants-item">
+        <span class="control-label">Talla</span>
+        <ul>
+          <li class="input-container"><span class="radio-label">SM</span></li>
+          <li class="input-container"><span class="radio-label">MD</span></li>
+          <li class="input-container attribute-not-in-stock"><span class="radio-label">LA</span></li>
+        </ul>
+      </div>
+    </div>
+    """
+    talla_md, disp_md = _extraer_tallas_disponibles_ficha(BeautifulSoup(html_ps_md_ok, "html.parser"))
+    assert talla_md == "M" and disp_md is True
+
+    html_ps_sm_only = html_ps_md_ok.replace('<li class="input-container"><span class="radio-label">MD</span></li>', '<li class="input-container attribute-not-in-stock"><span class="radio-label">MD</span></li>')
+    talla_sm, disp_sm = _extraer_tallas_disponibles_ficha(BeautifulSoup(html_ps_sm_only, "html.parser"))
+    assert talla_sm == "S" and disp_sm is True
+
+    html_bc_xl = """
+    <html><body>
+      <div data-product-attribute>
+        <label class="form-label">Talla Cuadro *</label>
+        <input type="radio" id="attr_s" name="attribute[96374]" value="249952"/><label class="form-option" for="attr_s">S</label>
+        <input type="radio" id="attr_m" name="attribute[96374]" value="249953"/><label class="form-option" for="attr_m">M</label>
+        <input type="radio" id="attr_l" name="attribute[96374]" value="249954"/><label class="form-option" for="attr_l">L</label>
+        <input type="radio" id="attr_xl" name="attribute[96374]" value="249955"/><label class="form-option" for="attr_xl">XL</label>
+      </div>
+      <script>var BCData = {"product_attributes":{"instock":true,"in_stock_attributes":[249956,249955]}}; </script>
+    </body></html>
+    """
+    talla_bc, disp_bc = _extraer_tallas_disponibles_ficha(BeautifulSoup(html_bc_xl, "html.parser"))
+    assert talla_bc == "XL" and disp_bc is True
+
+    html_bc_m = html_bc_xl.replace("[249956,249955]", "[249956,249953,249955]")
+    talla_bc_m, disp_bc_m = _extraer_tallas_disponibles_ficha(BeautifulSoup(html_bc_m, "html.parser"))
+    assert talla_bc_m == "M" and disp_bc_m is True
+
+    # Botón Avísame en tarjeta = no disponible
+    card_avisame = BeautifulSoup('<article class="card"><a class="button button--primary">Avísame</a></article>', "html.parser").select_one("article.card")
+    assert BaseScraper.es_tarjeta_no_disponible(card_avisame) is True
+
+    # 4. Fix falso recorrido 180 mm por discos de freno
+    assert _extraer_recorrido("FRENOS Shimano MT201 180/180 mm. Ruedas 29.") is None
+    assert _extraer_recorrido("CUADRO 140 mm Full Suspension. FRENOS Shimano MT201 180/180 mm.") == 140
+
+    # 5. Bloqueo Full Power nuevas vistas en Sanferbike / Fabregues / Bicimarket / Escapa
+    for tit_fp in (
+        "Bicicleta eléctrica BH iLYNX+ DL Trail 7.9 2027",
+        "Bicicleta eléctrica BH iLYNX+ NX Trail 7.9 2027 Bosch CX",
+        "Bicicleta Eléctrica Olympia Hekton 160 Pro 2026",
+        "Bicicleta Eléctrica Megamo Reason AL 05 29' 2026",
+    ):
+        b_fp = completar_con_catalogo(bici_prueba(sitio="Sanferbike", titulo=tit_fp, motor=None, bateria_wh=None, peso_kg=None), aplicar_heuristica_peso=False)
+        assert es_full_power_o_pesada(b_fp)[0] is True, f"Debe bloquear Full Power nueva: {tit_fp}"
+    b_dl = completar_con_catalogo(bici_prueba(titulo="BH iLYNX+ DL Trail 7.9 2027", motor=None), aplicar_heuristica_peso=False)
+    assert "EP801" not in (b_dl.motor or ""), f"iLynx+ DL no debe sobreescribirse con Shimano EP801: {b_dl.motor}"
+
+    # Aplicar detalle ignora cache_ts sin errores
+    b_det = _aplicar_detalle(bici_prueba(talla=None), {"talla": "M", "cache_ts": 1700000000})
+    assert b_det.talla == "M"
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -3148,4 +3295,5 @@ if __name__ == "__main__":
     test_black_friday_canal_exclusivo_y_segundo_bot()
     test_filtro_estricto_xc_vs_trail()
     test_black_friday_siempre_top3_omitiendo_ya_mostradas()
+    test_t1_centralizacion_tienda_nueva_stock_talla_y_frenos()
     print("Todas las pruebas pasaron (GREEN).")

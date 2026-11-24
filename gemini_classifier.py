@@ -65,6 +65,46 @@ CATALOGO_EMTB = [
         "componentes_default": "Fox 34 Float / Shimano XT 12v",
     },
     {
+        "patrones": ["bh ilynx+ dl", "ilynx+ dl"],
+        "peso_kg": 21.6,
+        "bateria_wh_default": 600,
+        "motor": "DJI Avinox",
+        "cuadro_material": "Carbono",
+        "suspension_trasera": "si",
+        "modalidad": "Trail / Enduro",
+        "recorrido_mm": 160,
+    },
+    {
+        "patrones": ["bh ilynx+ nx", "ilynx+ nx"],
+        "peso_kg": 22.5,
+        "bateria_wh_default": 600,
+        "motor": "Bosch Performance Line CX",
+        "cuadro_material": "Aluminio",
+        "suspension_trasera": "si",
+        "modalidad": "Trail",
+        "recorrido_mm": 150,
+    },
+    {
+        "patrones": ["olympia hekton"],
+        "peso_kg": 22.2,
+        "bateria_wh_default": 800,
+        "motor": "DJI Avinox",
+        "cuadro_material": "Carbono",
+        "suspension_trasera": "si",
+        "modalidad": "Enduro",
+        "recorrido_mm": 160,
+    },
+    {
+        "patrones": ["megamo reason al"],
+        "peso_kg": 22.0,
+        "bateria_wh_default": 850,
+        "motor": "DJI Avinox",
+        "cuadro_material": "Aluminio",
+        "suspension_trasera": "si",
+        "modalidad": "Enduro",
+        "recorrido_mm": 160,
+    },
+    {
         "patrones": ["bh ilynx+ trail carbon", "ilynx+ trail carbon", "bh ilynx+ enduro", "ilynx+"],
         "peso_kg": 20.4,
         "bateria_wh_default": 540,
@@ -927,14 +967,15 @@ def completar_con_catalogo(bici: Bicicleta, aplicar_heuristica_peso: bool = True
                 not bici.componentes
                 and entrada.get("componentes_default")
                 and bici.km == 0
-                and (bici.sitio or "").lower() in ("mammoth", "buhobike")
+                and cfg.es_sitio_tienda_nueva(bici.sitio, bici.url, bici.titulo)
             ):
                 bici.componentes = entrada["componentes_default"]
             break
 
     # Regla C — Corrección estricta de motores (ignora erratas HTML de tiendas)
     titulo_lower = bici.titulo.lower()
-    if "ilynx+" in titulo_lower or "ilynx plus" in titulo_lower:
+    es_ilynx_full_power = any(k in titulo_lower for k in ("ilynx+ dl", "ilynx plus dl", "ilynx+ nx", "ilynx plus nx"))
+    if ("ilynx+" in titulo_lower or "ilynx plus" in titulo_lower) and not es_ilynx_full_power:
         bici.motor = "Shimano EP801"
         if bici.peso_kg is not None and bici.peso_kg < 19.5:
             bici.peso_kg = 20.4
@@ -942,7 +983,7 @@ def completar_con_catalogo(bici: Bicicleta, aplicar_heuristica_peso: bool = True
         if bici.recorrido_mm is None:
             bici.recorrido_mm = 160
     elif ("bh " in titulo_lower or "ilynx" in titulo_lower) and ("ilynx race" in titulo_lower or "ilynx trail" in titulo_lower or "ilynx" in titulo_lower):
-        if "ilynx" in titulo_lower:
+        if "ilynx" in titulo_lower and not es_ilynx_full_power:
             bici.motor = "BH 2EXMAG"
         elif "atomx" in titulo_lower and (not bici.motor or "shimano" in bici.motor.lower()):
             bici.motor = "Brose S Mag"

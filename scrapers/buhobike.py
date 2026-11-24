@@ -166,13 +166,13 @@ class BuhobikeScraper(BaseScraper):
             return "M"
         match_url = re.search(r"talla-([a-z]{1,3})(?:[_\-/]|$)", url, re.IGNORECASE)
         if match_url:
-            talla = match_url.group(1).upper()
-            if talla in ("XS", "S", "M", "L", "XL", "XXL", "SM", "ML", "MD", "LG"):
-                return "M" if talla in ("MD", "SM", "ML") else ("L" if talla == "LG" else talla)
+            talla_norm = cfg.normalizar_codigo_talla(match_url.group(1))
+            if talla_norm:
+                return talla_norm
 
-        match_tit = re.search(r"\b(?:TALLA|T)[\s\-:]+(XS|S|M|L|XL|SM|ML)\b", titulo, re.IGNORECASE)
+        match_tit = re.search(r"\b(?:TALLA|T)[\s\-:]+(XS|S|M|L|XL|SM|ML|MD|LA|LG)\b", titulo, re.IGNORECASE)
         if match_tit:
-            return match_tit.group(1).upper()
+            return cfg.normalizar_codigo_talla(match_tit.group(1))
 
         return None
 
