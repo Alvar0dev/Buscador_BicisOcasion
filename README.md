@@ -709,42 +709,37 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 
 ---
 
-## Estado actual y TODOs para mañana
+## Estado actual y TODOs completados (Semana de Black Friday — 23/11/2026)
 
-### Fotografía real del proyecto (21/11/2026 — tras corrida en vivo `python main.py --once`)
-- **Suite unitaria e integración (`python test_buscador.py`)**: **100% GREEN** (exit code `0`, cubriendo anti-ocasión en Beast, radio estricto `<= 50 km` en Wallapop, doble suspensión estricta, batería `> 500 Wh`, tramos `<= 3.500 €` y `3.501–4.000 €`, prioridad `XC > Trail ligera > MTB` y rotación Top 3 en búsquedas idénticas).
-- **Ejecución en vivo de los 5 portales (`72.5s`)**: `966` anuncios escrapeados (`532` Wallapop `<= 50 km` Fuenlabrada + modelos clave locales, `180` Bike Ocasión, `143` Mammoth Bikes con `/filtrarproductos`, `89` Buhobike incluyendo `/3229-enduro-electricas`, `22` Upway).
-- **Resultados verificados y enviados hoy a ambos bots de Telegram**:
-  - **Canal Diario (2 enviadas + Heartbeat OK, estricto XC `<= 130 mm` y `> 500 Wh`)**:
-    1. `BH Ilynx race carbono.2 año de garant de motor` — **Wallapop Seseña (`22.5 km`)** (`2.000 €`, `16.8 kg`, `720 Wh`, Nota `5.0/10`)
-    2. `BH ILYNX RACE CARBON LT 7.6 T-M 2022 BICICLETA SEGUNDA MANO` — **Buhobike** (`2.599 €`, `18.28 kg`, `540 Wh`, Nota `5.0/10`)
+### Fotografía real del proyecto (23/11/2026 — tras corrida en vivo `python main.py --once`)
+- **Suite unitaria e integración (`python test_buscador.py`)**: **100% GREEN** (exit code `0`, cubriendo anti-ocasión en Beast, radio estricto `<= 50 km` en Wallapop, doble suspensión estricta, batería `> 500 Wh`, tramos `<= 3.500 €` y `3.501–4.000 €`, prioridad `XC > Trail ligera > MTB` en ambos canales, componentes OEM en tiendas oficiales nuevas `km=0` y rotación Top 3 en búsquedas idénticas).
+- **Ejecución en vivo de los 5 portales (`75.0s`)**: `55` candidatas aptas enriquecidas tras el pre-filtro sobre los 5 portales (`Wallapop <= 50 km` Fuenlabrada + modelos clave locales, `Bike Ocasión`, `Mammoth Bikes` con `/filtrarproductos` en `PrecioAscendente` + `DescuentoDescendente`, `Buhobike` y `Upway`).
+- **Resultados verificados y enviados hoy (`23/11/2026`) a ambos bots de Telegram**:
+  - **Canal Diario / Segunda mano (4 enviadas — 1 por portal con stock + Heartbeat OK, doble suspensión, `> 500 Wh`, `< 21 kg`, Talla `M`, prioridad `XC > Trail ligera > MTB`)**:
+    1. 💥 **¡MEGA CHOLLO!** **`BH iLynx Trail Carbon 8.6`** — **Upway (`rk8gq1`)** (**`2.399 €`**, rebajada hoy desde `2.449 €`, PVP nuevo `6.599 €`, **`-63.6%` dto**, **SOLO `72 km`**, `18.6–19.0 kg` carbono, **`540 Wh`**, Talla `M`, **Nota `9.5/10`** — alerta prioritaria sonora)
+    2. **`BH iLYNX TRAIL CARBON 8.6`** — **Wallapop (`<= 50 km` Fuenlabrada)** (**`2.299 €`**, `1.000 km`, `20.0 kg` carbono, **`540 Wh`**, Fox 36 / Float X, Talla `M`, **Nota `7.5/10`**)
+    3. **`ORBEA RISE H10 T-M 2022 BICICLETA SEGUNDA MANO`** — **Buhobike Segunda Mano** (**`2.599 €`**, `19.57 kg`, **`540 Wh`**, Fox 36 Factory Kashima / Shimano XT, Talla `M`, **Nota `5.5/10`**)
+    4. **`Orbea Rise H15 XT`** — **Bike Ocasión** (**`2.649 €`**, PVP `5.000 €`, `20.5 kg`, **`540 Wh`**, Shimano XT, Talla `M`, **Nota `3.5/10`**)
   - **Canal Nuevas y Seminuevas `@BlackBikeBeast_bot` (Informe Top 3 enviado + Heartbeat OK, `> 500 Wh`, `< 21 kg`, doble suspensión, Talla `M`, `<= 3.500 €` y respaldo `3.501–4.000 €`)**:
-    1. **`Orbea Rise H10 2023/24 540w Talla M`** — **Wallapop San Agustín del Guadalix (`45.6 km`)** (`2.200 €`, tramo `<= 3.500 €`, doble suspensión `140 mm` Fox 36/DHX2, **`540 Wh`** cambiada en garantía con `5 ciclos` + **motor `0 km` a estrenar en garantía**, factura dic 2023, `20.5 kg`, Nota `7.0/10`)
-    2. **`Bici eléctrica BERRIA MAKO HYBRID 6 A ESTRENAR`** — **Wallapop Madrid (`23.9 km`)** (`2.999 €`, tramo `<= 3.500 €`, PVP antes `4.599 €`, **`-34.8%` liquidación**, **NUEVA `0 km` a estrenar en tienda con factura y garantía**, doble suspensión DT Swiss / RockShox, **`720 Wh`**, `20.6 kg` carbono, Nota `7.0/10`)
+    1. **`Bici eléctrica BERRIA MAKO HYBRID 6 A ESTRENAR`** — **Wallapop Madrid (`23.9 km`)** (`2.999 €`, tramo `<= 3.500 €`, PVP antes `4.599 €`, **`-34.8%` liquidación**, **NUEVA `0 km` a estrenar en tienda con factura y garantía**, doble suspensión DT Swiss / RockShox, **`720 Wh`**, `20.6 kg` carbono, Nota `7.0/10`)
+    2. **`Orbea Rise H10 2023/24 540w Talla M`** — **Wallapop San Agustín del Guadalix (`45.6 km`)** (`2.200 €`, tramo `<= 3.500 €`, doble suspensión `140 mm` Fox 36/DHX2, **`540 Wh`** cambiada en garantía con `5 ciclos` + **motor `0 km` a estrenar en garantía**, factura dic 2023, `20.5 kg`, Nota `7.0/10`)
     3. **`Orbea Rise LT H20 2026`** — **Mammoth (compra online España)** (`3.974,25 €`, tramo respaldo `3.501–4.000 €`, PVP `5.299 €`, **`-25.0%` Black Friday**, **NUEVA `0 km` con 3 años de garantía oficial**, doble suspensión `150 mm` Fox Float / Shimano SLX, **`630 Wh`**, `19.5 kg`, Nota `7.5/10`)
-  - **En cola en `estado_portales["__beast__"]` (`pool_ids` posiciones `#4` y `#5`) listas para la siguiente rotación**:
-    4. **`Orbea Rise H30 2026`** — **Mammoth (compra online España)** (`3.524,25 €`, PVP `4.699 €`, **`-25.0%` Black Friday**, **NUEVA `0 km` con 3 años de garantía**, doble suspensión `140 mm`, **`540 Wh`**, `20.5 kg`, Talla `M`)
+  - **En cola en `estado_portales["__beast__"]` (`pool_ids` posiciones `#4` y `#5`, ya rotadas también en la ejecución automática de las `10:12` del Task Scheduler)**:
+    4. **`Orbea Rise H30 2026`** — **Mammoth (compra online España)** (`3.524,25 €`, PVP `4.699 €`, **`-25.0%` Black Friday**, **NUEVA `0 km` con 3 años de garantía**, doble suspensión `140 mm`, **`540 Wh`**, `20.5 kg`, Talla `M`, **Nota `6.5/10`** tras completar componentes OEM)
     5. **`BH iLYNX TRAIL CARBON 8.6 talla M`** — **Wallapop Pinto (`9.4 km`)** (`3.750 €`, seminueva `~120 km` usada solo en la Talajara, doble suspensión `150 mm`, **`540 Wh`**, `18.6 kg` carbono, Talla `M`)
 
-### Tareas completadas en esta iteración (21/11/2026)
+### TODOs de la semana de Black Friday completados (23/11/2026)
 
-- [x] **Aislamiento total de `@BlackBikeBeast_bot` frente a bicis de ocasión/reacondicionadas**: Implementado `es_ocasion` / `es_bici_de_ocasion()`, bloqueando `Bike Ocasión`, `Upway`, `Buhobike /segunda-mano-` y anuncios `reacondicionada`/`refurbished`/`medio uso`, e invalidando `valoraciones_ia.json` cuando cambia `km`.
-- [x] **Geofiltro estricto `<= 50 km` de Fuenlabrada en Wallapop + búsqueda local por modelo hasta `4.000 €`**: Desactivado el alcance nacional en Wallapop (`WALLAPOP_PERMITIR_NACIONAL = False`) manteniendo búsqueda activa por keywords (`BH iLynx`, `Orbea Rise`, `Berria Mako`, `Cannondale Moterra SL`, etc.) dentro de los `50 km`.
-- [x] **Doble suspensión estricta, batería `> 500 Wh`, escalones `<= 3.500 €` / `3.501–4.000 €` y prioridad `XC > Trail ligera > MTB`**: Bloqueadas rígidas (`Scott Aspect`, `Giant Talon`, `Scale`, `eBig`, `Alltrack`), eliminadas fugas `> 4.000 €` o `<= 500 Wh` (`Scott Lumen` `8.399–9.899 €` / `360 Wh`), separada `Focus Jam2 SL` de `Focus Jam2` Full Power y priorizadas siempre las opciones `<= 3.500 €` y `XC` antes del respaldo `3.501–4.000 €` y `Trail ligera / MTB`.
-- [x] **Integración determinista de Mammoth `POST /filtrarproductos` y rotación persistente `__beast__`**: Captura garantizada de todas las ofertas online `1.500–4.200 €` de Mammoth (`143` unidades), deduplicación de variantes de color del mismo portal y rotación automática del Top 3 en `analisis_ejecuciones.estado_portales["__beast__"]` cuando la búsqueda se repite sin cambios.
-
-### Plan de trabajo propuesto para mañana (TODOs pendientes)
-
-- [ ] **TODO 1 — Purgar registros históricos antiguos (`> 4.000 €`, `<= 500 Wh` o fuera de `50 km`) en `bicis_enviadas.db`**
-  - **Objetivo**: Limpiar en `bicis_black_friday_enviadas` y `historial_catalogo` los registros insertados en pruebas anteriores a las reglas actuales (`Scott Lumen 910/900` de `8.399/9.899 €`, `Wilier Urta 420 Wh` y los 3 anuncios de Manresa/Murcia/Sevilla) para que el Radar de Mercado ([docs/radar_mercado.md](docs/radar_mercado.md)) refleje únicamente unidades vigentes bajo los filtros actuales.
-- [ ] **TODO 2 — Ampliar cobertura de tiendas online de España para cazar más ofertas Black Friday de bicis nuevas (`0 km`)**
-  - **Objetivo**: Evaluar la incorporación de nuevos adaptadores de tiendas online nacionales con stock de e-MTB dobles `< 21 kg` y `> 500 Wh` (p. ej. *Bicimarket*, *Fabregues Bicicletas*, *Sanferbike* o *Ciclos Cabello*) para ampliar el pool de ofertas nuevas `<= 3.500 €` y `3.501–4.000 €` con envío a toda España.
-- [ ] **TODO 3 — Extraer componentes detallados y peso oficial desde la ficha de Mammoth para modelos nuevos 2026 (`Orbea Rise H30 / LT H20`)**
-  - **Objetivo**: En `Orbea Rise H30 2026` (`mammoth-583124`, `3.524,25 €`), la ficha de Mammoth no listó transmisión/horquilla con el selector actual (`componentes=None`), restando `-1.5 pts` en el Perito (`5.0/10` frente a `7.5/10` de la `LT H20`). Refinar el extractor de especificaciones de Mammoth para capturar horquilla y transmisión en fichas 2026.
-- [ ] **TODO 4 — Decidir si el Canal Diario también debe admitir Trail ligera (`< 21 kg`, `> 500 Wh`, `<= 3.300 €`) como respaldo cuando escaseen las XC puras**
-  - **Objetivo**: Actualmente el Canal Diario mantiene el bloqueo estricto `solo XC <= 130 mm` (`4` candidatas aptas), mientras que `@BlackBikeBeast_bot` ya aplica la prioridad `XC > Trail ligera > MTB`. Confirmar si el Canal Diario debe mantener solo XC o adoptar la misma jerarquía con prioridad XC.
-- [ ] **TODO 5 — Verificar ejecución desatendida del Task Scheduler (`12:00`) y rotación automática de `__beast__`**
-  - **Objetivo**: Comprobar mañana en `logs/buscador.log` la corrida programada de las `12:00`, verificando que si el catálogo no cambia respecto a hoy, `@BlackBikeBeast_bot` rote automáticamente mostrando la `Orbea Rise H30 2026` (`3.524 €`, `-25%` Mammoth) y la `BH iLynx Trail Carbon 8.6` (`3.750 €`, Pinto).
+- [x] **TODO 1 — Purgar registros históricos antiguos (`> 4.000 €`, `<= 500 Wh` o fuera de `50 km`) en `bicis_enviadas.db`**
+  - **Resultado**: Eliminados los `12` registros antiguos de `bicis_black_friday_enviadas` y `4` de `historial_catalogo` previos a las reglas actuales (`Scott Lumen 910/900` de `8.399/9.899 €`, `Wilier Urta 420 Wh`, unidades de ocasión y los anuncios de Manresa/Murcia/Sevilla), regenerando limpiamente [docs/radar_mercado.md](docs/radar_mercado.md).
+- [x] **TODO 2 — Ampliar cobertura de scraping para maximizar caza de ofertas Black Friday**
+  - **Resultado**: `MammothScraper._extraer_filtrados_precio` consulta ahora tanto `orden="PrecioAscendente"` como `orden="DescuentoDescendente"` en las categorías XC (`3104`) y Trail/All-Mountain (`2139`), conservando siempre el precio más bajo cuando una ficha aparece con tarifa distinta entre portada y filtro AJAX (p. ej. `Orbea Rise H30 2026` a `3.524,25 €` frente a `3.749,25 €`), y catalogada la `MMR Kaizen` (`400 Wh`, Bosch SX).
+- [x] **TODO 3 — Inferencia de componentes OEM de serie en modelos nuevos 2026 (`km=0`) de tiendas oficiales (`Orbea Rise H30 2026`)**
+  - **Resultado**: Añadido `componentes_default` a `CATALOGO_EMTB` en `gemini_classifier.py`, aplicado exclusivamente a unidades nuevas (`km=0`) de tiendas oficiales (`Mammoth`, `Buhobike`) cuya ficha web omite la tabla HTML de componentes. La `Orbea Rise H30 2026` (`mammoth-583124`) sube de `5.0/10` a **`6.5/10`** sin relajar la penalización `-1.5 pts` sobre anuncios de segunda mano sin desglose de piezas.
+- [x] **TODO 4 — Adoptar la jerarquía `XC (prioridad 3) > Trail ligera (prioridad 2) > MTB doble suspensión (prioridad 1)` también en el Canal Diario de segunda mano**
+  - **Resultado**: `pasa_filtros_estrictos` y `_recolectar_oportunidades` habilitan `permitir_trail_respaldo=True` para portales de ocasión y Wallapop (`< 21.0 kg`, `> 500 Wh`, Talla `M`, doble suspensión `<= 165 mm`), priorizando siempre XC sana (`mod_prio=3`) sobre Trail ligera (`mod_prio=2`) y MTB (`mod_prio=1`). Esto destapó el **Mega Chollo `BH iLynx Trail Carbon 8.6` en Upway (`2.399 €`, PVP `6.599 €`, `-63.6%`, `72 km`, `9.5/10`)** y la **`BH iLYNX TRAIL CARBON 8.6` en Wallapop (`2.299 €`, `1.000 km`, `7.5/10`)**.
+- [x] **TODO 5 — Verificar ejecución desatendida del Task Scheduler y rotación automática de `__beast__`**
+  - **Resultado**: Confirmada en `analisis_ejecuciones` (#22, `2026-11-23 09:12:02` UTC) la ejecución automática del Task Scheduler que rotó `__beast__` a `offset: 3` (`Orbea Rise H30 2026` `3.524,25 €` y `BH iLynx Trail Carbon 8.6` `3.750 €` Pinto), seguida de la corrida en vivo (#23) con los 5 TODOs activos.
 
 ### Dependencias instaladas
 

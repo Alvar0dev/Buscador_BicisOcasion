@@ -33,6 +33,111 @@ _RE_MODALIDAD_NO_MTB = re.compile(
 )
 
 
+_RE_MOTOR_FULL_POWER_ESTRICTA = re.compile(
+    r"\b(?:polini|bafang|bosch(?:\s+performance(?:\s+line)?)?\s*cx|brose(?:\s+s\s*mag)?|"
+    r"yamaha|pw-?x\d*|syncdrive|specialized\s*(?:2\.[12]|full\s*power)|full\s*power|oli|ananda|panasonic)\b",
+    re.IGNORECASE,
+)
+
+_PATRONES_MODELO_FULL_POWER_PESADA = (
+    "berria mako",
+    "mako hybrid",
+    "berria stratos",
+    "berria nexxen",
+    "orbea rise lt h",
+    "bh ilynx 9.",
+    "bh ilynx+ 9.",
+    "bh atomx",
+    "atomx",
+    "bh xtep",
+    "xtep",
+    "orbea wild",
+    "trek rail",
+    "trek powerfly",
+    "cube stereo",
+    "mondraker crafty",
+    "mondraker dusk",
+    "focus thron",
+    "giant reign",
+    "giant stance",
+    "scott strike",
+    "scott patron",
+    "bianchi t-tronik",
+    "bianchi e-vertic",
+    "bulls sonic",
+    "bulls e-stream",
+    "conway xyron",
+    "conway cairon",
+    "megamo crave",
+    "ghost e-asx",
+    "ghost e-axs",
+    "ghost e-riot",
+    "husqvarna",
+    "gasgas",
+    "gas gas",
+    "commencal meta",
+    "niner rip",
+    "rocky mountain",
+    "merida eone",
+    "haibike allmtn",
+    "haibike alltrail",
+    "ktm macina kapoho",
+    "ktm macina chacana",
+    "lapierre overvolt",
+    "liv embolden",
+    "liv intrigue",
+    "ecobike",
+    "fantic",
+    "centurion no pogo",
+    "carver suv",
+)
+
+
+def es_full_power_o_pesada(bici: Bicicleta) -> Tuple[bool, str]:
+    """
+    Detecta bicicletas e-MTB Full Power o chasis pesados (>= 21 kg reales, p. ej. Berria Mako Hybrid
+    Polini/Bafang 720 Wh, Orbea Rise LT Aluminio 630 Wh, motores Bosch CX/Brose/Yamaha/Polini/Bafang),
+    evitando que entren en las búsquedas de e-MTB ligeras (< 21 kg).
+    """
+    titulo = (bici.titulo or "").lower().replace("²", "2")
+    motor = (bici.motor or "").lower()
+
+    # Excepciones ligeras verificadas (< 21 kg reales)
+    es_excepcion_ultra_ligera = (
+        any(
+            k in titulo
+            for k in (
+                "trance x advanced e+ elite",
+                "moterra sl",
+                "moterra neo sl",
+                "levo sl",
+                "kenevo sl",
+                "jam2 sl",
+                "jam 2 sl",
+                "amflow pl",
+                "am flow pl",
+            )
+        )
+        and "amflow tl" not in titulo
+        and "am flow tl" not in titulo
+    )
+    if not es_excepcion_ultra_ligera:
+        if any(p in titulo for p in _PATRONES_MODELO_FULL_POWER_PESADA) or "amflow tl" in titulo or "am flow tl" in titulo:
+            return True, f"Modelo Full Power / pesado (>= 21 kg reales) descartado: {bici.titulo}"
+        if (
+            ("turbo levo" in titulo and "levo sl" not in titulo)
+            or ("moterra" in titulo and "moterra sl" not in titulo and "moterra neo sl" not in titulo)
+            or (("focus jam2" in titulo or "focus jam 2" in titulo) and "sl" not in titulo)
+            or ("giant trance" in titulo and "elite" not in titulo)
+        ):
+            return True, f"Modelo Full Power (>= 21 kg reales) descartado: {bici.titulo}"
+        if motor and _RE_MOTOR_FULL_POWER_ESTRICTA.search(motor):
+            return True, f"Motor Full Power descartado ({bici.motor})"
+        if _RE_MOTOR_FULL_POWER_ESTRICTA.search(titulo):
+            return True, f"Motor Full Power declarado en título ({bici.titulo})"
+    return False, "OK"
+
+
 def es_modalidad_mtb_doble_valida(bici: Bicicleta) -> bool:
     """
     True si la bicicleta pertenece a una modalidad e-MTB válida (XC/Downcountry,
@@ -218,6 +323,11 @@ def _pasa_requisitos_base_mecanicos(
     if bici.peso_kg is not None and bici.peso_kg >= cfg.PESO_DESCARTE_KG:
         return False, f"Peso >= 21 kg: {bici.peso_kg} kg"
 
+    # S3ter: Bloqueo explícito de e-MTB Full Power / pesadas (ej. Berria Mako Hybrid Polini/Bafang, Rise LT Alu)
+    es_fp, motivo_fp = es_full_power_o_pesada(bici)
+    if es_fp:
+        return False, motivo_fp
+
     # S3bis: Doble suspensión obligatoria.
     if bici.suspension_trasera is not None and str(bici.suspension_trasera).lower() in ("false", "no", "0"):
         return False, "No tiene suspensión trasera (no es doble suspensión)"
@@ -225,6 +335,8 @@ def _pasa_requisitos_base_mecanicos(
     # S2bis: En modo estricto XC, si el recorrido supera 130 mm se descarta
     if not permitir_trail_respaldo and bici.recorrido_mm is not None and bici.recorrido_mm > cfg.RECORRIDO_MAX_XC_MM:
         return False, f"Recorrido de suspensión excesivo para XC (>{cfg.RECORRIDO_MAX_XC_MM} mm): {bici.recorrido_mm} mm"
+    if permitir_trail_respaldo and bici.recorrido_mm is not None and bici.recorrido_mm > 170:
+        return False, f"Recorrido de suspensión excesivo (>170 mm): {bici.recorrido_mm} mm"
 
     # S5/S6: Rango de presupuesto según canal (hasta 3.500 € para Unicornios XC >=600 Wh, <=500 km)
     techo_precio = (
@@ -240,15 +352,17 @@ def _pasa_requisitos_base_mecanicos(
     return True, "OK"
 
 
-def pasa_filtros_estrictos(bici: Bicicleta) -> Tuple[bool, str]:
+def pasa_filtros_estrictos(bici: Bicicleta, permitir_trail_respaldo: bool = False) -> Tuple[bool, str]:
     """
     Devuelve (apto, motivo) aplicando todos los filtros estrictos.
-    Motivo explica por qué se descarta, si corresponde.
+    Si permitir_trail_respaldo=True (flujo de ocasión/segunda mano con prioridad XC > Trail ligera > MTB),
+    admite también modelos Trail ligera / MTB doble suspensión (< 21 kg, > 500 Wh, Talla M).
     """
     return _pasa_requisitos_base_mecanicos(
         bici,
         precio_max=cfg.PRECIO_MAX_EXCEPCIONAL_EUR,
         bateria_estricta_gt=True,
+        permitir_trail_respaldo=permitir_trail_respaldo,
     )
 
 
@@ -256,51 +370,18 @@ def prioridad_modalidad(bici: Bicicleta) -> int:
     """
     Devuelve el nivel de prioridad de la modalidad para priorizar siempre XC frente a Trail:
       3 -> XC / Cross Country / Downcountry (<= 130 mm, ej. BH iLynx Race, Scott Lumen, KTM Scarp)
-      2 -> Light e-MTB / Trail ligero (131-145 mm, ej. Orbea Rise, Trek Fuel EXe, BH iLynx Trail sin '+')
+      2 -> Light e-MTB / Trail ligero (131-145 mm o familias Light e-MTB <= 150 mm: Orbea Rise, Trek Fuel EXe, BH iLynx Trail sin '+', Berria Mako Hybrid, Moterra SL)
       1 -> Trail / All Mountain general (146-165 mm, ej. BH iLynx+ Trail)
       0 -> Otras / sin clasificar (> 165 mm / Enduro)
     """
-    # 1. Prioridad objetiva por recorrido físico de suspensión si se conoce (TODO 2)
-    if bici.recorrido_mm is not None:
-        rec = bici.recorrido_mm
-        if rec <= 130:
-            return 3
-        elif rec <= 145:
-            return 2
-        elif rec <= 165:
-            return 1
-        else:
-            return 0
-
-    # 2. Heurística semántica por título / modelo / modalidad cuando no hay recorrido explícito
     titulo = (bici.titulo or "").lower().replace("²", "2")
     modalidad = (bici.modalidad or "").lower()
     texto = f"{titulo} {modalidad}"
 
-    # Nivel 3: XC / Cross Country / Downcountry puro
-    if any(
-        k in texto
-        for k in (
-            "ilynx race",
-            "scott lumen",
-            "fourstroke",
-            "wilier urta",
-            "urta hybrid",
-            "vam2",
-            "vam 2",
-            "vam 8.",
-            "e-caliber",
-            "downcountry",
-            "cross country",
-        )
-    ) or "xc" in modalidad.split():
-        return 3
-    if "xc" in modalidad:
-        return 3
-
-    # Nivel 2: Light e-MTB / Trail ligero (excluyendo iLynx+ de 160 mm)
-    if "ilynx+" not in titulo and "ilynx plus" not in titulo:
-        if any(
+    es_familia_light_trail = (
+        "ilynx+" not in titulo
+        and "ilynx plus" not in titulo
+        and any(
             k in texto
             for k in (
                 "orbea rise",
@@ -315,14 +396,55 @@ def prioridad_modalidad(bici: Bicicleta) -> int:
                 "jam 2 sl",
                 "mondraker neat",
                 "moterra sl",
+                "moterra neo sl",
+                "mmr kaizen",
+                "amflow pl",
                 "light e-mtb",
                 "light emtb",
             )
-        ):
+        )
+    )
+
+    # 1. Prioridad objetiva por recorrido físico de suspensión si se conoce (TODO 2)
+    if bici.recorrido_mm is not None:
+        rec = bici.recorrido_mm
+        if rec <= 130:
+            return 3
+        elif rec <= 145 or (rec <= 150 and es_familia_light_trail):
             return 2
+        elif rec <= 165:
+            return 1
+        else:
+            return 0
+
+    # Nivel 3: XC / Cross Country / Downcountry puro
+    if not es_modelo_trail_o_enduro(bici):
+        if any(
+            k in texto
+            for k in (
+                "ilynx race",
+                "scott lumen",
+                "fourstroke",
+                "wilier urta",
+                "urta hybrid",
+                "vam2",
+                "vam 2",
+                "vam 8.",
+                "e-caliber",
+                "downcountry",
+                "cross country",
+            )
+        ) or "xc" in modalidad.split():
+            return 3
+        if "xc" in modalidad:
+            return 3
+
+    # Nivel 2: Light e-MTB / Trail ligero (excluyendo iLynx+ de 160 mm)
+    if es_familia_light_trail:
+        return 2
 
     # Nivel 1: Trail / All Mountain
-    if any(k in texto for k in ("trail", "all mountain")):
+    if any(k in texto for k in ("trail", "all mountain")) or es_modelo_trail_o_enduro(bici):
         return 1
 
     return 0
@@ -749,6 +871,9 @@ def pasa_prefiltro_respaldo_black_friday(bici: Bicicleta) -> Tuple[bool, str]:
         return False, f"Batería <= {cfg.BATERIA_MIN_WH} Wh: {bici.bateria_wh} Wh"
     if bici.peso_kg is not None and bici.peso_kg >= cfg.PESO_DESCARTE_KG:
         return False, f"Peso >= 21 kg: {bici.peso_kg} kg"
+    es_fp, motivo_fp = es_full_power_o_pesada(bici)
+    if es_fp:
+        return False, motivo_fp
     if bici.precio < cfg.PRECIO_MIN_EUR:
         return False, f"Precio < {cfg.PRECIO_MIN_EUR} €"
     precio_tope_resp = getattr(cfg, "PRECIO_RESPALDO_BLACK_FRIDAY_EUR", 4000)
@@ -787,6 +912,9 @@ def evaluar_respaldo_black_friday(
         return False, None, 0.0, "Doble suspensión no confirmada", ()
     if bici.peso_kg is None or bici.peso_kg >= cfg.PESO_DESCARTE_KG:
         return False, None, 0.0, "Peso >= 21 kg o desconocido", ()
+    es_fp, motivo_fp = es_full_power_o_pesada(bici)
+    if es_fp:
+        return False, None, 0.0, motivo_fp, ()
     if bici.bateria_wh is None or bici.bateria_wh <= cfg.BATERIA_MIN_WH:
         return False, None, 0.0, f"Batería <= {cfg.BATERIA_MIN_WH} Wh", ()
     km_max_semi = getattr(cfg, "KM_MAX_SEMINUEVA_BLACK_FRIDAY", 1000)

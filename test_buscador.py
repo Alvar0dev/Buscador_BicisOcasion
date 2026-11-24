@@ -2510,7 +2510,11 @@ def test_black_friday_canal_exclusivo_y_segundo_bot():
 
 def test_filtro_estricto_xc_vs_trail():
     """Verifica el bloqueo de Trail/Enduro (>130 mm) en diario y su admisión como respaldo tras XC en Beast."""
-    from evaluator import evaluar_respaldo_black_friday, pasa_prefiltro_respaldo_black_friday
+    from evaluator import (
+        es_full_power_o_pesada,
+        evaluar_respaldo_black_friday,
+        pasa_prefiltro_respaldo_black_friday,
+    )
     from main import _recolectar_oportunidades
 
     # 1. Modelos Trail / All Mountain / Enduro se rechazan en diario (pasa_filtros_estrictos),
@@ -2578,18 +2582,40 @@ def test_filtro_estricto_xc_vs_trail():
         db_xc = BaseDatos(ruta_xc)
         trail_sneak = bici_prueba(sitio="Mammoth", bici_id="trail-sneak", titulo="Cannondale Moterra SL 2", precio=3000.0, pvp_original=6999.0, km=0, peso_kg=19.8, bateria_wh=600, suspension_trasera="si")
         xc_ok = bici_prueba(sitio="Upway", bici_id="xc-ok", titulo="BH iLynx Race Carbon 8.4", precio=2700.0, km=600, peso_kg=17.5, bateria_wh=540, suspension_trasera="si")
+        trail_upway_chollo = bici_prueba(sitio="Upway", bici_id="rk8gq1", titulo="BH iLynx Trail Carbon 8.6", precio=2399.0, pvp_original=6599.0, km=72, peso_kg=18.6, bateria_wh=540, suspension_trasera="si")
         fake_empty = MagicMock(); fake_empty.extraer_bicicletas.return_value = []
         fake_m = MagicMock(); fake_m.extraer_bicicletas.return_value = [trail_sneak]
-        fake_u = MagicMock(); fake_u.extraer_bicicletas.return_value = [xc_ok]
+        fake_u = MagicMock(); fake_u.extraer_bicicletas.return_value = [xc_ok, trail_upway_chollo]
         tel_xc = {}
         with patch.dict("main.SCRAPERS", {"Mammoth": lambda s: fake_m, "Upway": lambda s: fake_u, "Bike Ocasión": lambda s: fake_empty, "Buhobike": lambda s: fake_empty, "Wallapop": lambda s: fake_empty}, clear=True), \
-             patch("main.enriquecer_y_valorar_bici", side_effect=lambda b: (b, 8.8, "OK")):
+             patch("main.enriquecer_y_valorar_bici", side_effect=lambda b: (b, 9.5 if b.bici_id == "rk8gq1" else 8.8, "OK")):
             ops_xc = _recolectar_oportunidades(db_xc, telemetria=tel_xc)
-        assert [b.bici_id for b, _, _ in ops_xc] == ["xc-ok"]
+        # En diario: XC sana ('xc-ok', mod_prio=3) va primero y Trail ligera de ocasión ('rk8gq1', mod_prio=2) entra detrás;
+        # la Trail nueva de Mammoth ('trail-sneak') va exclusivamente a black_friday_pool.
+        assert [b.bici_id for b, _, _ in ops_xc] == ["xc-ok", "rk8gq1"]
         assert [x[0].bici_id for x in tel_xc["black_friday_pool"]] == ["trail-sneak"]
     finally:
         if os.path.exists(ruta_xc):
             os.unlink(ruta_xc)
+
+    # Componentes OEM por defecto en tiendas oficiales nuevas (km=0) vs segunda mano sin especificar
+    b_mammoth_h30 = completar_con_catalogo(
+        Bicicleta(
+            sitio="Mammoth",
+            bici_id="mammoth-583124",
+            titulo="Orbea Rise H30 2026",
+            precio=3524.25,
+            pvp_original=4699.0,
+            url="https://www.mammothbikes.com/ebike-orbea-rise-h30-2026/p-583124",
+            talla="M",
+            km=0,
+            garantia_anos=3,
+            componentes=None,
+        ),
+        aplicar_heuristica_peso=False,
+    )
+    assert b_mammoth_h30.componentes is not None and "Deore" in b_mammoth_h30.componentes
+    assert auditar_perito_mecanico(b_mammoth_h30)["nota_final"] >= 6.5
 
 
     # 5. Superíndice '²', ruido HTML 'Trail' en Buhobike sobre XC real, y no bloquear clasificación Gemini <21 kg
@@ -2708,7 +2734,11 @@ def test_black_friday_siempre_top3_omitiendo_ya_mostradas():
     hasta 3 resultados combinando estrictas + respaldo + suplemento sin PVP,
     omitiendo las ya mostradas previamente.
     """
-    from evaluator import evaluar_respaldo_black_friday
+    from evaluator import (
+        es_full_power_o_pesada,
+        evaluar_respaldo_black_friday,
+        pasa_prefiltro_respaldo_black_friday,
+    )
     from main import _recolectar_oportunidades, _despachar_alertas_black_friday
 
     b_no_pvp = bici_prueba(
@@ -2965,9 +2995,122 @@ def test_black_friday_siempre_top3_omitiendo_ya_mostradas():
                     )
                 assert env_top6b[0] == (["sup-ilynx-1411", "sup-pro-79", "sup-ilynx-70"], False)
                 assert env_top6b[1] == (["resp-lumen-new", "sup-ilynx-1411", "sup-pro-79"], True)
+
+                # Pool de 5 unidades con prev_offset=2 y enviados=[2, 0, 1] nunca repite [0, 1, 2]: prioriza [3, 4]
+                b_sup_5 = bici_prueba(**{**b_resp_new.to_dict(), "bici_id": "resp-5", "titulo": "BH iLynx Race 9.0", "precio": 3950.0})
+                b_5_items = [
+                    (b_sup_2, None, 7.0, "400 km"),
+                    (b_sup_3, None, 6.0, "400 km"),
+                    (b_no_pvp, None, 8.0, "70 km"),
+                    (b_resp_new, 45.0, 4.0, "0 km"),
+                    (b_sup_5, 40.0, 4.0, "0 km"),
+                ]
+                env_top5 = []
+                est_5 = {}
+                prev_5 = {
+                    "pool_ids": ["sup-ilynx-1411", "sup-pro-79", "sup-ilynx-70", "resp-lumen-new", "resp-5"],
+                    "offset": 2,
+                    "enviados_ids": ["sup-ilynx-70", "sup-ilynx-1411", "sup-pro-79"],
+                }
+                with patch("main.enviar_informe_respaldo_black_friday", side_effect=lambda items, **kw: env_top5.append([x[0].bici_id for x in items]) or True):
+                    _despachar_alertas_black_friday(
+                        db6, [], forzar_envio=False, bf_respaldo_pool=b_5_items, bf_suplemento_pool=[],
+                        estado_beast_previo=prev_5, estado_extra=est_5, omitir_enviadas=True,
+                    )
+                assert env_top5[0][:2] == ["resp-lumen-new", "resp-5"]
             finally:
                 if os.path.exists(ruta6):
                     os.unlink(ruta6)
+
+        # Caso 7: Bloqueo estricto Full Power (Berria Mako Hybrid Polini/Bafang, Orbea Rise LT H20 Alu 630Wh, BH iLynx 9.8),
+        #         dedup clon +130€ mismo km y seleccionar_siguientes_sin_repetir solo con Light e-MTB < 21 kg
+        from main import deduplicar_inter_portal, seleccionar_siguientes_sin_repetir
+        b_mako = completar_con_catalogo(
+            Bicicleta(sitio="Wallapop", bici_id="w-mako", titulo="Berria Mako Hybrid 6 A ESTRENAR", precio=2999.0, pvp_original=4599.0, url="https://es.wallapop.com/item/mako", talla="M", km=0, suspension_trasera="si"),
+            aplicar_heuristica_peso=False,
+        )
+        assert b_mako.peso_kg >= 22.0
+        assert pasa_filtros_estrictos(b_mako, permitir_trail_respaldo=True)[0] is False
+        assert evaluar_respaldo_black_friday(b_mako, requerir_descuento_pvp=False)[0] is False
+
+        b_rise_lt_alu = completar_con_catalogo(
+            Bicicleta(sitio="Mammoth", bici_id="m-lt-h20", titulo="Orbea Rise LT H20 2026", precio=3974.25, pvp_original=5299.0, url="https://www.mammothbikes.com/lt-h20", talla="M", km=0, suspension_trasera="si"),
+            aplicar_heuristica_peso=False,
+        )
+        assert b_rise_lt_alu.peso_kg >= 21.5 and b_rise_lt_alu.cuadro_material == "Aluminio"
+        assert evaluar_respaldo_black_friday(b_rise_lt_alu, requerir_descuento_pvp=False)[0] is False
+
+        b_bo_orig = bici_prueba(sitio="Bike Ocasión", bici_id="bo-453011", titulo="BH iLynx Race Carbon 8.6", precio=2999.0, km=2554)
+        b_wp_clon = bici_prueba(sitio="Wallapop", bici_id="wp-clon-130", titulo="Promo · Bicicleta BH iLynx Race Carbon 8.6 t.M Reacondicionada", precio=3129.0, km=2554)
+        dedup_130 = deduplicar_inter_portal([b_bo_orig, b_wp_clon])
+        assert [b.bici_id for b in dedup_130] == ["bo-453011"]
+        b_light_nueva = bici_prueba(sitio="Wallapop", bici_id="w-rise-m20", titulo="Orbea Rise M20 Carbono", precio=2599.0, peso_kg=18.3, bateria_wh=540, km=900, modalidad="Trail")
+        b_pesada = bici_prueba(sitio="Bike Ocasión", bici_id="heavy-1", titulo="Giant Trance E+3 Pro", precio=2999.0, peso_kg=23.5, km=0)
+        ops_sig = [
+            (b_bo_orig, 7.5, "Ya vista hoy"),
+            (b_light_nueva, 7.0, "Light e-MTB nueva"),
+            (b_mako, 7.0, "Full Power bloqueada"),
+            (b_pesada, 3.5, "Pesada >= 21 kg"),
+        ]
+        sel_sig = seleccionar_siguientes_sin_repetir(ops_sig, ids_omitir_todos={"bo-453011"}, ids_omitir_hoy={"bo-453011"}, limite=3)
+        assert [x["item"][0].bici_id for x in sel_sig] == ["w-mako" if False else "w-rise-m20"]
+
+        # Caso 8: Dedup colores distintos mismo modelo Mammoth en Beast (gana el más barato),
+        #         Cannondale Moterra Neo SL 2 ligera, Amflow TL bloqueada (22.6kg) vs PL,
+        #         decimal en _extraer_km ('2.293,8 km' -> 2294) y extender en viñeta '- Range Extender'
+        from scrapers.enriquecedor_web import _extraer_km, _extraer_range_extender
+        assert _extraer_km("• Sólo 2.293,8 km. Salud de batería: 100 %.") == 2294
+        assert _extraer_range_extender("E-Bike Orbea Rise M15\n- Range Extender\n- Cuadro de carbono.") == 252
+        assert _extraer_range_extender("Orbea Rise\n- Compatible con Range Extender\n- Cuadro de carbono.") is None
+
+        b_neo_sl = completar_con_catalogo(
+            Bicicleta(sitio="Bike Ocasión", bici_id="bo-neo-sl", titulo="Cannondale Moterra Neo SL 2", precio=3431.0, url="https://bike-ocasion.com/neo-sl", talla="M", km=2032, suspension_trasera="si"),
+            aplicar_heuristica_peso=False,
+        )
+        assert b_neo_sl.peso_kg == 19.8 and b_neo_sl.bateria_wh == 601
+        assert es_full_power_o_pesada(b_neo_sl)[0] is False
+
+        b_amflow_tl = completar_con_catalogo(
+            Bicicleta(sitio="Buhobike", bici_id="buho-tl", titulo="AM FLOW TL CARBON 2027 BICICLETA ELÉCTRICA", precio=3499.0, url="https://buhobike.com/tl", talla="M", km=0, suspension_trasera="si"),
+            aplicar_heuristica_peso=False,
+        )
+        assert b_amflow_tl.peso_kg >= 22.0 and es_full_power_o_pesada(b_amflow_tl)[0] is True
+        assert pasa_prefiltro_respaldo_black_friday(b_amflow_tl)[0] is False
+
+        b_h30_caro = bici_prueba(sitio="Mammoth", bici_id="mammoth-583125", titulo="Orbea Rise H30 2026", precio=3524.25, pvp_original=4699.0, km=0, peso_kg=20.5, bateria_wh=540, suspension_trasera="si")
+        b_h30_barato = bici_prueba(sitio="Mammoth", bici_id="mammoth-583124", titulo="Orbea Rise H30 2026", precio=3495.73, pvp_original=4699.0, km=0, peso_kg=20.5, bateria_wh=540, suspension_trasera="si")
+        b_trail_pin = bici_prueba(sitio="Wallapop", bici_id="w-pinto", titulo="BH iLYNX TRAIL CARBON 8.6 talla M", precio=3750.0, pvp_original=None, km=120, peso_kg=18.6, bateria_wh=540, suspension_trasera="si")
+        fd8, ruta8 = tempfile.mkstemp(suffix=".db")
+        os.close(fd8)
+        try:
+            db8 = BaseDatos(ruta=ruta8)
+            env_top8 = []
+            with patch("main.enviar_informe_respaldo_black_friday", side_effect=lambda items, **kw: env_top8.append(([x[0].bici_id for x in items], [x[0].precio for x in items])) or True):
+                _despachar_alertas_black_friday(
+                    db8, [], forzar_envio=False,
+                    bf_respaldo_pool=[(b_h30_caro, 25.0, 6.5, "resp"), (b_h30_barato, 25.6, 6.5, "resp")],
+                    bf_suplemento_pool=[(b_trail_pin, None, 4.5, "120 km")],
+                )
+            assert env_top8[0] == (["mammoth-583124", "w-pinto"], [3495.73, 3750.0])
+        finally:
+            if os.path.exists(ruta8):
+                os.unlink(ruta8)
+
+        # Rechazo de pesadas >=21kg fuera de respaldo_pool en _recolectar_oportunidades
+        fd9, ruta9 = tempfile.mkstemp(suffix=".db")
+        os.close(fd9)
+        try:
+            db9 = BaseDatos(ruta=ruta9)
+            b_heavy_daily = Bicicleta(sitio="Wallapop", bici_id="w-heavy-99", titulo="Conor WRC Carbono", precio=2100.0, url="https://es.wallapop.com/item/heavy99", talla="M", peso_kg=23.5, bateria_wh=504, suspension_trasera="si")
+            fake_w9 = MagicMock(); fake_w9.extraer_bicicletas.return_value = [b_heavy_daily]
+            fake_e9 = MagicMock(); fake_e9.extraer_bicicletas.return_value = []
+            with patch.dict("main.SCRAPERS", {"Wallapop": lambda s: fake_w9, "Bike Ocasión": lambda s: fake_e9, "Buhobike": lambda s: fake_e9, "Upway": lambda s: fake_e9, "Mammoth": lambda s: fake_e9}, clear=True), \
+                 patch("main.enriquecer_y_valorar_bici", return_value=(b_heavy_daily, 0.5, "Pesada")):
+                ops9 = _recolectar_oportunidades(db9)
+            assert ops9 == []
+        finally:
+            if os.path.exists(ruta9):
+                os.unlink(ruta9)
     finally:
         if os.path.exists(ruta_tmp):
             os.unlink(ruta_tmp)

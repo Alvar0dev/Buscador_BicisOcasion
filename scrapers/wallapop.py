@@ -117,7 +117,7 @@ _UNICORNIOS_NACIONALES_PATRONES = {
     "bh ilynx trail": re.compile(r"\bi[\-\s]?lynx\+?\s+trail\b", re.IGNORECASE),
     "orbea rise": re.compile(r"\borbea\s+rise\b", re.IGNORECASE),
     "berria mako": re.compile(r"\bberria\s+mako\b|\bmako\s+hybrid\b", re.IGNORECASE),
-    "cannondale moterra sl": re.compile(r"\bmoterra\s+sl\b", re.IGNORECASE),
+    "cannondale moterra sl": re.compile(r"\bmoterra(?:\s+neo)?\s+sl\b", re.IGNORECASE),
     "wilier urta hybrid": re.compile(r"\bwilier\s+urta\b|\burta\s+hybrid\b", re.IGNORECASE),
     "scott lumen": re.compile(r"\bscott\s+lumen\b", re.IGNORECASE),
     "focus vam2": re.compile(r"\bfocus\s+vam\s*2?(?:\s*sl|\s*8\.|\s*9\.)?\b", re.IGNORECASE),

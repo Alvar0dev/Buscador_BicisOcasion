@@ -167,6 +167,15 @@ class BaseDatos:
             ).fetchone()
         return fila is not None
 
+    def obtener_ids_enviadas(self, solo_hoy: bool = False) -> set:
+        """Devuelve el conjunto de bici_id ya enviados en el canal diario (histórico o solo hoy)."""
+        sql = "SELECT bici_id FROM bicis_enviadas"
+        if solo_hoy:
+            sql += " WHERE date(fecha_envio) >= date('now')"
+        with self._conectar() as conn:
+            filas = conn.execute(sql).fetchall()
+        return {f["bici_id"] for f in filas}
+
     def _precio_previo_en_tabla(self, tabla: str, bici_id: str) -> Optional[float]:
         """Devuelve el último precio registrado en la tabla permitida."""
         if tabla not in ("bicis_enviadas", "bicis_black_friday_enviadas"):

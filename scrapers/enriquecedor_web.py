@@ -797,6 +797,7 @@ def _extraer_range_extender(texto: str) -> Optional[int]:
         r"\bcon\s+(?:range\s*extender|extender|extensor(?:\s+de\s+(?:rango|bater[ií]a))?|bater[ií]a\s+externa|bater[ií]a\s+adicional|x-?pro|powermore)\b",
         r"\b(?:range\s*extender|extender|extensor(?:\s+de\s+(?:rango|bater[ií]a))?|bater[ií]a\s+externa|x-?pro|powermore)\s+incluid[oa]\b",
         r"\b(?:2|dos)\s+bater[ií]as\s+incluidas\b",
+        r"(?:^|[\n•\-\*])\s*(?:range\s*extender|extensor(?:\s+de\s+(?:rango|bater[ií]a))?|bater[ií]a\s+externa|powermore)\b(?:\s+[\w]{1,12})*\s*(?:$|[\n,;])",
     )
 
     for patron in patrones_inclusion:
@@ -825,6 +826,25 @@ def _extraer_range_extender(texto: str) -> Optional[int]:
 
 
 
+def _parsear_entero_km(raw_num: str) -> Optional[int]:
+    """Convierte '1.250', '2.293,8' o '150,4' en entero redondeado sin concatenar decimales."""
+    if not raw_num:
+        return None
+    limpio = raw_num.strip()
+    try:
+        if re.fullmatch(r"\d{1,3}(?:\.\d{3})*,\d{1,2}", limpio):
+            return int(round(float(limpio.replace(".", "").replace(",", "."))))
+        if re.fullmatch(r"\d+,\d{1,2}", limpio):
+            return int(round(float(limpio.replace(",", "."))))
+        if re.fullmatch(r"\d{1,3}(?:,\d{3})*\.\d{1,2}", limpio):
+            return int(round(float(limpio.replace(",", ""))))
+        if re.fullmatch(r"\d+\.\d{1,2}", limpio):
+            return int(round(float(limpio)))
+        return int(limpio.replace(".", "").replace(",", ""))
+    except ValueError:
+        return None
+
+
 def _normalizar_km_existente(valor: Any) -> Optional[int]:
     """
     Normaliza un valor de kilómetros si ya viene como int, float o string numérico/etiquetado.
@@ -840,11 +860,8 @@ def _normalizar_km_existente(valor: Any) -> Optional[int]:
         if not limpio or limpio in ("-", "null", "none", "n/a"):
             return None
         if re.fullmatch(r"\d[\d.,]*", limpio):
-            try:
-                val_int = int(limpio.replace(".", "").replace(",", ""))
-                return val_int if 0 <= val_int <= 99999 else None
-            except ValueError:
-                pass
+            val_int = _parsear_entero_km(limpio)
+            return val_int if (val_int is not None and 0 <= val_int <= 99999) else None
         return _extraer_km(limpio)
     return None
 
@@ -1010,14 +1027,10 @@ def _extraer_km(texto: str) -> Optional[int]:
         texto_norm,
         re.IGNORECASE,
     ):
-        try:
-            raw_num = match_etiqueta.group(1) or match_etiqueta.group(2) or match_etiqueta.group(3)
-            km_str = raw_num.replace(".", "").replace(",", "")
-            val = int(km_str)
-            if 0 <= val <= 99999:
-                return val
-        except ValueError:
-            pass
+        raw_num = match_etiqueta.group(1) or match_etiqueta.group(2) or match_etiqueta.group(3)
+        val = _parsear_entero_km(raw_num)
+        if val is not None and 0 <= val <= 99999:
+            return val
 
     # 3. Fallback general: buscar 'XXXX km'/'kms'/'kilómetros' acotado a su frase (sin cruzar '.')
     for match in re.finditer(r"(\d[\d.,]*)\s*(?:kms?|kil[oó]metros?)\b", texto_norm, re.IGNORECASE):
@@ -1037,13 +1050,9 @@ def _extraer_km(texto: str) -> Optional[int]:
         if any(p in contexto_total for p in palabras_bloqueadas):
             continue
 
-        try:
-            km_str = match.group(1).replace(".", "").replace(",", "")
-            val = int(km_str)
-            if 0 <= val <= 99999:
-                return val
-        except ValueError:
-            pass
+        val = _parsear_entero_km(match.group(1))
+        if val is not None and 0 <= val <= 99999:
+            return val
 
     return None
 

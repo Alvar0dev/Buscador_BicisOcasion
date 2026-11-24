@@ -62,6 +62,7 @@ CATALOGO_EMTB = [
         "suspension_trasera": "si",
         "modalidad": "XC / Downcountry",
         "recorrido_mm": 120,
+        "componentes_default": "Fox 34 Float / Shimano XT 12v",
     },
     {
         "patrones": ["bh ilynx+ trail carbon", "ilynx+ trail carbon", "bh ilynx+ enduro", "ilynx+"],
@@ -72,6 +73,7 @@ CATALOGO_EMTB = [
         "suspension_trasera": "si",
         "modalidad": "Trail",
         "recorrido_mm": 160,
+        "componentes_default": "Fox 36 Float / Shimano XT 12v",
     },
     {
         "patrones": ["bh ilynx trail carbon", "ilynx trail carbon"],
@@ -82,6 +84,7 @@ CATALOGO_EMTB = [
         "suspension_trasera": "si",
         "modalidad": "Trail",
         "recorrido_mm": 150,
+        "componentes_default": "Fox 36 Float / Shimano XT 12v",
     },
     {
         "patrones": ["bh ilynx race"],
@@ -92,12 +95,34 @@ CATALOGO_EMTB = [
         "suspension_trasera": "si",
         "modalidad": "XC / Downcountry",
         "recorrido_mm": 120,
+        "componentes_default": "Fox 34 Float / Shimano Deore-XT 12v",
     },
     {
         "patrones": ["bh ilynx trail"],
         "peso_kg": 19.6,
         "bateria_wh_default": 540,
         "motor": "BH 2EXMAG",
+        "cuadro_material": "Aluminio",
+        "suspension_trasera": "si",
+        "modalidad": "Trail",
+        "recorrido_mm": 150,
+        "componentes_default": "RockShox Recon-Fox 34 / Shimano Deore 12v",
+    },
+    {
+        "patrones": ["bh ilynx 9.", "bh ilynx+ 9."],
+        "peso_kg": 22.2,
+        "bateria_wh_default": 630,
+        "motor": "Bosch Performance Line CX / Shimano EP801",
+        "cuadro_material": "Carbono",
+        "suspension_trasera": "si",
+        "modalidad": "Enduro",
+        "recorrido_mm": 160,
+    },
+    {
+        "patrones": ["orbea rise lt h", "orbea rise lt h10", "orbea rise lt h20", "orbea rise lt h30"],
+        "peso_kg": 21.8,
+        "bateria_wh_default": 630,
+        "motor": "Shimano EP600-RS",
         "cuadro_material": "Aluminio",
         "suspension_trasera": "si",
         "modalidad": "Trail",
@@ -112,6 +137,7 @@ CATALOGO_EMTB = [
         "suspension_trasera": "si",
         "modalidad": "Trail",
         "recorrido_mm": 150,
+        "componentes_default": "Fox 36 Float / Fox Float X / Shimano SLX-XT 12v",
     },
     {
         "patrones": [
@@ -125,9 +151,10 @@ CATALOGO_EMTB = [
         "suspension_trasera": "si",
         "modalidad": "Trail",
         "recorrido_mm": 140,
+        "componentes_default": "Fox 34 Float Performance / Shimano SLX-XT 12v",
     },
     {
-        "patrones": ["orbea rise h", "orbea rise h10", "orbea rise h15", "orbea rise h20", "orbea rise h30"],
+        "patrones": ["orbea rise h", "orbea riseh", "orbea rise h10", "orbea rise h15", "orbea rise h20", "orbea rise h30"],
         "peso_kg": 20.5,
         "bateria_wh_default": 540,
         "motor": "Shimano EP8-RS",
@@ -135,9 +162,20 @@ CATALOGO_EMTB = [
         "suspension_trasera": "si",
         "modalidad": "Trail",
         "recorrido_mm": 140,
+        "componentes_default": "Marzocchi Bomber Z2 - Fox 34 Float / Fox Float / Shimano Deore-SLX 12v",
     },
     {
-        "patrones": ["amflow pl carbon", "amflow pl", "am flow"],
+        "patrones": ["amflow tl", "am flow tl"],
+        "peso_kg": 22.6,
+        "bateria_wh_default": 800,
+        "motor": "DJI Avinox M2",
+        "cuadro_material": "Carbono",
+        "suspension_trasera": "si",
+        "modalidad": "All Mountain / SUV",
+        "recorrido_mm": 140,
+    },
+    {
+        "patrones": ["amflow pl carbon", "amflow pl", "am flow pl"],
         "peso_kg": 19.8,
         "bateria_wh_default": 600,
         "motor": "DJI Avinox",
@@ -145,9 +183,10 @@ CATALOGO_EMTB = [
         "suspension_trasera": "si",
         "modalidad": "Trail / All Mountain",
         "recorrido_mm": 150,
+        "componentes_default": "Fox 36 Performance / Fox Float X / SRAM GX Eagle 12v",
     },
     {
-        "patrones": ["cannondale moterra sl"],
+        "patrones": ["cannondale moterra sl", "cannondale moterra neo sl", "moterra neo sl", "moterra sl"],
         "peso_kg": 19.8,
         "bateria_wh_default": 601,
         "motor": "Shimano EP801",
@@ -155,6 +194,18 @@ CATALOGO_EMTB = [
         "suspension_trasera": "si",
         "modalidad": "Trail",
         "recorrido_mm": 150,
+        "componentes_default": "Fox 36 Performance / Fox Float X / Shimano XT-Deore 12v",
+    },
+    {
+        "patrones": ["mmr kaizen"],
+        "peso_kg": 18.6,
+        "bateria_wh_default": 400,
+        "motor": "Bosch Performance Line SX",
+        "cuadro_material": "Carbono",
+        "suspension_trasera": "si",
+        "modalidad": "Trail",
+        "recorrido_mm": 140,
+        "componentes_default": "RockShox Pike / Fox Float / SRAM GX Eagle 12v",
     },
     {
         "patrones": ["ghost path riot", "path riot"],
@@ -546,13 +597,13 @@ CATALOGO_EMTB = [
         "modalidad": "Trail",
     },
     {
-        "patrones": ["berria mako hybrid", "mako hybrid"],
-        "peso_kg": 20.6,
+        "patrones": ["berria mako hybrid", "mako hybrid", "berria mako"],
+        "peso_kg": 22.8,
         "bateria_wh_default": 720,
-        "motor": "Polini / Bafang M500",
+        "motor": "Polini E-P3+ / Bafang M500",
         "cuadro_material": "Carbono",
         "suspension_trasera": "si",
-        "modalidad": "Trail",
+        "modalidad": "Trail / All Mountain",
         "recorrido_mm": 150,
     },
     {
@@ -793,11 +844,11 @@ def _es_anuncio_generico_sin_modelo(bici: Bicicleta) -> bool:
 def _es_motor_full_power(motor: Optional[str], titulo: str = "") -> bool:
     """Identifica motores Full Power clásicos que superan 22.5 kg con baterías >= 625 Wh."""
     txt = _normalizar_ascii(f"{motor or ''} {titulo}")
-    if any(k in txt for k in ("ep8 rs", "ep8-rs", "ep801 rs", "ep801-rs", "ep6 rs", "bosch sx", "performance line sx", "specialized sl", "tq", "fazua", "mahle", "2exmag")):
+    if any(k in txt for k in ("ep8 rs", "ep8-rs", "ep801 rs", "ep801-rs", "ep6 rs", "ep6-rs", "ep600 rs", "ep600-rs", "bosch sx", "performance line sx", "specialized sl", "tq", "fazua", "mahle", "2exmag")):
         return False
     return bool(
         re.search(
-            r"\b(?:bosch(?:\s+performance(?:\s+line)?)?\s*cx|shimano\s+ep(?:801|8|6)|ep801|ep8|ep6|specialized\s*(?:2\.[12]|full\s*power)|brose(?:\s+s\s*mag)?|yamaha|pw-?x\d*|giant\s+syncdrive|syncdrive|polini)\b",
+            r"\b(?:bosch(?:\s+performance(?:\s+line)?)?\s*cx|shimano\s+ep(?:801|8|6)|ep801|ep8|ep6|specialized\s*(?:2\.[12]|full\s*power)|brose(?:\s+s\s*mag)?|yamaha|pw-?x\d*|giant\s+syncdrive|syncdrive|polini|bafang|oli|ananda|panasonic)\b",
             txt,
         )
     )
@@ -806,16 +857,18 @@ def _es_motor_full_power(motor: Optional[str], titulo: str = "") -> bool:
 def _es_excepcion_ligera(bici: Bicicleta) -> bool:
     """Solo las familias ligeras explícitas pueden bajar de 21 kg con baterías >= 500 Wh."""
     txt = _normalizar_ascii(f"{bici.titulo or ''} {bici.motor or ''}")
+    if any(k in txt for k in ("rise lt h", "berria mako", "mako hybrid", "ilynx 9.", "ilynx+ 9.", "amflow tl", "am flow tl")):
+        return False
     bat = bici.bateria_wh
     if any(k in txt for k in ("mondraker neat", "mondraker dune", "pivot shuttle sl", "shuttle sl")):
         return bat is None or bat >= 500
     return bool(
         re.search(
-            r"\b(?:orbea\s+)?rise\b|\bilynx\s+(?:race|trail)\b|\bmoterra\s+sl\b|"
+            r"\b(?:orbea\s+)?rise\w*\b|\bilynx\s+(?:race|trail)\b|\bmoterra(?:\s+neo)?\s+sl\b|"
             r"\bamflow\s+pl\b|\blevo\s+sl\b|\bkenevo\s+sl\b|\bfuel[\s\-]*exe\b|"
             r"\bscott\s+lumen\b|\bbmc\s+fourstroke\b|\bwilier\s+urta\b|\burta\s+hybrid\b|"
             r"\bams\s+hybrid\b|\be-?zesty\b|\bvam\s*2(?:\s*sl)?\b|\bjam\s*2\s*sl\b|"
-            r"\bmacina\s+scarp\b|\bmako\s+hybrid\b",
+            r"\bmacina\s+scarp\b",
             txt,
         )
     )
@@ -870,6 +923,13 @@ def completar_con_catalogo(bici: Bicicleta, aplicar_heuristica_peso: bool = True
             elif bici.recorrido_mm is None or bici.recorrido_mm <= cfg.RECORRIDO_MAX_XC_MM:
                 # En tiendas como Buhobike la categoría 'electricas-trail-dobles' contamina XC puros con 'Trail'
                 bici.modalidad = entrada["modalidad"]
+            if (
+                not bici.componentes
+                and entrada.get("componentes_default")
+                and bici.km == 0
+                and (bici.sitio or "").lower() in ("mammoth", "buhobike")
+            ):
+                bici.componentes = entrada["componentes_default"]
             break
 
     # Regla C — Corrección estricta de motores (ignora erratas HTML de tiendas)

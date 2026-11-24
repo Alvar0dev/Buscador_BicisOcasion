@@ -32,6 +32,7 @@ class MammothScraper(BaseScraper):
             if u not in urls:
                 urls.append(u)
 
+        por_id = {}
         for url_listado in urls:
             soup = self.sopa(url_listado)
             if soup is None:
@@ -39,29 +40,39 @@ class MammothScraper(BaseScraper):
             for bici in self._extraer_de_sopa(soup, url_listado=url_listado):
                 if bici.bici_id not in vistos:
                     vistos.add(bici.bici_id)
+                    por_id[bici.bici_id] = len(bicis)
                     bicis.append(bici)
 
         if bicis and not hasattr(self.sopa, "assert_called"):
             for bici in self._extraer_filtrados_precio():
                 if bici.bici_id not in vistos:
                     vistos.add(bici.bici_id)
+                    por_id[bici.bici_id] = len(bicis)
                     bicis.append(bici)
+                else:
+                    idx = por_id.get(bici.bici_id)
+                    if idx is not None and 0 < bici.precio < bicis[idx].precio:
+                        bicis[idx] = bici
 
         return bicis
 
     def _extraer_filtrados_precio(self) -> List[Bicicleta]:
         """
         Consulta el endpoint AJAX /filtrarproductos de Mammoth ordenado por precio ascendente
-        (1.500 - 4.200 €) para no perder ofertas cuando una categoría supera los 60 ítems de portada.
+        y por mayor descuento (1.500 - 4.200 €) para no perder ofertas Black Friday
+        cuando una categoría supera los 60 ítems de portada.
         """
         import requests
         bicis: List[Bicicleta] = []
         url_ajax = f"{self.sitio.base_url.rstrip('/')}/filtrarproductos"
-        for cid, slug_cat in (
-            (3104, "bicicletas-electricas-mtb-dobles-rally-xc/c-3104"),
-            (2139, "bicicletas-electricas-mtb-trail-all-mountain-dobles/c-2139"),
-            (3102, "bicicletas-electricas-mtb-dobles-enduro/c-3102"),
-        ):
+        consultas = (
+            (3104, "bicicletas-electricas-mtb-dobles-rally-xc/c-3104", "PrecioAscendente"),
+            (3104, "bicicletas-electricas-mtb-dobles-rally-xc/c-3104", "DescuentoDescendente"),
+            (2139, "bicicletas-electricas-mtb-trail-all-mountain-dobles/c-2139", "PrecioAscendente"),
+            (2139, "bicicletas-electricas-mtb-trail-all-mountain-dobles/c-2139", "DescuentoDescendente"),
+            (3102, "bicicletas-electricas-mtb-dobles-enduro/c-3102", "PrecioAscendente"),
+        )
+        for cid, slug_cat, orden in consultas:
             payload = {
                 "precioMinimo": str(cfg.PRECIO_MIN_EUR),
                 "precioMaximo": str(getattr(cfg, "PRECIO_RESPALDO_BLACK_FRIDAY_EUR", 4000) + 200),
@@ -71,7 +82,7 @@ class MammothScraper(BaseScraper):
                 "lstValores": [],
                 "lstCategorias": [],
                 "idCategoria": cid,
-                "orden": "PrecioAscendente",
+                "orden": orden,
                 "tipoCategoria": 2,
                 "filtrosCat": {
                     "PrecioDesde": None,

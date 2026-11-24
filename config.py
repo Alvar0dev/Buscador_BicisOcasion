@@ -37,7 +37,6 @@ WALLAPOP_UNICORN_QUERIES: List[str] = [
     "BH iLynx Race",
     "BH iLynx Trail",
     "Orbea Rise",
-    "Berria Mako",
     "Cannondale Moterra SL",
     "Scott Lumen",
     "Wilier Urta Hybrid",

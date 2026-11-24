@@ -31,6 +31,8 @@ from evaluator import (
     evaluar_oportunidad_black_friday,
     pasa_prefiltro_respaldo_black_friday,
     evaluar_respaldo_black_friday,
+    es_bici_de_ocasion,
+    es_modalidad_mtb_doble_valida,
     es_modalidad_xc,
     es_modelo_trail_o_enduro,
     es_unicornio_xc,
@@ -224,7 +226,15 @@ def deduplicar_inter_portal(bicis: list) -> list:
             talla_of = (b_of.talla or "").strip().upper()
             if talla_of and talla_w and talla_of != talla_w:
                 continue
-            if abs(float(b_of.precio) - float(b_w.precio)) <= 25.0 and titulos_equivalentes_dedup(
+            diff_precio = float(b_w.precio) - float(b_of.precio)
+            mismo_km_clon = (
+                b_of.km is not None
+                and b_w.km is not None
+                and b_of.km > 0
+                and b_of.km == b_w.km
+                and 0.0 <= diff_precio <= 160.0
+            )
+            if (abs(diff_precio) <= 25.0 or mismo_km_clon) and titulos_equivalentes_dedup(
                 b_of.titulo, b_w.titulo
             ):
                 clon_de = b_of
@@ -296,8 +306,13 @@ def _recolectar_oportunidades(
             if apto_vig:
                 vigilancia_aptas.append(bici)
 
-        # Pre-filtro rápido usando catálogo XC local antes de deduplicar o enriquecer
-        apto_pre, motivo_pre = pasa_filtros_estrictos(b_pre)
+        # Pre-filtro rápido usando catálogo local antes de deduplicar o enriquecer:
+        # En portales de ocasión/segunda mano y Wallapop admite también Trail ligera / MTB (< 21 kg, > 500 Wh)
+        # ordenadas por clave_orden_estrictas (XC [3] > Trail ligera [2] > MTB [1]).
+        es_ocasion_o_wallapop_pre = es_bici_de_ocasion(b_pre) or (b_pre.sitio or "").lower() == "wallapop"
+        apto_pre, motivo_pre = pasa_filtros_estrictos(
+            b_pre, permitir_trail_respaldo=es_ocasion_o_wallapop_pre
+        )
         if apto_pre:
             pre_aptas.append(bici)
             continue
@@ -392,14 +407,24 @@ def _recolectar_oportunidades(
                     if ok_sup:
                         black_friday_suplemento_pool.append((bici, dto_s, nota_s, mot_s, clave_s))
 
-            if (
+            es_ocasion_o_wallapop = es_bici_de_ocasion(bici) or (bici.sitio or "").lower() == "wallapop"
+            if es_ocasion_o_wallapop:
+                if not es_modalidad_mtb_doble_valida(bici) or (
+                    bici.recorrido_mm is not None and bici.recorrido_mm > 165
+                ):
+                    logger.info(
+                        f"  [Descarte Modalidad/Recorrido Diario] {bici.titulo}: modalidad={bici.modalidad}, "
+                        f"recorrido={bici.recorrido_mm} mm (fuera de XC/Trail ligera/MTB <= 165 mm)"
+                    )
+                    continue
+            elif (
                 es_modelo_trail_o_enduro(bici)
                 or not es_modalidad_xc(bici.modalidad)
                 or (bici.recorrido_mm is not None and bici.recorrido_mm > cfg.RECORRIDO_MAX_XC_MM)
             ):
                 logger.info(
                     f"  [Descarte Trail/Enduro Diario] {bici.titulo}: modalidad={bici.modalidad}, "
-                    f"recorrido={bici.recorrido_mm} mm (flujo diario solo XC <= {cfg.RECORRIDO_MAX_XC_MM} mm)"
+                    f"recorrido={bici.recorrido_mm} mm (tiendas nuevas no-XC van a Beast)"
                 )
                 continue
 
@@ -433,13 +458,22 @@ def _recolectar_oportunidades(
                 continue
 
             es_nueva = forzar_envio or db.debe_reenviarse(bici, nota)
-            apto_pre, motivo_post = pasa_filtros_estrictos(bici)
+            apto_pre, motivo_post = pasa_filtros_estrictos(
+                bici, permitir_trail_respaldo=es_ocasion_o_wallapop
+            )
 
             if apto_pre:
                 estrictas_pool.append((bici, nota, desglose, es_nueva))
             else:
-                logger.info(f"  [Candidata cercana] {bici.titulo}: {motivo_post} (Nota {nota}/10)")
-                respaldo_pool.append((bici, nota, desglose, es_nueva))
+                es_rechazo_duro = (
+                    (bici.peso_kg is not None and bici.peso_kg >= cfg.PESO_DESCARTE_KG)
+                    or (bici.bateria_wh is not None and bici.bateria_wh <= cfg.BATERIA_MIN_WH)
+                    or "Full Power" in motivo_post
+                    or "pesado" in motivo_post
+                )
+                if not es_rechazo_duro:
+                    logger.info(f"  [Candidata cercana] {bici.titulo}: {motivo_post} (Nota {nota}/10)")
+                    respaldo_pool.append((bici, nota, desglose, es_nueva))
 
     # Ordenar estrictas (< 21 kg) por calidad real (novedad solo desempata a igualdad exacta)
     estrictas_pool.sort(key=lambda x: (clave_orden_estrictas(x[:3]), 1 if x[3] else 0), reverse=True)
@@ -643,12 +677,28 @@ def seleccionar_por_portal(
         if not items_sitio:
             continue
 
-        estrictas_sitio = [op for op in items_sitio if pasa_filtros_estrictos(op[0])[0]]
+        estrictas_sitio = [
+            op for op in items_sitio
+            if pasa_filtros_estrictos(
+                op[0],
+                permitir_trail_respaldo=(
+                    es_bici_de_ocasion(op[0]) or (op[0].sitio or "").lower() == "wallapop"
+                ),
+            )[0]
+        ]
         estrictas_no_gen = [
             op for op in estrictas_sitio
             if op[1] > 4.5 or not _es_anuncio_generico_sin_modelo(op[0])
         ]
-        respaldo_sitio = [op for op in items_sitio if not pasa_filtros_estrictos(op[0])[0]]
+        respaldo_sitio = [
+            op for op in items_sitio
+            if not pasa_filtros_estrictos(
+                op[0],
+                permitir_trail_respaldo=(
+                    es_bici_de_ocasion(op[0]) or (op[0].sitio or "").lower() == "wallapop"
+                ),
+            )[0]
+        ]
 
         if estrictas_no_gen:
             pool_sitio = estrictas_no_gen
@@ -713,24 +763,96 @@ def seleccionar_por_portal(
     }
 
 
-def _es_equivalente_en_lista(bici, lista_bicis: list) -> bool:
-    """Comprueba si existe otro portal con el mismo modelo y precio +-25 EUR, o un clon idéntico (mismo título y precio) del mismo portal."""
+def _encontrar_equivalente_idx(bici, lista_bicis: list) -> int:
+    """
+    Devuelve el índice en lista_bicis si existe otro portal con el mismo modelo y precio +-25 EUR,
+    o una variante de color / clon del mismo modelo en el mismo portal (en tiendas oficiales o mismo km/precio).
+    Devuelve -1 si no existe equivalente.
+    """
     t_b = (bici.titulo or "").strip().lower()
     s_b = (bici.sitio or "").strip().lower()
-    return any(
-        (
-            (s.sitio or "").strip().lower() != s_b
-            and abs(float(s.precio) - float(bici.precio)) <= 25.0
-            and titulos_equivalentes_dedup(s.titulo, bici.titulo)
-        )
-        or (
-            s.bici_id != bici.bici_id
-            and (s.sitio or "").strip().lower() == s_b
-            and (s.titulo or "").strip().lower() == t_b
-            and abs(float(s.precio) - float(bici.precio)) <= 1.0
-        )
-        for s in lista_bicis
-    )
+    talla_b = (bici.talla or "").strip().upper()
+    es_tienda_nueva_b = s_b in ("mammoth", "buhobike") and not es_bici_de_ocasion(bici)
+    for idx, s in enumerate(lista_bicis):
+        s_s = (s.sitio or "").strip().lower()
+        t_s = (s.titulo or "").strip().lower()
+        if s_s != s_b:
+            if abs(float(s.precio) - float(bici.precio)) <= 25.0 and titulos_equivalentes_dedup(s.titulo, bici.titulo):
+                return idx
+        elif s.bici_id != bici.bici_id:
+            talla_s = (s.talla or "").strip().upper()
+            misma_talla = (not talla_s or not talla_b or talla_s == talla_b)
+            if (
+                misma_talla
+                and es_tienda_nueva_b
+                and (t_s == t_b or titulos_equivalentes_dedup(s.titulo, bici.titulo))
+            ):
+                return idx
+            if t_s == t_b and abs(float(s.precio) - float(bici.precio)) <= 1.0:
+                return idx
+    return -1
+
+
+def _es_equivalente_en_lista(bici, lista_bicis: list) -> bool:
+    """True si existe un equivalente/variante en lista_bicis."""
+    return _encontrar_equivalente_idx(bici, lista_bicis) >= 0
+
+
+def seleccionar_siguientes_sin_repetir(
+    oportunidades: list,
+    ids_omitir_todos: set,
+    ids_omitir_hoy: set,
+    limite: int = 3,
+) -> list:
+    """
+    Selecciona las siguientes opciones más interesantes (< 21 kg, > 500 Wh, sin genéricas)
+    omitiendo las ya enviadas anteriormente:
+      1. Primero candidatas estrictas nunca notificadas (fuera de ids_omitir_todos).
+      2. Si hay menos de `limite`, completa con estrictas no notificadas hoy (fuera de ids_omitir_hoy).
+    Nunca rellena con bicicletas >= 21 kg.
+    """
+    estrictas_validas = []
+    vistos = set()
+    for op in oportunidades:
+        bici, nota = op[0], op[1]
+        if bici.bici_id in vistos:
+            continue
+        es_oc_w = es_bici_de_ocasion(bici) or (bici.sitio or "").lower() == "wallapop"
+        if not pasa_filtros_estrictos(bici, permitir_trail_respaldo=es_oc_w)[0]:
+            continue
+        if nota <= 4.5 and _es_anuncio_generico_sin_modelo(bici):
+            continue
+        vistos.add(bici.bici_id)
+        estrictas_validas.append(op)
+
+    nunca_vistas = [
+        (idx + 1, op)
+        for idx, op in enumerate(estrictas_validas)
+        if op[0].bici_id not in ids_omitir_todos
+    ]
+    no_vistas_hoy = [
+        (idx + 1, op)
+        for idx, op in enumerate(estrictas_validas)
+        if op[0].bici_id in ids_omitir_todos and op[0].bici_id not in ids_omitir_hoy
+    ]
+
+    seleccion = []
+    ids_sel = set()
+    for pos, op in nunca_vistas + no_vistas_hoy:
+        if len(seleccion) >= limite:
+            break
+        if op[0].bici_id in ids_sel:
+            continue
+        ids_sel.add(op[0].bici_id)
+        seleccion.append({
+            "sitio": op[0].sitio,
+            "item": op,
+            "posicion": pos,
+            "es_rot2": True,
+            "retorno_top1": False,
+            "es_estricta": True,
+        })
+    return seleccion
 
 
 def _despachar_alertas_black_friday(
@@ -741,6 +863,7 @@ def _despachar_alertas_black_friday(
     bf_suplemento_pool: Optional[list] = None,
     estado_beast_previo: Optional[dict] = None,
     estado_extra: Optional[dict] = None,
+    omitir_enviadas: bool = False,
 ) -> int:
     """
     Envía las mejores nuevas y seminuevas (hasta 3 por defecto) al bot Black Bike Beast:
@@ -760,7 +883,29 @@ def _despachar_alertas_black_friday(
     bicis_pool = []
 
     def _agregar_item_beast(kind: str, bici, nota, dto, etiqueta=None, desglose=None, motivo=None):
-        if bici.bici_id in vistos_pool or _es_equivalente_en_lista(bici, bicis_pool):
+        if bici.bici_id in vistos_pool:
+            return
+        idx_eq = _encontrar_equivalente_idx(bici, bicis_pool)
+        if idx_eq >= 0:
+            prev_item = pool_beast[idx_eq]
+            mismo_portal = (prev_item["bici"].sitio or "").strip().lower() == (bici.sitio or "").strip().lower()
+            if (
+                mismo_portal
+                and prev_item["kind"] == kind
+                and float(bici.precio) < float(prev_item["bici"].precio)
+            ):
+                vistos_pool.discard(prev_item["bici"].bici_id)
+                vistos_pool.add(bici.bici_id)
+                bicis_pool[idx_eq] = bici
+                pool_beast[idx_eq] = {
+                    "kind": kind,
+                    "bici": bici,
+                    "nota": nota,
+                    "dto": dto,
+                    "etiqueta": etiqueta,
+                    "desglose": desglose,
+                    "motivo": motivo,
+                }
             return
         vistos_pool.add(bici.bici_id)
         bicis_pool.append(bici)
@@ -804,6 +949,7 @@ def _despachar_alertas_black_friday(
 
     prev_beast = estado_beast_previo or {}
     prev_pool_ids = prev_beast.get("pool_ids") or []
+    prev_enviados_ids = set(prev_beast.get("enviados_ids") or [])
     prev_offset = int(prev_beast.get("offset", 0) or 0)
     misma_busqueda = (not forzar_envio) and bool(prev_pool_ids) and (pool_ids == prev_pool_ids)
 
@@ -815,10 +961,28 @@ def _despachar_alertas_black_friday(
         )
 
     seleccion_beast = []
-    if misma_busqueda:
+    if misma_busqueda or omitir_enviadas:
         paso = objetivo_top if n_total > objetivo_top else 1
-        offset_sel = (prev_offset + paso) % n_total
-        seleccion_beast = [pool_beast[(offset_sel + i) % n_total] for i in range(k_objetivo)]
+        inicio_rot = (prev_offset + paso) % n_total
+        ids_sel = set()
+        # 1. Priorizar candidatas del pool NO enviadas en la pasada anterior (evita repetir el mismo trío)
+        if prev_enviados_ids:
+            orden_circular = [pool_beast[(prev_offset + i) % n_total] for i in range(n_total)]
+            for x in orden_circular:
+                if len(seleccion_beast) >= k_objetivo:
+                    break
+                if x["bici"].bici_id not in prev_enviados_ids and x["bici"].bici_id not in ids_sel:
+                    seleccion_beast.append(x)
+                    ids_sel.add(x["bici"].bici_id)
+        # 2. Completar huecos restantes siguiendo el avance cíclico desde inicio_rot
+        for i in range(n_total):
+            if len(seleccion_beast) >= k_objetivo:
+                break
+            x = pool_beast[(inicio_rot + i) % n_total]
+            if x["bici"].bici_id not in ids_sel:
+                seleccion_beast.append(x)
+                ids_sel.add(x["bici"].bici_id)
+        offset_sel = pool_ids.index(seleccion_beast[0]["bici"].bici_id) if seleccion_beast else inicio_rot
     elif forzar_envio:
         offset_sel = 0
         estrictas_all = [x for x in pool_beast if x["kind"] == "strict"][:max_envios]
@@ -889,7 +1053,14 @@ def _despachar_alertas_black_friday(
     respaldo_enviado = False
     if informe_items:
         subtitulo_resp = None
-        if misma_busqueda:
+        if omitir_enviadas:
+            subtitulo_resp = (
+                f"Doble suspensión, Talla {cfg.TALLA_OBJETIVO}, < 21 kg, batería > {cfg.BATERIA_MIN_WH} Wh, "
+                f"hasta {cfg.PRECIO_MAX_BLACK_FRIDAY_EUR} € (respaldo hasta {getattr(cfg, 'PRECIO_RESPALDO_BLACK_FRIDAY_EUR', 4000)} €), "
+                f"priorizando XC y luego Trail ligera / MTB. "
+                f"Búsqueda omitiendo resultados ya mostrados — siguientes {len(informe_items)} más interesantes:"
+            )
+        elif misma_busqueda:
             subtitulo_resp = (
                 f"Doble suspensión, Talla {cfg.TALLA_OBJETIVO}, < 21 kg, batería > {cfg.BATERIA_MIN_WH} Wh, "
                 f"hasta {cfg.PRECIO_MAX_BLACK_FRIDAY_EUR} € (respaldo hasta {getattr(cfg, 'PRECIO_RESPALDO_BLACK_FRIDAY_EUR', 4000)} €), "
@@ -906,7 +1077,7 @@ def _despachar_alertas_black_friday(
 
         if enviar_informe_respaldo_black_friday(
             informe_items,
-            silencioso=misma_busqueda,
+            silencioso=(misma_busqueda and not omitir_enviadas),
             subtitulo=subtitulo_resp,
         ):
             respaldo_enviado = True
@@ -934,7 +1105,7 @@ def _despachar_alertas_black_friday(
     return estrictas_enviadas + (len(informe_items) if respaldo_enviado else 0)
 
 
-def ejecutar_busqueda(forzar_envio: bool = False) -> None:
+def ejecutar_busqueda(forzar_envio: bool = False, omitir_enviadas: bool = False) -> None:
     """Ejecuta una pasada completa de búsqueda, valoración pericial y entrega 1 opción por página."""
     t_inicio = time.time()
     logger.info(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Iniciando búsqueda de e-MTB...")
@@ -964,18 +1135,35 @@ def ejecutar_busqueda(forzar_envio: bool = False) -> None:
             if es_mega_chollo(b_op, n_op):
                 mega_chollos_count += 1
 
-        plan = seleccionar_por_portal(oportunidades, ultimo_analisis=ultimo_analisis)
-        seleccionados = plan["seleccionados"]
-        nuevo_estado_portales = plan["estado_portales"]
-        top1_ids_por_portal = plan["top1_ids"]
+        if omitir_enviadas:
+            ids_omitir_todos = db.obtener_ids_enviadas(solo_hoy=False)
+            ids_omitir_hoy = db.obtener_ids_enviadas(solo_hoy=True)
+            seleccionados = seleccionar_siguientes_sin_repetir(
+                oportunidades,
+                ids_omitir_todos=ids_omitir_todos,
+                ids_omitir_hoy=ids_omitir_hoy,
+                limite=TOP_N_NOTIFICAR,
+            )
+            nuevo_estado_portales = dict(estado_portales_previo)
+            top1_ids_por_portal = [x["item"][0].bici_id for x in seleccionados]
+            mejor_nota = max((x["item"][1] for x in seleccionados), default=0.0)
+            logger.info(
+                f"[main] Modo --omitir-enviadas: seleccionada(s) {len(seleccionados)} bici(s) siguientes "
+                f"(< 21 kg, > 500 Wh) | mejor nota: {mejor_nota}/10."
+            )
+        else:
+            plan = seleccionar_por_portal(oportunidades, ultimo_analisis=ultimo_analisis)
+            seleccionados = plan["seleccionados"]
+            nuevo_estado_portales = plan["estado_portales"]
+            top1_ids_por_portal = plan["top1_ids"]
 
-        mejor_nota = max((x["item"][1] for x in seleccionados), default=0.0)
-        logger.info(
-            f"[main] Seleccionada(s) {len(seleccionados)} bici(s) (1 por página con stock) "
-            f"| mejor nota: {mejor_nota}/10 | Mega Chollos en pool: {mega_chollos_count} "
-            f"| rotación #2 prevista: {plan['portales_rotados'] or 'ninguna'} "
-            f"| retorno #1 previsto: {plan['portales_retorno_top1'] or 'ninguno'}."
-        )
+            mejor_nota = max((x["item"][1] for x in seleccionados), default=0.0)
+            logger.info(
+                f"[main] Seleccionada(s) {len(seleccionados)} bici(s) (1 por página con stock) "
+                f"| mejor nota: {mejor_nota}/10 | Mega Chollos en pool: {mega_chollos_count} "
+                f"| rotación #2 prevista: {plan['portales_rotados'] or 'ninguna'} "
+                f"| retorno #1 previsto: {plan['portales_retorno_top1'] or 'ninguno'}."
+            )
 
         enviados_ids = []
         estado_portales_confirmado = dict(estado_portales_previo)
@@ -998,18 +1186,19 @@ def ejecutar_busqueda(forzar_envio: bool = False) -> None:
                 seguimiento=seguimiento,
                 aviso_top_repetido=es_rot2,
                 ranking_posicion=pos_portal,
-                es_rotacion_portal=es_rot2,
+                es_rotacion_portal=(es_rot2 and not omitir_enviadas),
                 aviso_retorno_top1=ret_top1,
             ):
                 db.registrar(bici, nota, precio_anterior=precio_anterior)
                 enviados_ids.append(bici.bici_id)
-                estado_portales_confirmado[sitio_entry] = nuevo_estado_portales[sitio_entry]
+                if not omitir_enviadas and sitio_entry in nuevo_estado_portales:
+                    estado_portales_confirmado[sitio_entry] = nuevo_estado_portales[sitio_entry]
                 if es_rot2:
                     portales_rotados.append(sitio_entry)
                 elif ret_top1:
                     portales_retorno_top1.append(sitio_entry)
                 total_notificadas += 1
-                estado_tag = " (rot #2)" if es_rot2 else (" (retorno #1)" if ret_top1 else " (#1)")
+                estado_tag = f" (sig #{pos_portal})" if omitir_enviadas else (" (rot #2)" if es_rot2 else (" (retorno #1)" if ret_top1 else " (#1)"))
                 logger.info(
                     f"  NOTIFICADA [{bici.sitio}{estado_tag}]: {bici.titulo} "
                     f"({bici.peso_kg} kg) - Nota {nota}/10{tag_mega}"
@@ -1036,6 +1225,7 @@ def ejecutar_busqueda(forzar_envio: bool = False) -> None:
         bf_suplemento_pool=bf_suplemento_pool,
         estado_beast_previo=estado_portales_previo.get("__beast__"),
         estado_extra=bf_estado_envio,
+        omitir_enviadas=omitir_enviadas,
     )
     if "beast_estado" in bf_estado_envio:
         estado_portales_confirmado["__beast__"] = bf_estado_envio["beast_estado"]
@@ -1145,6 +1335,11 @@ def main() -> None:
         help="Fuerza el envío del Top 3 aunque ya figuren en bicis_enviadas.db.",
     )
     parser.add_argument(
+        "--omitir-enviadas",
+        action="store_true",
+        help="Omite los resultados ya enviados y notifica las siguientes opciones más interesantes (< 21 kg, > 500 Wh).",
+    )
+    parser.add_argument(
         "--stats",
         "--radar",
         action="store_true",
@@ -1184,7 +1379,7 @@ def main() -> None:
         return
 
     if args.once:
-        ejecutar_busqueda(forzar_envio=args.forzar)
+        ejecutar_busqueda(forzar_envio=args.forzar, omitir_enviadas=args.omitir_enviadas)
         return
 
     logger.info(f"Buscador de e-MTB iniciado. Ejecucion diaria a las {HORA_EJECUCION}.")
