@@ -3263,6 +3263,75 @@ def test_t1_centralizacion_tienda_nueva_stock_talla_y_frenos():
     assert b_det.talla == "M"
 
 
+def test_t2_sanferbike_y_prestashop_base():
+    """T2: PrestaShopBaseScraper + SanferbikeScraper, precio content, PVP y stock talla M."""
+    from bs4 import BeautifulSoup
+    from main import SCRAPERS
+    from scrapers.sanferbike import SanferbikeScraper
+
+    assert cfg.SITIOS[4].nombre == "Wallapop"
+    sitio_sf = next(s for s in cfg.SITIOS if s.nombre == "Sanferbike")
+    assert cfg.SITIOS.index(sitio_sf) >= 5
+    assert sitio_sf.es_tienda_nueva is True and sitio_sf.garantia_anos == 3
+    assert "Sanferbike" in SCRAPERS
+
+    html_sf = """
+    <div>
+      <article class="product-miniature" data-id-product="124109">
+        <div class="product-title"><a href="/es/124109-bh-ilynx-trail-79-2026.html#/5-tallas-xl/40-colores-azul">Bicicleta eléctrica BH iLYNX Trail 7.9 2026</a></div>
+        <div class="product-price-and-shipping">
+          <span class="product-price discounted-price" content="2974.92">2.974,92&nbsp;€</span>
+          <span class="regular-price text-muted">3.499,90&nbsp;€</span>
+        </div>
+        <div class="product-variants js-miniature-product-variants">
+          <div class="clearfix product-variants-item">
+            <p class="control-label">Tallas</p>
+            <ul id="group_1_3909">
+              <li><label class="attribute-not-in-stock"><input title="M" data-qty-40="0" data-qty-42="0" /></label></li>
+              <li><label class=""><input title="XL" data-qty-40="1" data-qty-42="0" /></label></li>
+            </ul>
+          </div>
+        </div>
+      </article>
+      <article class="product-miniature" data-id-product="123014">
+        <div class="product-title"><a href="/es/123014-orbea-rise-sl-h30-2026.html#/3-tallas-l/41-colores-negro">Bicicleta eléctrica ORBEA Rise SL H30 2026</a></div>
+        <div class="product-price-and-shipping">
+          <span class="product-price discounted-price" content="3524.25">3.524,25&nbsp;€</span>
+          <span class="regular-price text-muted">4.699,00&nbsp;€</span>
+        </div>
+        <div class="product-variants js-miniature-product-variants">
+          <div class="clearfix product-variants-item">
+            <p class="control-label">Tallas</p>
+            <ul id="group_1_4000">
+              <li><label class="attribute-not-in-stock"><input title="M" data-qty-41="0" data-qty-42="2" /></label></li>
+              <li><label class=""><input title="L" data-qty-41="1" data-qty-42="0" /></label></li>
+            </ul>
+          </div>
+        </div>
+      </article>
+      <article class="product-miniature out-of-stock" data-id-product="999">
+        <div class="product-title"><a href="/es/999-agotada.html">Orbea Rise Agotada</a></div>
+        <div class="product-price-and-shipping"><span class="product-price" content="3000.00">3.000,00 €</span></div>
+      </article>
+    </div>
+    """
+    sc = SanferbikeScraper(sitio_sf)
+    assert "order=product.price.asc" in sc.construir_url_pagina(2) and "page=2" in sc.construir_url_pagina(2)
+    bicis = sc._extraer_de_sopa(BeautifulSoup(html_sf, "html.parser"), url_listado=sitio_sf.seccion_emtb)
+    assert len(bicis) == 2
+    assert bicis[0].bici_id == "sanferbike-124109"
+    assert bicis[0].precio == 2974.92 and bicis[0].pvp_original == 3499.90
+    assert bicis[0].talla == "XL", "M no tiene stock -> debe devolver XL para descarte S1"
+    assert bicis[1].bici_id == "sanferbike-123014"
+    assert bicis[1].talla == "M", "M tiene data-qty-42=2 en segundo color -> debe detectarse M en stock"
+    assert bicis[1].km == 0 and bicis[1].garantia_anos == 3 and bicis[1].suspension_trasera == "si"
+
+    # Full Power nuevas observadas en Sanferbike quedan bloqueadas
+    from evaluator import es_full_power_o_pesada
+    for tit_sf in ("BH ATOMe Lynx Pro 8.2", "MEGAMO Flame CRB 10 2026", "MEGAMO Reach FS 05 2026"):
+        assert es_full_power_o_pesada(bici_prueba(sitio="Sanferbike", titulo=tit_sf))[0] is True
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -3296,4 +3365,5 @@ if __name__ == "__main__":
     test_filtro_estricto_xc_vs_trail()
     test_black_friday_siempre_top3_omitiendo_ya_mostradas()
     test_t1_centralizacion_tienda_nueva_stock_talla_y_frenos()
+    test_t2_sanferbike_y_prestashop_base()
     print("Todas las pruebas pasaron (GREEN).")

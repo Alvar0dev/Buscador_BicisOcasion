@@ -55,6 +55,7 @@ from scrapers.buhobike import BuhobikeScraper
 from scrapers.upway import UpwayScraper
 from scrapers.mammoth import MammothScraper
 from scrapers.wallapop import WallapopScraper
+from scrapers.sanferbike import SanferbikeScraper
 from scrapers.enriquecedor_web import enriquecer_bici, _extraer_range_extender
 
 # Mapa sitio -> clase scraper
@@ -64,6 +65,7 @@ SCRAPERS = {
     "Upway": UpwayScraper,
     "Mammoth": MammothScraper,
     "Wallapop": WallapopScraper,
+    "Sanferbike": SanferbikeScraper,
 }
 
 # ---------------------------------------------------------------------------

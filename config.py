@@ -76,6 +76,13 @@ SITIOS: List[SitioObjetivo] = [
         seccion_emtb="https://api.wallapop.com/api/v3/search",
         garantia_anos=0,  # Particulares por defecto (1 si is_refurbished / has_warranty)
     ),
+    SitioObjetivo(
+        nombre="Sanferbike",
+        base_url="https://www.sanferbike.com",
+        seccion_emtb="https://www.sanferbike.com/es/bicicletas-electricas-montana-doble-suspension-22838?order=product.price.asc",
+        garantia_anos=3,
+        es_tienda_nueva=True,
+    ),
 ]
 
 _TOKENS_NO_NUEVA = (
