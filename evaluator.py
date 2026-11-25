@@ -35,7 +35,8 @@ _RE_MODALIDAD_NO_MTB = re.compile(
 
 _RE_MOTOR_FULL_POWER_ESTRICTA = re.compile(
     r"\b(?:polini|bafang|bosch(?:\s+performance(?:\s+line)?)?\s*cx|brose(?:\s+s\s*mag)?|"
-    r"yamaha|pw-?x\d*|syncdrive|specialized\s*(?:2\.[12]|full\s*power)|full\s*power|oli|ananda|panasonic)\b",
+    r"yamaha|pw-?x\d*|syncdrive|specialized\s*(?:2\.[12]|full\s*power)|full\s*power|"
+    r"dji\s+avinox(?:\s*m\d+)?|avinox(?:\s*m\d+)?|oli|ananda|panasonic)\b",
     re.IGNORECASE,
 )
 
@@ -51,14 +52,26 @@ _PATRONES_MODELO_FULL_POWER_PESADA = (
     "ilynx+ dl",
     "bh ilynx+ nx",
     "ilynx+ nx",
+    "bh ilynx+ sl",
+    "ilynx+ sl",
+    "ilynx plus sl",
+    "bh ilynx+ enduro",
+    "ilynx+ enduro",
+    "ilynx plus enduro",
+    "bh ilynx+ trail carbon 8.7",
+    "ilynx+ trail carbon 8.7",
+    "ilynx+ trail 7.",
+    "ilynx+ trail 8.",
     "olympia hekton",
     "megamo reason al",
     "bh atomx",
     "atomx",
     "bh atome",
     "atome lynx",
+    "atome suv",
     "bh xtep",
     "xtep",
+    "powerfly+ fs",
     "megamo flame",
     "megamo reach",
     "orbea wild",
@@ -158,12 +171,25 @@ def es_full_power_o_pesada(bici: Bicicleta) -> Tuple[bool, str]:
 def es_modalidad_mtb_doble_valida(bici: Bicicleta) -> bool:
     """
     True si la bicicleta pertenece a una modalidad e-MTB válida (XC/Downcountry,
-    Trail ligera o MTB doble suspensión), rechazando carretera, gravel, urbana o trekking.
+    Trail ligera o MTB doble suspensión), rechazando carretera, gravel, urbana, SUV o trekking.
     """
     mod = (bici.modalidad or "").strip().lower()
     if mod and _RE_MODALIDAD_NO_MTB.search(mod):
         return False
+    if re.search(r"\bsuv\b", f"{bici.titulo or ''} {mod}", re.IGNORECASE):
+        return False
     return True
+
+
+def _motivo_descarte_enduro(bici: Bicicleta) -> Optional[str]:
+    """Descarta bicicletas Enduro (>= 160 mm / título Enduro) o con recorrido > 165 mm."""
+    if bici.recorrido_mm is not None and bici.recorrido_mm > 165:
+        return f"Recorrido de suspensión excesivo (>165 mm): {bici.recorrido_mm} mm"
+    titulo_low = (bici.titulo or "").lower()
+    mod_low = (bici.modalidad or "").lower()
+    if re.search(r"\benduro\b", f"{titulo_low} {mod_low}") and "trail" not in titulo_low:
+        return f"Modalidad Enduro descartada (objetivo XC / Trail ligera / MTB): {bici.titulo}"
+    return None
 
 _PATRONES_MODELO_TRAIL_ENDURO = (
     "orbea rise",
@@ -352,8 +378,10 @@ def _pasa_requisitos_base_mecanicos(
     # S2bis: En modo estricto XC, si el recorrido supera 130 mm se descarta
     if not permitir_trail_respaldo and bici.recorrido_mm is not None and bici.recorrido_mm > cfg.RECORRIDO_MAX_XC_MM:
         return False, f"Recorrido de suspensión excesivo para XC (>{cfg.RECORRIDO_MAX_XC_MM} mm): {bici.recorrido_mm} mm"
-    if permitir_trail_respaldo and bici.recorrido_mm is not None and bici.recorrido_mm > 170:
-        return False, f"Recorrido de suspensión excesivo (>170 mm): {bici.recorrido_mm} mm"
+    if permitir_trail_respaldo:
+        motivo_enduro = _motivo_descarte_enduro(bici)
+        if motivo_enduro:
+            return False, motivo_enduro
 
     # S5/S6: Rango de presupuesto según canal (hasta 3.500 € para Unicornios XC >=600 Wh, <=500 km)
     techo_precio = (
@@ -877,6 +905,9 @@ def pasa_prefiltro_respaldo_black_friday(bici: Bicicleta) -> Tuple[bool, str]:
         return False, f"Talla no es M: {bici.talla}"
     if not es_modalidad_mtb_doble_valida(bici):
         return False, f"Modalidad no válida para MTB: {bici.modalidad}"
+    motivo_enduro = _motivo_descarte_enduro(bici)
+    if motivo_enduro:
+        return False, motivo_enduro
     if bici.suspension_trasera is not None and str(bici.suspension_trasera).lower() in ("false", "no", "0"):
         return False, "No tiene suspensión trasera"
     if bici.bateria_wh is not None and bici.bateria_wh <= cfg.BATERIA_MIN_WH:
@@ -920,6 +951,9 @@ def evaluar_respaldo_black_friday(
         return False, None, 0.0, "Talla no M", ()
     if not es_modalidad_mtb_doble_valida(bici):
         return False, None, 0.0, f"Modalidad no MTB: {bici.modalidad}", ()
+    motivo_enduro = _motivo_descarte_enduro(bici)
+    if motivo_enduro:
+        return False, None, 0.0, motivo_enduro, ()
     if str(bici.suspension_trasera or "").strip().lower() not in ("si", "sí", "true", "1"):
         return False, None, 0.0, "Doble suspensión no confirmada", ()
     if bici.peso_kg is None or bici.peso_kg >= cfg.PESO_DESCARTE_KG:

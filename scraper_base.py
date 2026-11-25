@@ -434,10 +434,12 @@ def parsear_precio_euro(texto: Optional[str]) -> float:
 
 
 def es_modelo_no_mtb_doble(titulo: str, url: str = "") -> bool:
-    """Detecta bicicletas rígidas, carretera, gravel, urbanas o infantiles."""
+    """Detecta bicicletas rígidas, carretera, gravel, urbanas, SUV o infantiles."""
     txt = f"{titulo} {url}".lower()
-    return any(k in txt for k in _PATRONES_NO_MTBD_COMUNES) or (
-        "powerfly" in txt and "fs" not in txt and "+" not in txt
+    return (
+        any(k in txt for k in _PATRONES_NO_MTBD_COMUNES)
+        or bool(re.search(r"\bsuv\b", txt))
+        or ("powerfly" in txt and "fs" not in txt and "+" not in txt)
     )
 
 

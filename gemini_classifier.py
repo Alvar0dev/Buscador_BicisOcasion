@@ -105,7 +105,48 @@ CATALOGO_EMTB = [
         "recorrido_mm": 160,
     },
     {
-        "patrones": ["bh ilynx+ trail carbon", "ilynx+ trail carbon", "bh ilynx+ enduro", "ilynx+"],
+        "patrones": ["bh ilynx+ sl enduro", "ilynx+ sl enduro"],
+        "peso_kg": 22.6,
+        "bateria_wh_default": 630,
+        "motor": "Shimano EP6",
+        "cuadro_material": "Aluminio",
+        "suspension_trasera": "si",
+        "modalidad": "Enduro",
+        "recorrido_mm": 160,
+    },
+    {
+        "patrones": ["bh ilynx+ enduro", "ilynx+ enduro"],
+        "peso_kg": 22.4,
+        "bateria_wh_default": 630,
+        "motor": "Shimano EP801",
+        "cuadro_material": "Carbono",
+        "suspension_trasera": "si",
+        "modalidad": "Enduro",
+        "recorrido_mm": 170,
+    },
+    {
+        "patrones": ["bh ilynx+ sl trail", "ilynx+ sl trail", "bh ilynx+ sl", "ilynx+ sl"],
+        "peso_kg": 22.8,
+        "bateria_wh_default": 630,
+        "motor": "Shimano EP6",
+        "cuadro_material": "Aluminio",
+        "suspension_trasera": "si",
+        "modalidad": "Trail",
+        "recorrido_mm": 140,
+    },
+    {
+        "patrones": ["bh ilynx+ trail carbon 8.7", "ilynx+ trail carbon 8.7"],
+        "peso_kg": 21.2,
+        "bateria_wh_default": 630,
+        "motor": "Shimano EP801",
+        "cuadro_material": "Carbono",
+        "suspension_trasera": "si",
+        "modalidad": "Trail",
+        "recorrido_mm": 150,
+        "componentes_default": "Fox 36 Float Performance / Fox Float X / Shimano XT 12v",
+    },
+    {
+        "patrones": ["bh ilynx+ trail carbon", "ilynx+ trail carbon", "ilynx+"],
         "peso_kg": 20.4,
         "bateria_wh_default": 540,
         "motor": "Shimano EP801",
@@ -127,7 +168,7 @@ CATALOGO_EMTB = [
         "componentes_default": "Fox 36 Float / Shimano XT 12v",
     },
     {
-        "patrones": ["bh ilynx race"],
+        "patrones": ["bh ilynx race", "ilynx race"],
         "peso_kg": 18.9,
         "bateria_wh_default": 540,
         "motor": "BH 2EXMAG",
@@ -138,7 +179,7 @@ CATALOGO_EMTB = [
         "componentes_default": "Fox 34 Float / Shimano Deore-XT 12v",
     },
     {
-        "patrones": ["bh ilynx trail"],
+        "patrones": ["bh ilynx trail", "ilynx trail"],
         "peso_kg": 19.6,
         "bateria_wh_default": 540,
         "motor": "BH 2EXMAG",
@@ -927,7 +968,7 @@ def _es_motor_full_power(motor: Optional[str], titulo: str = "") -> bool:
         return False
     return bool(
         re.search(
-            r"\b(?:bosch(?:\s+performance(?:\s+line)?)?\s*cx|shimano\s+ep(?:801|8|6)|ep801|ep8|ep6|specialized\s*(?:2\.[12]|full\s*power)|brose(?:\s+s\s*mag)?|yamaha|pw-?x\d*|giant\s+syncdrive|syncdrive|polini|bafang|oli|ananda|panasonic)\b",
+            r"\b(?:bosch(?:\s+performance(?:\s+line)?)?\s*cx|shimano\s+ep(?:801|8|6)|ep801|ep8|ep6|specialized\s*(?:2\.[12]|full\s*power)|brose(?:\s+s\s*mag)?|yamaha|pw-?x\d*|giant\s+syncdrive|syncdrive|dji\s+avinox(?:\s*m\d+)?|avinox(?:\s*m\d+)?|polini|bafang|oli|ananda|panasonic)\b",
             txt,
         )
     )
@@ -1013,9 +1054,22 @@ def completar_con_catalogo(bici: Bicicleta, aplicar_heuristica_peso: bool = True
 
     # Regla C — Corrección estricta de motores (ignora erratas HTML de tiendas)
     titulo_lower = bici.titulo.lower()
-    es_ilynx_full_power = any(k in titulo_lower for k in ("ilynx+ dl", "ilynx plus dl", "ilynx+ nx", "ilynx plus nx"))
+    es_ilynx_full_power = any(
+        k in titulo_lower
+        for k in (
+            "ilynx+ dl",
+            "ilynx plus dl",
+            "ilynx+ nx",
+            "ilynx plus nx",
+            "ilynx+ enduro",
+            "ilynx plus enduro",
+            "ilynx+ sl",
+            "ilynx plus sl",
+        )
+    )
     if ("ilynx+" in titulo_lower or "ilynx plus" in titulo_lower) and not es_ilynx_full_power:
-        bici.motor = "Shimano EP801"
+        if "ep6" not in (bici.motor or "").lower():
+            bici.motor = "Shimano EP801"
         if bici.peso_kg is not None and bici.peso_kg < 19.5:
             bici.peso_kg = 20.4
         bici.modalidad = "Trail (160mm)"
@@ -1523,6 +1577,24 @@ def enriquecer_y_valorar_bici(bici: Bicicleta) -> Tuple[Bicicleta, float, str]:
     # 2. Enriquecimiento desde catálogo técnico local antes de consultar DuckDuckGo
     bici = completar_con_catalogo(bici, aplicar_heuristica_peso=False)
     peso_tras_cat = bici.peso_kg
+
+    # Cortocircuito antes de DuckDuckGo/Gemini si tras enriquecer ya hay rechazo duro (sin stock, talla != M o no doble)
+    talla_upper = (bici.talla or "").strip().upper()
+    es_talla_descartada = bool(talla_upper and talla_upper not in (cfg.TALLA_OBJETIVO.upper(), "NO INDICADA"))
+    es_no_doble = (
+        bici.suspension_trasera is not None
+        and str(bici.suspension_trasera).strip().lower() in ("false", "no", "0")
+    )
+    if getattr(bici, "disponible", True) is False or es_talla_descartada or es_no_doble:
+        bici = completar_con_catalogo(bici, aplicar_heuristica_peso=True)
+        if peso_despues_web is None and bici.peso_kg is not None:
+            bici._peso_estimado = True
+        nota_fast, desglose_fast = valorar_autonomo(bici)
+        log.info(
+            f"[Perito Rápido] {bici.titulo} -> {nota_fast}/10 "
+            f"(disp={getattr(bici, 'disponible', True)}, talla={bici.talla}, doble={bici.suspension_trasera})"
+        )
+        return bici, nota_fast, desglose_fast
 
     # 2b. Fallback DuckDuckGo cacheado solo si el catálogo tampoco cubrió peso/suspensión/año
     try:

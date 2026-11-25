@@ -3596,6 +3596,73 @@ def test_regresion_nuevas_tiendas_bordes_y_ttl():
             pass
 
 
+def test_afinado_9_portales_ilynx_plus_enduro_avinox_y_ahorro_gemini():
+    """Verifica bloqueo BH iLynx+ SL/Enduro/8.7 Full Power, Enduro, Avinox M2, SUV, Ilynx Fabregues y corto antes de Gemini."""
+    from evaluator import (
+        es_full_power_o_pesada,
+        es_modalidad_mtb_doble_valida,
+        evaluar_respaldo_black_friday,
+        pasa_prefiltro_black_friday,
+        pasa_prefiltro_respaldo_black_friday,
+    )
+    from gemini_classifier import _es_motor_full_power, completar_con_catalogo, enriquecer_y_valorar_bici
+    from scraper_base import es_modelo_no_mtb_doble
+
+    # 1. BH iLynx+ SL (Aluminio EP6/EP801 630Wh), BH iLynx+ Enduro (160-170mm) y Trail Carbon 8.7 (~21.2kg) rechazadas
+    b_sl_trail = completar_con_catalogo(
+        bici_prueba(sitio="Bicimarket", titulo="BH iLynx+ SL Trail 8.0", motor="Shimano EP6", bateria_wh=630, cuadro_material=None, modalidad=None, peso_kg=None, km=0, precio=3599.0, pvp_original=4699.9)
+    )
+    assert b_sl_trail.motor == "Shimano EP6", f"No debe pisar Shimano EP6 con EP801: {b_sl_trail.motor}"
+    assert b_sl_trail.cuadro_material == "Aluminio"
+    assert b_sl_trail.peso_kg is not None and b_sl_trail.peso_kg >= 22.0
+    assert es_full_power_o_pesada(b_sl_trail)[0] is True
+    assert evaluar_respaldo_black_friday(b_sl_trail, nota_perito=4.0, requerir_descuento_pvp=False)[0] is False
+
+    for tit_enduro, rec_mm in (("BH iLynx+ Enduro Carbon 9.7", 170), ("BH iLynx+ SL Enduro 9.0", 160)):
+        b_end = completar_con_catalogo(
+            bici_prueba(sitio="Bicimarket", titulo=tit_enduro, cuadro_material=None, modalidad=None, peso_kg=None, recorrido_mm=rec_mm, km=0, precio=3999.0, pvp_original=6999.9)
+        )
+        assert b_end.peso_kg is not None and b_end.peso_kg >= 21.0
+        assert es_full_power_o_pesada(b_end)[0] is True
+        assert pasa_prefiltro_respaldo_black_friday(b_end)[0] is False
+        assert evaluar_respaldo_black_friday(b_end, nota_perito=4.0, requerir_descuento_pvp=False)[0] is False
+
+    b_87 = completar_con_catalogo(
+        bici_prueba(sitio="Bicimarket", titulo="BH iLynx+ Trail Carbon 8.7", cuadro_material=None, modalidad=None, peso_kg=None, bateria_wh=630, km=0, precio=3999.0, pvp_original=6999.9)
+    )
+    assert b_87.peso_kg is not None and b_87.peso_kg >= 21.0
+    assert evaluar_respaldo_black_friday(b_87, nota_perito=4.0, requerir_descuento_pvp=False)[0] is False
+
+    # 2. Fabregues "Bicicleta BH Eléctrica Ilynx Trail 7.9 2026" (con 'Eléctrica' intercalada) cruza el catálogo
+    b_fab = completar_con_catalogo(bici_prueba(sitio="Fabregues", titulo="Bicicleta BH Eléctrica Ilynx Trail 7.9 2026", cuadro_material=None, modalidad=None, peso_kg=None, bateria_wh=None, motor=None))
+    assert b_fab.motor == "BH 2EXMAG"
+    assert b_fab.peso_kg == 19.6 and b_fab.bateria_wh == 540
+
+    # 3. DJI Avinox Full Power (Pulse Falcon, Pardus E-Cyclone) y SUV bloqueados, preservando Amflow PL
+    for tit_av in ("Pulse Falcon Avinox M2", "Pardus E-Cyclone S3 Avinox M2 DEMO"):
+        assert es_full_power_o_pesada(bici_prueba(sitio="Bicimarket", titulo=tit_av, motor="DJI Avinox M2", modalidad=None))[0] is True
+        assert _es_motor_full_power("DJI Avinox M2", tit_av) is True
+    assert es_full_power_o_pesada(bici_prueba(sitio="Mammoth", titulo="Amflow PL Carbon", motor="DJI Avinox", peso_kg=19.8, modalidad=None))[0] is False
+
+    b_suv = bici_prueba(sitio="Bicimarket", titulo="Superior eXF 8069 B SUV", precio=2450.0, modalidad=None)
+    assert es_modelo_no_mtb_doble(b_suv.titulo, b_suv.url) is True
+    assert es_modalidad_mtb_doble_valida(b_suv) is False
+
+    # 4. Enduro explícita (>165mm o nombre Enduro) fuera de Beast incluso si pasara peso
+    b_end_lig = bici_prueba(sitio="Escapa", titulo="Canyon Torque Enduro Race", peso_kg=20.0, recorrido_mm=170, bateria_wh=600, modalidad=None, km=0, precio=3400.0, pvp_original=6000.0)
+    assert pasa_prefiltro_black_friday(b_end_lig)[0] is False
+    assert evaluar_respaldo_black_friday(b_end_lig, nota_perito=6.5, requerir_descuento_pvp=False)[0] is False
+
+    # 5. Cortocircuito antes de Gemini/DuckDuckGo cuando el enriquecedor web ya detecta talla != M (sin gastar API)
+    b_talla_l = bici_prueba(sitio="Bicimarket", bici_id="bicimarket-54681", titulo="BH iLynx Trail Carbon 8.7", talla=None, peso_kg=None, bateria_wh=None, km=0, precio=3499.0)
+    with patch("gemini_classifier.enriquecer_bici", side_effect=lambda b, **kw: bici_prueba(**{**b.to_dict(), "talla": "L", "peso_kg": 18.6, "bateria_wh": 540})), \
+         patch("gemini_classifier.completar_desde_duckduckgo", side_effect=AssertionError("No debe consultar DDG en Talla != M")), \
+         patch("gemini_classifier._llamar_gemini_api", side_effect=AssertionError("No debe llamar Gemini en Talla != M")), \
+         patch("gemini_classifier._cargar_cache_ia", return_value={}):
+        b_res, nota_res, _ = enriquecer_y_valorar_bici(b_talla_l)
+    assert b_res.talla == "L" and nota_res == 0.0
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -3633,4 +3700,5 @@ if __name__ == "__main__":
     test_t3_bicimarket_scraper()
     test_t4_escapa_y_fabregues_scrapers()
     test_regresion_nuevas_tiendas_bordes_y_ttl()
+    test_afinado_9_portales_ilynx_plus_enduro_avinox_y_ahorro_gemini()
     print("Todas las pruebas pasaron (GREEN).")
