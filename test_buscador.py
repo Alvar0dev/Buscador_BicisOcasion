@@ -4149,6 +4149,9 @@ def test_modo_caza_dispara_al_instante_en_reposicion_o_bajada():
              )[1]), \
              patch("main.exportar_radar_mercado_md"), \
              patch("main.enviar", side_effect=lambda b, *a, **kw: env_caza.append(b.bici_id) or True), \
+             patch("main.enviar_black_friday", return_value=True), \
+             patch("main.enviar_informe_respaldo_black_friday", return_value=True), \
+             patch("main.enviar_alerta_sniper", return_value=True), \
              patch("main.enviar_heartbeat", side_effect=lambda r: hb_caza.append(True)), \
              patch("main.enviar_heartbeat_black_friday", side_effect=lambda r: hb_caza.append(True)):
             ejecutar_busqueda(forzar_envio=False, modo_caza=True)
@@ -4315,11 +4318,16 @@ def test_modo_caza_no_respamea_entrada_desde_vigilancia_ni_omite_bajada_beast():
 
         with patch.object(cfg, "TELEGRAM_BOT_TOKEN", "t1"), \
              patch.object(cfg, "TELEGRAM_CHAT_ID", "c1"), \
+             patch.object(cfg, "TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", ""), \
              patch("main.BaseDatos", return_value=vdb), \
              patch("main._recolectar_oportunidades", side_effect=fake_rec), \
              patch("main.exportar_radar_mercado_md", return_value=Path(ruta_vig).with_suffix(".md")), \
              patch("main.enviar", side_effect=lambda b, *a, **kw: envios_daily.append(b.bici_id) or True), \
-             patch("main.enviar_heartbeat", return_value=True):
+             patch("main.enviar_black_friday", return_value=True), \
+             patch("main.enviar_informe_respaldo_black_friday", return_value=True), \
+             patch("main.enviar_alerta_sniper", return_value=True), \
+             patch("main.enviar_heartbeat", return_value=True), \
+             patch("main.enviar_heartbeat_black_friday", return_value=True):
             m.ejecutar_busqueda(modo_caza=False)
             m.ejecutar_busqueda(modo_caza=True)
             m.ejecutar_busqueda(modo_caza=True)
@@ -4387,6 +4395,11 @@ def test_sniper_no_filtra_clon_wallapop_en_segunda_pasada_cross_bucket():
              patch("main._scrapear_sitio", side_effect=fake_scrape), \
              patch("main.enriquecer_y_valorar_bici", side_effect=lambda b: (b, 8.0, "ok")), \
              patch("main.exportar_radar_mercado_md", return_value=Path(ruta_db).with_suffix(".md")), \
+             patch("main.enviar", return_value=True), \
+             patch("main.enviar_black_friday", return_value=True), \
+             patch("main.enviar_informe_respaldo_black_friday", return_value=True), \
+             patch("main.enviar_heartbeat", return_value=True), \
+             patch("main.enviar_heartbeat_black_friday", return_value=True), \
              patch("main.enviar_alerta_sniper", side_effect=lambda *a, **kw: sniper_envios.append(((kw.get("bici") or a[0]).sitio, (kw.get("bici") or a[0]).bici_id)) or True):
             m.ejecutar_busqueda(modo_caza=False)
             m.ejecutar_busqueda(modo_caza=True)
@@ -4441,52 +4454,62 @@ def test_umbrales_borde_bh_sniper_cache_y_lock():
 
 
 if __name__ == "__main__":
-    test_pasa_filtros_valida()
-    test_descarta_talla_no_m()
-    test_descarta_bateria_500_wh()
-    test_descarta_peso_mas_21_kg()
-    test_descarta_precio_fuera_rango()
-    test_nota_alta_bici_excelente()
-    test_nota_baja_kilometraje_alto()
-    test_filtro_nota_minimo_8()
-    test_clasificador_hibrido_catalogo_y_5_ejes()
-    test_dedup_sqlite()
-    test_formateo_mensaje_telegram()
-    test_extraccion_titulo_sin_dto_y_suspension_rigidez()
-    test_perito_mecanico_senior_reglas_y_lineas_rojas()
-    test_optimizacion_tarjetas_upway_y_buhobike()
-    test_range_extender_extraccion_y_filtros()
-    test_salud_bateria_soh_disponibilidad_y_extractores()
-    test_todos_historial_catalogo_recorrido_y_stats()
-    test_extraccion_km_imagenes_ficha_buhobike_vigilancia_y_radar_md()
-    test_proxy_rotator_y_resiliencia_red()
-    test_profundizacion_telemetria_bateria_upway_y_mammoth()
-    test_radar_mercado_metricas_enriquecidas_y_heartbeat()
-    test_mega_chollo_alerta_y_formato_telegram()
-    test_segmentacion_sonora_vs_silenciosa_telegram()
-    test_rotacion_consecutiva_top3_y_aviso()
-    test_wallapop_geolocalizado_y_filtros()
-    test_todo2_dedup_interportal_wallapop_estricto_y_cache_ddg()
-    test_todo2_edge_cases_y_regresion()
-    test_perito_esceptico_v2_y_seleccion_por_portal()
-    test_black_friday_canal_exclusivo_y_segundo_bot()
-    test_filtro_estricto_xc_vs_trail()
-    test_black_friday_siempre_top3_omitiendo_ya_mostradas()
-    test_t1_centralizacion_tienda_nueva_stock_talla_y_frenos()
-    test_t2_sanferbike_y_prestashop_base()
-    test_t3_bicimarket_scraper()
-    test_t4_escapa_y_fabregues_scrapers()
-    test_regresion_nuevas_tiendas_bordes_y_ttl()
-    test_afinado_9_portales_ilynx_plus_enduro_avinox_y_ahorro_gemini()
-    test_afinado_26nov_full_power_gravel_y_upway_rigida()
-    test_bh_segundo_plano_y_excepcion_irrechazable()
-    test_sniper_rescata_ocasion_premium_y_bloquea_bh_ordinaria()
-    test_es_mega_chollo_no_silencia_rango_3200_3500()
-    test_modo_caza_sin_cambios_no_envia_spam_ni_heartbeat()
-    test_modo_caza_dispara_al_instante_en_reposicion_o_bajada()
-    test_upway_paginacion_y_corte_temprano()
-    test_corte_temprano_sanferbike_escapa_por_techo_precio()
-    test_modo_caza_no_respamea_entrada_desde_vigilancia_ni_omite_bajada_beast()
-    test_sniper_no_filtra_clon_wallapop_en_segunda_pasada_cross_bucket()
-    test_umbrales_borde_bh_sniper_cache_y_lock()
-    print("Todas las pruebas pasaron (GREEN).")
+    import requests as _req
+
+    _orig_session_request = _req.sessions.Session.request
+
+    def _bloquear_telegram_real_en_tests(self, method, url, *args, **kwargs):
+        if "api.telegram.org" in str(url):
+            raise AssertionError("Test sin mock intentó enviar petición HTTP real a api.telegram.org")
+        return _orig_session_request(self, method, url, *args, **kwargs)
+
+    with patch.object(_req.sessions.Session, "request", _bloquear_telegram_real_en_tests):
+        test_pasa_filtros_valida()
+        test_descarta_talla_no_m()
+        test_descarta_bateria_500_wh()
+        test_descarta_peso_mas_21_kg()
+        test_descarta_precio_fuera_rango()
+        test_nota_alta_bici_excelente()
+        test_nota_baja_kilometraje_alto()
+        test_filtro_nota_minimo_8()
+        test_clasificador_hibrido_catalogo_y_5_ejes()
+        test_dedup_sqlite()
+        test_formateo_mensaje_telegram()
+        test_extraccion_titulo_sin_dto_y_suspension_rigidez()
+        test_perito_mecanico_senior_reglas_y_lineas_rojas()
+        test_optimizacion_tarjetas_upway_y_buhobike()
+        test_range_extender_extraccion_y_filtros()
+        test_salud_bateria_soh_disponibilidad_y_extractores()
+        test_todos_historial_catalogo_recorrido_y_stats()
+        test_extraccion_km_imagenes_ficha_buhobike_vigilancia_y_radar_md()
+        test_proxy_rotator_y_resiliencia_red()
+        test_profundizacion_telemetria_bateria_upway_y_mammoth()
+        test_radar_mercado_metricas_enriquecidas_y_heartbeat()
+        test_mega_chollo_alerta_y_formato_telegram()
+        test_segmentacion_sonora_vs_silenciosa_telegram()
+        test_rotacion_consecutiva_top3_y_aviso()
+        test_wallapop_geolocalizado_y_filtros()
+        test_todo2_dedup_interportal_wallapop_estricto_y_cache_ddg()
+        test_todo2_edge_cases_y_regresion()
+        test_perito_esceptico_v2_y_seleccion_por_portal()
+        test_black_friday_canal_exclusivo_y_segundo_bot()
+        test_filtro_estricto_xc_vs_trail()
+        test_black_friday_siempre_top3_omitiendo_ya_mostradas()
+        test_t1_centralizacion_tienda_nueva_stock_talla_y_frenos()
+        test_t2_sanferbike_y_prestashop_base()
+        test_t3_bicimarket_scraper()
+        test_t4_escapa_y_fabregues_scrapers()
+        test_regresion_nuevas_tiendas_bordes_y_ttl()
+        test_afinado_9_portales_ilynx_plus_enduro_avinox_y_ahorro_gemini()
+        test_afinado_26nov_full_power_gravel_y_upway_rigida()
+        test_bh_segundo_plano_y_excepcion_irrechazable()
+        test_sniper_rescata_ocasion_premium_y_bloquea_bh_ordinaria()
+        test_es_mega_chollo_no_silencia_rango_3200_3500()
+        test_modo_caza_sin_cambios_no_envia_spam_ni_heartbeat()
+        test_modo_caza_dispara_al_instante_en_reposicion_o_bajada()
+        test_upway_paginacion_y_corte_temprano()
+        test_corte_temprano_sanferbike_escapa_por_techo_precio()
+        test_modo_caza_no_respamea_entrada_desde_vigilancia_ni_omite_bajada_beast()
+        test_sniper_no_filtra_clon_wallapop_en_segunda_pasada_cross_bucket()
+        test_umbrales_borde_bh_sniper_cache_y_lock()
+        print("Todas las pruebas pasaron (GREEN).")
