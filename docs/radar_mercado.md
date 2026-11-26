@@ -1,6 +1,6 @@
 # 📡 Radar de Mercado e-MTB de Ocasión
 
-> **Última actualización:** `2026-11-26 11:54:35` | **Criterio activo:** `XC / Downcountry <= 130 mm`, Talla `M`, `< 21.0 kg`  
+> **Última actualización:** `2026-11-26 12:00:50` | **Criterio activo:** `XC / Downcountry <= 130 mm`, Talla `M`, `< 21.0 kg`  
 > **Total en seguimiento activo:** `15` unidades | **Permanencia media global:** `3.7 días`  
 > **Oportunidades con rebaja activa:** `0` unidades (Ahorro medio: `-0 €`) | **Zona de Vigilancia:** `3` unidades
 

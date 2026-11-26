@@ -788,7 +788,7 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 | Detector transversal Sniper + `es_mega_chollo` `> 3.150 €` (`24c6d14`, `0e8d320`) | ✅ Operativo (`alertas_sniper_enviadas` + dedup cross-bucket Wallapop sin falsos disparos en el barrido actual) |
 | Modo Caza `--modo-caza`, TTL `45m`, lock `cache/buscador.lock` y anti-spam (`d505a0b`, `0e8d320`) | ✅ Operativo y validado en vivo (`49.8s` detectando reposición + `46.6s` con `0` spam sin novedades) |
 | Cobertura ampliada en 9 portales y `CATALOGO_EMTB` (`e445b85`) | ✅ Operativo (`Sanferbike: 72`, `Buhobike: 112`, `Mammoth: 141`, `Upway: 21`, `Wallapop: 537` en paralelo) |
-| Documentación (`README.md`, `CRON.md`) y Tarea Programada Black Friday (`BuscadorBiciOcasion_BlackFriday`) | ⏳ Documentado en rama `feat/modo-caza-black-friday`; pendiente de confirmación final del usuario para registrar tarea cada 2 h (26/11 23:55 -> 01/12 01:00) y mergear/pushear a `main` |
+| Documentación (`README.md`, `CRON.md`) y Tarea Programada Black Friday (`BuscadorBiciOcasion_BlackFriday`) | ✅ Activa en Windows Task Scheduler (`NextRunTime: 26/11/2026 23:55:00`, cada 2 h hasta `01/12/2026 01:00`, paralelo a `BuscadorBiciOcasion` `12:00` en `LastTaskResult: 0`) y mergeada en `main` |
 
 ### TODOs concretos post-campaña y mantenimiento
 
