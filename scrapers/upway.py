@@ -11,6 +11,7 @@ Estructura observada en upway.es:
 """
 
 from typing import List, Optional
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from bs4 import BeautifulSoup
 from models import Bicicleta
 from scraper_base import BaseScraper, es_modelo_no_mtb_doble
@@ -19,11 +20,37 @@ import re
 
 
 class UpwayScraper(BaseScraper):
+    MAX_PAGINAS: int = 4
+
+    def construir_url_pagina(self, pagina: int) -> str:
+        """Conserva parámetros actuales y añade ?page=N para páginas >= 2."""
+        base = self.sitio.seccion_emtb
+        if pagina <= 1:
+            return base
+        parsed = urlparse(base)
+        params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        params["page"] = str(pagina)
+        return urlunparse(parsed._replace(query=urlencode(params)))
+
     def extraer_bicicletas(self) -> List[Bicicleta]:
-        soup = self.sopa(self.sitio.seccion_emtb)
-        if soup is None:
-            return []
-        return self._extraer_de_sopa(soup)
+        bicis: List[Bicicleta] = []
+        vistos: set = set()
+        for pagina in range(1, self.MAX_PAGINAS + 1):
+            soup = self.sopa(self.construir_url_pagina(pagina))
+            if soup is None:
+                break
+            extraidas = self._extraer_de_sopa(soup)
+            if not extraidas:
+                break
+            nuevos = 0
+            for bici in extraidas:
+                if bici.bici_id not in vistos:
+                    vistos.add(bici.bici_id)
+                    bicis.append(bici)
+                    nuevos += 1
+            if nuevos == 0:
+                break
+        return bicis
 
     def _extraer_de_sopa(self, soup: BeautifulSoup) -> List[Bicicleta]:
         bicis: List[Bicicleta] = []

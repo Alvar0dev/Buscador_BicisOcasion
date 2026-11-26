@@ -13,7 +13,8 @@ from scrapers.prestashop_base import PrestaShopBaseScraper
 
 class SanferbikeScraper(PrestaShopBaseScraper):
     PREFIJO_ID: str = "sanferbike"
-    MAX_PAGINAS: int = 2
+    MAX_PAGINAS: int = 4
+    TECHO_CORTE_PRECIO: Optional[float] = 4200.0
 
     def _inspeccionar_tallas_tarjeta(self, card) -> Tuple[bool, List[str]]:
         """Devuelve (tiene_bloque_tallas, tallas_con_stock) leyendo data-qty-* y attribute-not-in-stock."""

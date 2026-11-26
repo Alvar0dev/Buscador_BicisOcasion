@@ -330,6 +330,17 @@ CATALOGO_EMTB = [
         "recorrido_mm": 140,
     },
     {
+        "patrones": ["specialized turbo levo sl comp alloy", "levo sl comp alloy", "turbo levo sl alloy", "levo sl alloy"],
+        "peso_kg": 20.1,
+        "bateria_wh_default": 480,
+        "motor": "Specialized SL 1.2",
+        "cuadro_material": "Aluminio",
+        "suspension_trasera": "si",
+        "modalidad": "Trail",
+        "recorrido_mm": 150,
+        "componentes_default": "Fox 36 Rhythm / Fox Float / SRAM NX Eagle 12v",
+    },
+    {
         "patrones": ["specialized turbo levo sl", "levo sl"],
         "peso_kg": 17.9,
         "bateria_wh_default": 480,
@@ -338,6 +349,7 @@ CATALOGO_EMTB = [
         "suspension_trasera": "si",
         "modalidad": "Trail",
         "recorrido_mm": 150,
+        "componentes_default": "Fox 34-36 Performance / SRAM GX-XO1 Eagle 12v",
     },
     {
         "patrones": ["trek fuel+ ex 9", "fuel+ ex 9"],
@@ -1630,8 +1642,8 @@ def enriquecer_y_valorar_bici(bici: Bicicleta) -> Tuple[Bicicleta, float, str]:
             audit_cached = auditar_perito_mecanico(bici)
             return bici, audit_cached["nota_final"], str(entry["desglose"])
         log.info(
-            f"[Caché IA] Invalidando entrada de {bici.titulo} por actualización de km "
-            f"({entry.get('km')} -> {bici.km})"
+            f"[Caché IA] Invalidando entrada de {bici.titulo} por actualización de km/peso/pvp "
+            f"(km {entry.get('km')} -> {bici.km}, pvp {entry.get('pvp_original_int')} -> {pvp_actual_int})"
         )
 
     # Pre-auditoría con los datos conocidos hasta ahora

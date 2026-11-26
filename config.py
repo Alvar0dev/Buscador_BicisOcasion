@@ -35,15 +35,22 @@ WALLAPOP_LON: float = float(os.getenv("WALLAPOP_LON", "-3.7942"))
 WALLAPOP_RADIO_KM: int = int(os.getenv("WALLAPOP_RADIO_KM", "50"))
 WALLAPOP_PERMITIR_NACIONAL: bool = False  # Estricto <= WALLAPOP_RADIO_KM (50 km de Fuenlabrada)
 WALLAPOP_UNICORN_QUERIES: List[str] = [
-    "BH iLynx Race",
-    "BH iLynx Trail",
     "Orbea Rise",
-    "Cannondale Moterra SL",
     "Scott Lumen",
+    "Cannondale Moterra SL",
+    "Specialized Levo SL",
+    "Trek Fuel EXe",
+    "Mondraker Neat",
     "Wilier Urta Hybrid",
     "Focus VAM2",
     "Focus Jam2 SL",
+    "Lapierre E-Zesty",
     "BMC Fourstroke AMP",
+    "Cube AMS Hybrid",
+    "MMR Kaizen",
+    "Amflow PL",
+    "BH iLynx Race",
+    "BH iLynx Trail",
 ]
 
 SITIOS: List[SitioObjetivo] = [

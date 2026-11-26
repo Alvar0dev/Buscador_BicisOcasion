@@ -17,7 +17,7 @@ from scraper_base import BaseScraper, parsear_precio_euro, es_modelo_no_mtb_dobl
 
 class EscapaScraper(BaseScraper):
     usar_requests_primero: bool = True
-    MAX_PAGINAS: int = 2
+    MAX_PAGINAS: int = 4
 
     def construir_url_pagina(self, pagina: int) -> str:
         base = self.sitio.seccion_emtb

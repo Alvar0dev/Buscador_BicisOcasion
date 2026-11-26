@@ -23,6 +23,7 @@ class BuhobikeScraper(BaseScraper):
     URLS_ADICIONALES: List[str] = [
         "https://www.buhobike.com/3230-electricas-trail-dobles?order=product.price.asc&page=2",
         "https://www.buhobike.com/3229-enduro-electricas?order=product.price.asc",
+        "https://www.buhobike.com/3229-enduro-electricas?order=product.price.asc&page=2",
         "https://www.buhobike.com/3230-electricas-trail-dobles?q=MODELO-LUMEN",
         "https://www.buhobike.com/9448-segunda-mano-montana-electricas",
         "https://www.buhobike.com/3225-segunda-mano-electricas",
@@ -31,6 +32,7 @@ class BuhobikeScraper(BaseScraper):
     def extraer_bicicletas(self) -> List[Bicicleta]:
         bicis: List[Bicicleta] = []
         vistos: Set[str] = set()
+        bases_vacias: Set[str] = set()
 
         urls = [self.sitio.seccion_emtb]
         for u in self.URLS_ADICIONALES:
@@ -38,13 +40,23 @@ class BuhobikeScraper(BaseScraper):
                 urls.append(u)
 
         for url_listado in urls:
+            if "&page=2" in url_listado:
+                url_base_p1 = url_listado.replace("&page=2", "")
+                if url_base_p1 in bases_vacias:
+                    continue
             soup = self.sopa(url_listado)
             if soup is None:
+                bases_vacias.add(url_listado)
                 continue
-            for bici in self._extraer_de_sopa(soup, url_listado=url_listado):
+            extraidas = self._extraer_de_sopa(soup, url_listado=url_listado)
+            nuevos = 0
+            for bici in extraidas:
                 if bici.bici_id not in vistos:
                     vistos.add(bici.bici_id)
                     bicis.append(bici)
+                    nuevos += 1
+            if nuevos == 0:
+                bases_vacias.add(url_listado)
 
         return bicis
 

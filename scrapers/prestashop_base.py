@@ -19,6 +19,7 @@ class PrestaShopBaseScraper(BaseScraper):
 
     PREFIJO_ID: str = "ps"
     MAX_PAGINAS: int = 3
+    TECHO_CORTE_PRECIO: Optional[float] = None
     RESPETAR_TALLA_URL: bool = False
     LIMPIAR_FRAGMENTO_URL: bool = True
 
@@ -46,13 +47,20 @@ class PrestaShopBaseScraper(BaseScraper):
                 break
 
             extraidas = self._extraer_de_sopa(soup, url_listado=url_listado)
+            nuevos_en_pagina = 0
             for bici in extraidas:
                 idx = por_id.get(bici.bici_id)
                 if idx is None:
                     por_id[bici.bici_id] = len(bicis)
                     bicis.append(bici)
+                    nuevos_en_pagina += 1
                 elif 0 < bici.precio < bicis[idx].precio:
                     bicis[idx] = bici
+
+            if pagina >= 2 and nuevos_en_pagina == 0:
+                break
+            if self.TECHO_CORTE_PRECIO and extraidas and min(b.precio for b in extraidas) > self.TECHO_CORTE_PRECIO:
+                break
 
         return bicis
 

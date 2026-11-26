@@ -4159,6 +4159,127 @@ def test_modo_caza_dispara_al_instante_en_reposicion_o_bajada():
             os.unlink(ruta_d)
 
 
+def test_upway_paginacion_y_corte_temprano():
+    """S5: Valida paginación 1..4 en Upway con corte temprano ante página vacía o repetida y guardia de rígidas."""
+    from bs4 import BeautifulSoup
+    from scrapers.upway import UpwayScraper
+
+    sc = UpwayScraper(cfg.SITIOS[2])
+    assert sc.MAX_PAGINAS == 4
+    assert "page=2" in sc.construir_url_pagina(2)
+
+    p1 = BeautifulSoup(
+        """
+        <div>
+          <a class="w-full" href="/products/orbea-rise-m20-rk101">Orbea Rise M20 2023 1m68-1m81 500 km 2.899 € 6.500 € nuevo</a>
+          <a class="w-full" href="/products/haibike-alltrack-7-rk102">Haibike AllTrack 7 2024 1m68-1m81 700 km 2.049 € 4.254 € nuevo</a>
+        </div>
+        """,
+        "html.parser",
+    )
+    p2 = BeautifulSoup(
+        "<div><a class='w-full' href='/products/scott-lumen-900-rk103'>Scott Lumen eRIDE 900 2024 1m68-1m81 400 km 3.199 € 6.999 € nuevo</a></div>",
+        "html.parser",
+    )
+    p3_rep = BeautifulSoup(str(p2), "html.parser")
+    p4_should_not = BeautifulSoup(
+        "<div><a class='w-full' href='/products/no-debe-rk104'>No Debe 2024 1m68-1m81 100 km 2.500 €</a></div>",
+        "html.parser",
+    )
+
+    with patch.object(sc, "sopa", side_effect=[p1, p2, p3_rep, p4_should_not]) as m_sopa:
+        res = sc.extraer_bicicletas()
+    assert m_sopa.call_count == 3
+    ids = {b.bici_id: b for b in res}
+    assert set(ids.keys()) == {"rk101", "rk102", "rk103"}
+    assert ids["rk102"].suspension_trasera == "no"
+    assert ids["rk101"].suspension_trasera == "si"
+
+    # Corte ante página 2 vacía (no llama página 3 ni 4)
+    p_empty = BeautifulSoup("<div></div>", "html.parser")
+    with patch.object(sc, "sopa", side_effect=[p1, p_empty, p2, p4_should_not]) as m_sopa2:
+        res2 = sc.extraer_bicicletas()
+    assert m_sopa2.call_count == 2 and len(res2) == 2
+
+
+def test_corte_temprano_sanferbike_escapa_por_techo_precio():
+    """S5: Verifica MAX_PAGINAS=4 con corte por techo, queries Wallapop Light e-MTB, Mammoth 4400 y Levo SL Alloy."""
+    from bs4 import BeautifulSoup
+    from scrapers.sanferbike import SanferbikeScraper
+    from scrapers.escapa import EscapaScraper
+    from scrapers.mammoth import MammothScraper
+    from scrapers.buhobike import BuhobikeScraper
+
+    sc_sf = SanferbikeScraper(cfg.SITIOS[5])
+    sc_es = EscapaScraper(cfg.SITIOS[7])
+    assert sc_sf.MAX_PAGINAS == 4
+    assert sc_es.MAX_PAGINAS == 4
+
+    sf_p1 = BeautifulSoup(
+        "<article class='product-miniature' data-id-product='11'><div class='product-title'><a href='/es/11.html'>Scott Lumen 910</a></div>"
+        "<div class='product-price-and-shipping'><span class='product-price' content='3500.00'>3.500,00 €</span></div></article>",
+        "html.parser",
+    )
+    sf_p2_over = BeautifulSoup(
+        "<article class='product-miniature' data-id-product='12'><div class='product-title'><a href='/es/12.html'>Scott Lumen 900</a></div>"
+        "<div class='product-price-and-shipping'><span class='product-price' content='4300.00'>4.300,00 €</span></div></article>",
+        "html.parser",
+    )
+    sf_p3 = BeautifulSoup(
+        "<article class='product-miniature' data-id-product='13'><div class='product-title'><a href='/es/13.html'>Otra</a></div>"
+        "<div class='product-price-and-shipping'><span class='product-price' content='4900.00'>4.900,00 €</span></div></article>",
+        "html.parser",
+    )
+    with patch.object(sc_sf, "sopa", side_effect=[sf_p1, sf_p2_over, sf_p3]) as m_sf:
+        sf_bicis = sc_sf.extraer_bicicletas()
+    assert m_sf.call_count == 2 and len(sf_bicis) == 2
+
+    es_p1 = BeautifulSoup(
+        "<article class='card'><a class='card-link' data-product-id='21' href='/e/21/'></a>"
+        "<h4 class='card-title'><a href='/e/21/'>Orbea Rise M20</a></h4><span class='price red'>3.500,00€</span></article>",
+        "html.parser",
+    )
+    es_p2 = BeautifulSoup(
+        "<article class='card'><a class='card-link' data-product-id='22' href='/e/22/'></a>"
+        "<h4 class='card-title'><a href='/e/22/'>Scott Lumen 910</a></h4><span class='price price--withTax'>4.100,00€</span></article>",
+        "html.parser",
+    )
+    es_p3_over = BeautifulSoup(
+        "<article class='card'><a class='card-link' data-product-id='23' href='/e/23/'></a>"
+        "<h4 class='card-title'><a href='/e/23/'>Scott Lumen SL</a></h4><span class='price price--withTax'>4.600,00€</span></article>",
+        "html.parser",
+    )
+    with patch.object(sc_es, "sopa", side_effect=[es_p1, es_p2, es_p3_over]) as m_es:
+        es_bicis = sc_es.extraer_bicicletas()
+    assert m_es.call_count == 3 and len(es_bicis) == 3
+
+    # Queries Wallapop Light e-MTB priorizadas (BH al final)
+    qs = cfg.WALLAPOP_UNICORN_QUERIES
+    for q in ("Specialized Levo SL", "Trek Fuel EXe", "Mondraker Neat", "Lapierre E-Zesty", "Cube AMS Hybrid", "MMR Kaizen", "Amflow PL"):
+        assert q in qs, f"Falta query Wallapop: {q}"
+    assert qs.index("Orbea Rise") < qs.index("BH iLynx Race")
+    assert qs.index("Specialized Levo SL") < qs.index("BH iLynx Trail")
+
+    # Mammoth AJAX precioMaximo >= 4400
+    sc_mam = MammothScraper(cfg.SITIOS[3])
+    payloads = []
+    fake_resp = MagicMock(status_code=200, text="<html></html>")
+    with patch("requests.post", side_effect=lambda url, **kw: (payloads.append(kw["json"]), fake_resp)[1]):
+        sc_mam._extraer_filtrados_precio()
+    assert payloads and int(payloads[0]["precioMaximo"]) >= 4400
+
+    # Buhobike incluye pag 2 XC (3229) con corte temprano ante repetidos
+    sc_bu = BuhobikeScraper(cfg.SITIOS[1])
+    assert any("3229" in u and "page=2" in u for u in sc_bu.URLS_ADICIONALES)
+
+    # Catálogo distingue Turbo Levo SL Comp Alloy (Aluminio >= 19.5 kg) de Carbon
+    b_levo_alu = completar_con_catalogo(
+        bici_prueba(titulo="Specialized Turbo Levo SL Comp Alloy 2024", cuadro_material=None, peso_kg=None, bateria_wh=None),
+        aplicar_heuristica_peso=False,
+    )
+    assert b_levo_alu.cuadro_material == "Aluminio" and b_levo_alu.peso_kg >= 19.5
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -4203,4 +4324,6 @@ if __name__ == "__main__":
     test_es_mega_chollo_no_silencia_rango_3200_3500()
     test_modo_caza_sin_cambios_no_envia_spam_ni_heartbeat()
     test_modo_caza_dispara_al_instante_en_reposicion_o_bajada()
+    test_upway_paginacion_y_corte_temprano()
+    test_corte_temprano_sanferbike_escapa_por_techo_precio()
     print("Todas las pruebas pasaron (GREEN).")

@@ -59,7 +59,7 @@ class MammothScraper(BaseScraper):
     def _extraer_filtrados_precio(self) -> List[Bicicleta]:
         """
         Consulta el endpoint AJAX /filtrarproductos de Mammoth ordenado por precio ascendente
-        y por mayor descuento (1.500 - 4.200 €) para no perder ofertas Black Friday
+        y por mayor descuento (2.000 - 4.400 €) para no perder ofertas Black Friday
         cuando una categoría supera los 60 ítems de portada.
         """
         import requests
@@ -75,7 +75,7 @@ class MammothScraper(BaseScraper):
         for cid, slug_cat, orden in consultas:
             payload = {
                 "precioMinimo": str(cfg.PRECIO_MIN_EUR),
-                "precioMaximo": str(getattr(cfg, "PRECIO_RESPALDO_BLACK_FRIDAY_EUR", 4000) + 200),
+                "precioMaximo": str(getattr(cfg, "PRECIO_RESPALDO_BLACK_FRIDAY_EUR", 4000) + 400),
                 "lstMarcas": [],
                 "lstTallas": [],
                 "lstColores": [],
