@@ -120,6 +120,17 @@ _PATRONES_MODELO_FULL_POWER_PESADA = (
     "fantic",
     "centurion no pogo",
     "carver suv",
+    "spectral:on",
+    "spectral on",
+    "neuron:on",
+    "neuron on",
+    "torque:on",
+    "torque on",
+    "stevens e-inception",
+    "e-inception",
+    "x-bolt",
+    "e-feel",
+    "e-expl",
 )
 
 

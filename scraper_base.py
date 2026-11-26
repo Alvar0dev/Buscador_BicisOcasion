@@ -411,7 +411,7 @@ _PATRONES_NO_MTBD_COMUNES = (
     "carretera", "gravel", "gravelx", "urbana", "paseo",
     "trekking", "plegable", "rigida", "rígida", "hardtail",
     "infantil", "junior", "kids", "24\"", "24''", "rookie",
-    "gain", "e-sensium", "esensium", "keram", "marlin+",
+    "gain", "e-sensium", "esensium", "keram", "marlin+", "denna", "goroc",
     "aspect", "scale", "talon", "ebig", "bignine", "alltrack",
     "reach ht", "reach-ht", "overvolt ht", "overvolt-ht",
 )

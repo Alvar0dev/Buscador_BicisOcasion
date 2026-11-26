@@ -13,7 +13,7 @@ Estructura observada en upway.es:
 from typing import List, Optional
 from bs4 import BeautifulSoup
 from models import Bicicleta
-from scraper_base import BaseScraper
+from scraper_base import BaseScraper, es_modelo_no_mtb_doble
 import config as cfg
 import re
 
@@ -64,6 +64,7 @@ class UpwayScraper(BaseScraper):
                 datos_tarjeta = self._extraer_datos_tarjeta(texto_completo)
                 pvp_original = self._parsear_pvp_original(texto_completo)
 
+                es_no_mtbd = es_modelo_no_mtb_doble(titulo, url)
                 bicis.append(Bicicleta(
                     sitio=self.sitio.nombre,
                     bici_id=bici_id,
@@ -73,7 +74,7 @@ class UpwayScraper(BaseScraper):
                     talla=datos_tarjeta.get("talla"),
                     km=datos_tarjeta.get("km"),
                     ano=datos_tarjeta.get("ano"),
-                    suspension_trasera="si" if es_coleccion_doble else datos_tarjeta.get("suspension_trasera"),
+                    suspension_trasera="no" if es_no_mtbd else ("si" if es_coleccion_doble else datos_tarjeta.get("suspension_trasera")),
                     garantia_anos=self.sitio.garantia_anos,
                     pvp_original=pvp_original,
                 ))

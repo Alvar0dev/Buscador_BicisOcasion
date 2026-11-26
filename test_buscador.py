@@ -3663,6 +3663,40 @@ def test_afinado_9_portales_ilynx_plus_enduro_avinox_y_ahorro_gemini():
     assert b_res.talla == "L" and nota_res == 0.0
 
 
+def test_afinado_26nov_full_power_gravel_y_upway_rigida():
+    """Verifica bloqueo e-Gravel/SUV (Denna, Goroc), rígidas en Upway (AllTrack) y Full Power detectadas el 26/11."""
+    from bs4 import BeautifulSoup
+    from evaluator import es_full_power_o_pesada
+    from scraper_base import es_modelo_no_mtb_doble
+
+    for tit in (
+        "ORBEA DENNA M30 T-M 2026 BICICLETA SEGUNDA MANO",
+        "Bicicleta Flyer Goroc X 4.10 t.M Reacondicionada",
+    ):
+        assert es_modelo_no_mtb_doble(tit) is True
+
+    html_up = """
+    <div>
+      <a class="w-full" href="/products/haibike-alltrack-7-rk6jf3">
+        Haibike AllTrack 7 2024 1m65-1m80 702 km 2.049 € 4.254 € nuevo
+      </a>
+    </div>
+    """
+    bicis_up = UpwayScraper(cfg.SITIOS[2])._extraer_de_sopa(BeautifulSoup(html_up, "html.parser"))
+    assert len(bicis_up) == 1 and bicis_up[0].suspension_trasera == "no"
+
+    for tit_fp in (
+        "Canyon Spectral:ON CF GX AXS",
+        "Canyon Neuron:ON 8 talla M OCASION!",
+        "Canyon Torque:ON CF X01 AXS",
+        "Stevens E-Inception ED 7.6.1 GTF",
+        "Bicicleta Eléctrica MMR X-Bolt 120",
+        "Bicicleta Eléctrica MTB All-Mountain E-Feel 700 S",
+        "Bicicleta eléctrica montaña 29\" doble suspensión E-EXPL 520",
+    ):
+        assert es_full_power_o_pesada(bici_prueba(titulo=tit_fp))[0] is True, f"Faltó bloquear Full Power: {tit_fp}"
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -3701,4 +3735,5 @@ if __name__ == "__main__":
     test_t4_escapa_y_fabregues_scrapers()
     test_regresion_nuevas_tiendas_bordes_y_ttl()
     test_afinado_9_portales_ilynx_plus_enduro_avinox_y_ahorro_gemini()
+    test_afinado_26nov_full_power_gravel_y_upway_rigida()
     print("Todas las pruebas pasaron (GREEN).")
