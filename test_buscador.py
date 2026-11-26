@@ -428,7 +428,8 @@ def test_optimizacion_tarjetas_upway_y_buhobike():
         "Línea Roja >6000 km",
     )
     lista_items = [item_xc_linea_roja, item_xc_gastada, item_trail_sana, item_light_sana, item_xc_sana]
-    lista_items.sort(key=clave_orden_estrictas, reverse=True)
+    with patch.object(cfg, "BH_EN_SEGUNDO_PLANO", False):
+        lista_items.sort(key=clave_orden_estrictas, reverse=True)
     assert [x[0].titulo for x in lista_items] == [
         "BH iLynx Race Carbon Pro LT 7.8",
         "Orbea Rise H30",
@@ -2428,68 +2429,69 @@ def test_black_friday_canal_exclusivo_y_segundo_bot():
         assert evaluar_respaldo_black_friday(b_ocasion_resp)[0] is False
         assert pasa_prefiltro_respaldo_black_friday(b_km_alto)[0] is False
         assert evaluar_respaldo_black_friday(b_km_alto)[0] is False
-        ok_r1, dto_r1, _, mot_r1, clave_r1 = evaluar_respaldo_black_friday(b_over_1, nota_perito=7.5)
-        ok_r2, dto_r2, _, mot_r2, clave_r2 = evaluar_respaldo_black_friday(b_over_2, nota_perito=6.5)
-        ok_r3, dto_r3, _, mot_r3, clave_r3 = evaluar_respaldo_black_friday(b_over_3, nota_perito=6.0)
-        assert ok_r1 and "+299 € sobre tope 3.500 €" in mot_r1
-        assert ok_r2 and "Trail ligera" in mot_r2
-        assert ok_r3 and "400 km" in mot_r3
-        # <= 3.500 € XC (r3) > <= 3.500 € Trail ligera (r2) > 3.501-4.000 € XC (r1)
-        assert clave_r3 > clave_r2 > clave_r1
-        assert evaluar_respaldo_black_friday(b_heavy_over)[0] is False
+        # Con BH_EN_SEGUNDO_PLANO=False (modo neutro por marca), valida <= 3.500 € XC > <= 3.500 € Trail > 3.501-4.000 € XC y rotación Top 3
+        with patch.object(cfg, "BH_EN_SEGUNDO_PLANO", False):
+            ok_r1, dto_r1, _, mot_r1, clave_r1 = evaluar_respaldo_black_friday(b_over_1, nota_perito=7.5)
+            ok_r2, dto_r2, _, mot_r2, clave_r2 = evaluar_respaldo_black_friday(b_over_2, nota_perito=6.5)
+            ok_r3, dto_r3, _, mot_r3, clave_r3 = evaluar_respaldo_black_friday(b_over_3, nota_perito=6.0)
+            assert ok_r1 and "+299 € sobre tope 3.500 €" in mot_r1
+            assert ok_r2 and "Trail ligera" in mot_r2
+            assert ok_r3 and "400 km" in mot_r3
+            assert clave_r3 > clave_r2 > clave_r1
+            assert evaluar_respaldo_black_friday(b_heavy_over)[0] is False
 
-        # Integración en _recolectar_oportunidades + ejecutar_busqueda sin contaminar diarias ni historial_catalogo
-        fake_m_resp = MagicMock(); fake_m_resp.extraer_bicicletas.return_value = [b_over_1]
-        fake_w_resp = MagicMock(); fake_w_resp.extraer_bicicletas.return_value = [b_over_3]
-        fake_bo_oc = MagicMock(); fake_bo_oc.extraer_bicicletas.return_value = [b_ocasion_resp]
-        tele_r = {}
-        with patch.dict(
-            "main.SCRAPERS",
-            {
-                "Mammoth": lambda s: fake_m_resp,
-                "Bike Ocasión": lambda s: fake_bo_oc,
-                "Buhobike": lambda s: fake_empty,
-                "Upway": lambda s: fake_empty,
-                "Wallapop": lambda s: fake_w_resp,
-            },
-            clear=True,
-        ), patch("main.enriquecer_y_valorar_bici", side_effect=lambda b: (b, 7.5, "OK")):
-            ops_r = _recolectar_oportunidades(db_bf, telemetria=tele_r)
-        assert [b.bici_id for b, _, _ in ops_r] == ["resp-bmc"]
-        assert tele_r["black_friday_pool"] == []
-        assert [x[0].bici_id for x in tele_r["black_friday_respaldo_pool"]] == ["resp-bmc", "resp-ilynx"]
-        assert db_bf.obtener_seguimiento("resp-ilynx") is None
+            # Integración en _recolectar_oportunidades + ejecutar_busqueda sin contaminar diarias ni historial_catalogo
+            fake_m_resp = MagicMock(); fake_m_resp.extraer_bicicletas.return_value = [b_over_1]
+            fake_w_resp = MagicMock(); fake_w_resp.extraer_bicicletas.return_value = [b_over_3]
+            fake_bo_oc = MagicMock(); fake_bo_oc.extraer_bicicletas.return_value = [b_ocasion_resp]
+            tele_r = {}
+            with patch.dict(
+                "main.SCRAPERS",
+                {
+                    "Mammoth": lambda s: fake_m_resp,
+                    "Bike Ocasión": lambda s: fake_bo_oc,
+                    "Buhobike": lambda s: fake_empty,
+                    "Upway": lambda s: fake_empty,
+                    "Wallapop": lambda s: fake_w_resp,
+                },
+                clear=True,
+            ), patch("main.enriquecer_y_valorar_bici", side_effect=lambda b: (b, 7.5, "OK")):
+                ops_r = _recolectar_oportunidades(db_bf, telemetria=tele_r)
+            assert [b.bici_id for b, _, _ in ops_r] == ["resp-bmc"]
+            assert tele_r["black_friday_pool"] == []
+            assert [x[0].bici_id for x in tele_r["black_friday_respaldo_pool"]] == ["resp-bmc", "resp-ilynx"]
+            assert db_bf.obtener_seguimiento("resp-ilynx") is None
 
-        items_top3 = [
-            (b_over_3, dto_r3, 6.0, mot_r3),
-            (b_over_2, dto_r2, 6.5, mot_r2),
-            (b_over_1, dto_r1, 7.5, mot_r1),
-        ]
-        txt_top3 = formatear_informe_respaldo_black_friday(items_top3)
-        assert "Top 3 Nuevas y Seminuevas Más Interesantes" in txt_top3
-        assert "BH iLynx Race Carbon 8.8 XT" in txt_top3 and "BH iLynx Race Carbon LT 7.9" in txt_top3
-
-        enviados_top3 = []
-        with patch("main.BaseDatos", return_value=db_bf), \
-             patch("main._recolectar_oportunidades", side_effect=lambda db, forzar_envio=False, telemetria=None: (
-                 telemetria.update({"black_friday_pool": [], "black_friday_respaldo_pool": items_top3, "total_procesadas": 10, "conteo_por_portal": {"Mammoth": 1}})
-                 if telemetria is not None else None,
-                 [],
-             )[1]), \
-             patch("main.exportar_radar_mercado_md"), \
-             patch("main.enviar_informe_respaldo_black_friday", side_effect=lambda items, **kw: enviados_top3.append([x[0].bici_id for x in items]) or True), \
-             patch("main.enviar_heartbeat"), \
-             patch("main.enviar_heartbeat_black_friday") as mock_hb_bf_resp, \
-             patch.object(cfg, "TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", "999999:TEST_BF_TOKEN"):
-            ejecutar_busqueda(forzar_envio=False)
-            assert enviados_top3 == [["resp-bmc", "resp-lumen", "resp-ilynx"]]
-            assert mock_hb_bf_resp.call_args.args[0]["black_friday_respaldo_enviado"] is True
-            # Segunda pasada idéntica rota hacia la siguiente en importancia manteniendo las 3
-            ejecutar_busqueda(forzar_envio=False)
-            assert enviados_top3 == [
-                ["resp-bmc", "resp-lumen", "resp-ilynx"],
-                ["resp-lumen", "resp-ilynx", "resp-bmc"],
+            items_top3 = [
+                (b_over_3, dto_r3, 6.0, mot_r3),
+                (b_over_2, dto_r2, 6.5, mot_r2),
+                (b_over_1, dto_r1, 7.5, mot_r1),
             ]
+            txt_top3 = formatear_informe_respaldo_black_friday(items_top3)
+            assert "Top 3 Nuevas y Seminuevas Más Interesantes" in txt_top3
+            assert "BH iLynx Race Carbon 8.8 XT" in txt_top3 and "BH iLynx Race Carbon LT 7.9" in txt_top3
+
+            enviados_top3 = []
+            with patch("main.BaseDatos", return_value=db_bf), \
+                 patch("main._recolectar_oportunidades", side_effect=lambda db, forzar_envio=False, telemetria=None: (
+                     telemetria.update({"black_friday_pool": [], "black_friday_respaldo_pool": items_top3, "total_procesadas": 10, "conteo_por_portal": {"Mammoth": 1}})
+                     if telemetria is not None else None,
+                     [],
+                 )[1]), \
+                 patch("main.exportar_radar_mercado_md"), \
+                 patch("main.enviar_informe_respaldo_black_friday", side_effect=lambda items, **kw: enviados_top3.append([x[0].bici_id for x in items]) or True), \
+                 patch("main.enviar_heartbeat"), \
+                 patch("main.enviar_heartbeat_black_friday") as mock_hb_bf_resp, \
+                 patch.object(cfg, "TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", "999999:TEST_BF_TOKEN"):
+                ejecutar_busqueda(forzar_envio=False)
+                assert enviados_top3 == [["resp-bmc", "resp-lumen", "resp-ilynx"]]
+                assert mock_hb_bf_resp.call_args.args[0]["black_friday_respaldo_enviado"] is True
+                # Segunda pasada idéntica rota hacia la siguiente en importancia manteniendo las 3
+                ejecutar_busqueda(forzar_envio=False)
+                assert enviados_top3 == [
+                    ["resp-bmc", "resp-lumen", "resp-ilynx"],
+                    ["resp-lumen", "resp-ilynx", "resp-bmc"],
+                ]
             # Pero si luego baja a <= 3.500 EUR, sí dispara alerta estricta de Black Friday (bici_id real no bloqueado)
             assert db_bf.debe_reenviarse_black_friday(bici_prueba(**{**b_over_1.to_dict(), "precio": 3400.0})) is True
             # Tampoco un respaldo de otro portal dentro de +-25 EUR bloquea una alerta estricta en otro portal
@@ -2855,6 +2857,7 @@ def test_black_friday_siempre_top3_omitiendo_ya_mostradas():
         ]
         with patch("main.enviar_black_friday", side_effect=lambda *a, **kw: enviados_strict.append((kw.get("bici") or a[0]).bici_id) or True), \
              patch("main.enviar_informe_respaldo_black_friday", side_effect=lambda items, **kw: enviados_top.append([x[0].bici_id for x in items]) or True), \
+             patch.object(cfg, "BH_EN_SEGUNDO_PLANO", False), \
              patch.object(cfg, "TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", "999999:TEST_BF_TOKEN"):
             estado_1 = {}
             total_1 = _despachar_alertas_black_friday(
@@ -2878,6 +2881,7 @@ def test_black_friday_siempre_top3_omitiendo_ya_mostradas():
         enviados_top_2 = []
         with patch("main.enviar_black_friday", side_effect=lambda *a, **kw: enviados_strict_2.append((kw.get("bici") or a[0]).bici_id) or True), \
              patch("main.enviar_informe_respaldo_black_friday", side_effect=lambda items, **kw: enviados_top_2.append([x[0].bici_id for x in items]) or True), \
+             patch.object(cfg, "BH_EN_SEGUNDO_PLANO", False), \
              patch.object(cfg, "TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", "999999:TEST_BF_TOKEN"):
             estado_2 = {}
             total_2 = _despachar_alertas_black_friday(
@@ -2984,7 +2988,8 @@ def test_black_friday_siempre_top3_omitiendo_ya_mostradas():
             try:
                 db6 = BaseDatos(ruta=ruta6)
                 env_top6b = []
-                with patch("main.enviar_informe_respaldo_black_friday", side_effect=lambda items, **kw: env_top6b.append(([x[0].bici_id for x in items], kw.get("silencioso"))) or True):
+                with patch("main.enviar_informe_respaldo_black_friday", side_effect=lambda items, **kw: env_top6b.append(([x[0].bici_id for x in items], kw.get("silencioso"))) or True), \
+                     patch.object(cfg, "BH_EN_SEGUNDO_PLANO", False):
                     _despachar_alertas_black_friday(
                         db6, [], forzar_envio=False, bf_respaldo_pool=b_4_items, bf_suplemento_pool=[],
                         estado_beast_previo=None, estado_extra=est_6b,
@@ -3012,7 +3017,8 @@ def test_black_friday_siempre_top3_omitiendo_ya_mostradas():
                     "offset": 2,
                     "enviados_ids": ["sup-ilynx-70", "sup-ilynx-1411", "sup-pro-79"],
                 }
-                with patch("main.enviar_informe_respaldo_black_friday", side_effect=lambda items, **kw: env_top5.append([x[0].bici_id for x in items]) or True):
+                with patch("main.enviar_informe_respaldo_black_friday", side_effect=lambda items, **kw: env_top5.append([x[0].bici_id for x in items]) or True), \
+                     patch.object(cfg, "BH_EN_SEGUNDO_PLANO", False):
                     _despachar_alertas_black_friday(
                         db6, [], forzar_envio=False, bf_respaldo_pool=b_5_items, bf_suplemento_pool=[],
                         estado_beast_previo=prev_5, estado_extra=est_5, omitir_enviadas=True,
@@ -3697,6 +3703,133 @@ def test_afinado_26nov_full_power_gravel_y_upway_rigida():
         assert es_full_power_o_pesada(bici_prueba(titulo=tit_fp))[0] is True, f"Faltó bloquear Full Power: {tit_fp}"
 
 
+def test_bh_segundo_plano_y_excepcion_irrechazable():
+    """S2: Relega BH a segundo plano en Daily y Beast salvo oferta irrechazable (carbono <=19 kg, precio/dto top)."""
+    from evaluator import (
+        es_bh_irrechazable,
+        prioridad_marca,
+        evaluar_respaldo_black_friday,
+    )
+    from main import clave_orden_estrictas, seleccionar_por_portal, _despachar_alertas_black_friday
+    from notifier import formatear_informe_respaldo_black_friday
+
+    assert cfg.BH_EN_SEGUNDO_PLANO is True
+
+    b_bh_ord = bici_prueba(
+        sitio="Bicimarket",
+        bici_id="bm-54681",
+        titulo="BH iLynx Trail Carbon 8.7",
+        precio=3499.0,
+        pvp_original=6299.9,
+        km=0,
+        peso_kg=18.6,
+        bateria_wh=540,
+        motor="BH 2EXMAG",
+        modalidad="Trail",
+        recorrido_mm=150,
+        suspension_trasera="si",
+        garantia_anos=3,
+    )
+    assert es_bh_irrechazable(b_bh_ord) is False
+    assert prioridad_marca(b_bh_ord) == 0
+
+    b_bh_irr_1 = bici_prueba(
+        sitio="Fabregues",
+        bici_id="fb-bh-irr1",
+        titulo="BH iLynx Race Carbon 8.6",
+        precio=2850.0,
+        pvp_original=6299.0,
+        km=0,
+        peso_kg=18.3,
+        bateria_wh=540,
+        motor="BH 2EXMAG",
+        modalidad="XC / Downcountry",
+        recorrido_mm=120,
+        suspension_trasera="si",
+        garantia_anos=3,
+    )
+    b_bh_irr_2 = bici_prueba(**{**b_bh_irr_1.to_dict(), "bici_id": "fb-bh-irr2", "precio": 3050.0, "pvp_original": 6300.0})
+    b_bh_pesada = bici_prueba(**{**b_bh_irr_1.to_dict(), "bici_id": "bh-pesada", "peso_kg": 19.3})
+    b_bh_alu = bici_prueba(**{**b_bh_irr_1.to_dict(), "bici_id": "bh-alu", "titulo": "BH iLynx Race 8.4", "cuadro_material": "Aluminio"})
+    b_bh_oc_ok = bici_prueba(
+        sitio="Bike Ocasión", bici_id="bo-bh-ok", titulo="BH iLynx Race Carbon 8.6",
+        precio=2250.0, pvp_original=5999.0, km=800, peso_kg=18.3, bateria_wh=540, motor="BH 2EXMAG", modalidad="XC", suspension_trasera="si",
+    )
+    b_bh_oc_caro = bici_prueba(**{**b_bh_oc_ok.to_dict(), "bici_id": "bo-bh-caro", "precio": 2400.0})
+    b_bh_oc_km = bici_prueba(**{**b_bh_oc_ok.to_dict(), "bici_id": "bo-bh-km", "km": 1500})
+
+    assert es_bh_irrechazable(b_bh_irr_1) is True and prioridad_marca(b_bh_irr_1) == 1
+    assert es_bh_irrechazable(b_bh_irr_2) is True and prioridad_marca(b_bh_irr_2) == 1
+    assert es_bh_irrechazable(b_bh_pesada) is False
+    assert es_bh_irrechazable(b_bh_alu) is False
+    assert es_bh_irrechazable(b_bh_oc_ok) is True
+    assert es_bh_irrechazable(b_bh_oc_caro) is False
+    assert es_bh_irrechazable(b_bh_oc_km) is False
+
+    # En Beast: Orbea (3524 €) y Scott (3899 €) ganan a BH ordinaria (3499 €); BH irrechazable vuelve a #1
+    b_orbea = bici_prueba(
+        sitio="Escapa", bici_id="esc-rise", titulo="Orbea Rise SL H30 2026",
+        precio=3524.0, pvp_original=4699.0, km=0, peso_kg=20.2, bateria_wh=540,
+        motor="Shimano EP6 RS Gen2", modalidad="Trail", recorrido_mm=140, suspension_trasera="si", garantia_anos=3,
+    )
+    b_scott = bici_prueba(
+        sitio="Sanferbike", bici_id="sf-lumen", titulo="Scott Lumen eRIDE 910",
+        precio=3899.0, pvp_original=6499.0, km=0, peso_kg=17.6, bateria_wh=520,
+        motor="TQ HPR50", modalidad="XC / Downcountry", recorrido_mm=130, suspension_trasera="si", garantia_anos=3,
+    )
+    _, _, _, _, cl_bh = evaluar_respaldo_black_friday(b_bh_ord, nota_perito=7.5)
+    _, _, _, _, cl_or = evaluar_respaldo_black_friday(b_orbea, nota_perito=7.0)
+    _, _, _, _, cl_sc = evaluar_respaldo_black_friday(b_scott, nota_perito=7.5)
+    _, _, _, _, cl_irr = evaluar_respaldo_black_friday(b_bh_irr_1, nota_perito=8.0)
+    assert cl_sc > cl_or > cl_bh
+    assert cl_irr > cl_sc
+
+    fd_bh, ruta_bh = tempfile.mkstemp(suffix=".db")
+    os.close(fd_bh)
+    try:
+        db_bh = BaseDatos(ruta=ruta_bh)
+        env_rep = []
+        est_bh = {}
+        with patch("main.enviar_black_friday", return_value=True), \
+             patch("main.enviar_informe_respaldo_black_friday", side_effect=lambda items, **kw: env_rep.append([x[0].bici_id for x in items]) or True), \
+             patch.object(cfg, "TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", "999999:TEST_BF_TOKEN"):
+            _despachar_alertas_black_friday(
+                db_bh,
+                [],
+                forzar_envio=True,
+                bf_respaldo_pool=[
+                    (b_bh_ord, 44.5, 7.5, "Trail ligera"),
+                    (b_orbea, 25.0, 7.0, "+24 € sobre tope"),
+                    (b_scott, 40.0, 7.5, "+399 € sobre tope"),
+                ],
+                estado_extra=est_bh,
+            )
+        assert env_rep == [["sf-lumen", "esc-rise", "bm-54681"]]
+
+        # En Daily: en Wallapop, Orbea 7.0 supera a BH ordinaria 7.5 (20.0 kg); en Buhobike sin otra opción, BH sale
+        b_w_bh = bici_prueba(sitio="Wallapop", bici_id="w-bh-ord", titulo="BH iLynx Trail Carbon 8.6", precio=2299.0, km=1500, peso_kg=20.0, bateria_wh=540, modalidad="XC", garantia_anos=0)
+        b_w_or = bici_prueba(sitio="Wallapop", bici_id="w-orbea", titulo="Orbea Rise H10 2023", precio=2599.0, km=1200, peso_kg=19.5, bateria_wh=540, modalidad="Trail", garantia_anos=0)
+        b_bu_bh = bici_prueba(sitio="Buhobike", bici_id="bu-bh", titulo="BH iLynx Race 8.4", precio=2599.0, km=1000, peso_kg=18.2, bateria_wh=540, modalidad="XC")
+        assert es_bh_irrechazable(b_w_bh) is False
+        assert clave_orden_estrictas((b_w_or, 7.0, "OK")) > clave_orden_estrictas((b_w_bh, 7.5, "OK"))
+
+        ops_bh = sorted([(b_w_bh, 7.5, "OK"), (b_w_or, 7.0, "OK"), (b_bu_bh, 7.0, "OK")], key=clave_orden_estrictas, reverse=True)
+        plan_bh = seleccionar_por_portal(ops_bh)
+        sel_ids = {x["sitio"]: x["item"][0].bici_id for x in plan_bh["seleccionados"]}
+        assert sel_ids["Wallapop"] == "w-orbea"
+        assert sel_ids["Buhobike"] == "bu-bh"
+    finally:
+        if os.path.exists(ruta_bh):
+            os.unlink(ruta_bh)
+
+    txt_rep = formatear_informe_respaldo_black_friday([
+        (b_bh_irr_1, 54.8, 8.0, "OK"),
+        (b_bh_ord, 44.5, 7.5, "Trail"),
+    ])
+    assert "[🔥 BH IRRECHAZABLE]" in txt_rep
+    assert "[2º plano BH]" in txt_rep
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -3736,4 +3869,5 @@ if __name__ == "__main__":
     test_regresion_nuevas_tiendas_bordes_y_ttl()
     test_afinado_9_portales_ilynx_plus_enduro_avinox_y_ahorro_gemini()
     test_afinado_26nov_full_power_gravel_y_upway_rigida()
+    test_bh_segundo_plano_y_excepcion_irrechazable()
     print("Todas las pruebas pasaron (GREEN).")

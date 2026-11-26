@@ -27,10 +27,13 @@ from evaluator import (
     calcular_nota_oportunidad,
     pasa_filtros_estrictos,
     prioridad_modalidad,
+    prioridad_marca,
     pasa_prefiltro_black_friday,
     evaluar_oportunidad_black_friday,
     pasa_prefiltro_respaldo_black_friday,
     evaluar_respaldo_black_friday,
+    es_bici_bh,
+    es_bh_irrechazable,
     es_bici_de_ocasion,
     es_modalidad_mtb_doble_valida,
     es_modalidad_xc,
@@ -184,6 +187,7 @@ def clave_orden_estrictas(item: tuple) -> tuple:
     return (
         salud_mecanica,
         sin_linea_roja,
+        prioridad_marca(bici),
         mod_prio if salud_mecanica else 0,
         nota,
         mod_prio,
@@ -486,8 +490,9 @@ def _recolectar_oportunidades(
     # Ordenar estrictas (< 21 kg) por calidad real (novedad solo desempata a igualdad exacta)
     estrictas_pool.sort(key=lambda x: (clave_orden_estrictas(x[:3]), 1 if x[3] else 0), reverse=True)
 
-    # Ordenar respaldo priorizando modelo identificable, mayor nota, XC y menor peso
+    # Ordenar respaldo priorizando marca objetivo, modelo identificable, mayor nota, XC y menor peso
     clave_orden_respaldo = lambda x: (
+        prioridad_marca(x[0]),
         1 if not (x[1] <= 4.5 and _es_anuncio_generico_sin_modelo(x[0])) else 0,
         x[1],
         prioridad_modalidad(x[0]),
@@ -498,6 +503,7 @@ def _recolectar_oportunidades(
 
     black_friday_pool.sort(
         key=lambda x: (
+            prioridad_marca(x[0], dto_pvp=x[2]),
             1 if float(x[0].precio) <= float(cfg.PRECIO_MAX_BLACK_FRIDAY_EUR) else 0,
             prioridad_modalidad(x[0]),
             x[1],
@@ -938,11 +944,12 @@ def _despachar_alertas_black_friday(
     if n_total == 0:
         return 0
 
-    # Garantizar que cualquier candidata <= 3.500 € vaya siempre antes del respaldo 3.501-4.000 €,
-    # y que dentro de cada tramo de precio se priorice XC (3) antes que Trail ligera (2) o MTB (1),
-    # preservando el orden interno strict > resp > sup cuando coinciden tramo y modalidad.
+    # Garantizar prioridad de marcas objetivo (no-BH o BH irrechazable) por delante de BH ordinaria,
+    # luego candidatas <= 3.500 € antes del respaldo 3.501-4.000 €, XC (3) > Trail ligera (2) > MTB (1),
+    # preservando strict > resp > sup y el orden previo de dto/nota mediante sort estable.
     pool_beast.sort(
         key=lambda item: (
+            prioridad_marca(item["bici"], dto_pvp=item.get("dto")),
             1 if float(item["bici"].precio) <= float(cfg.PRECIO_MAX_BLACK_FRIDAY_EUR) else 0,
             prioridad_modalidad(item["bici"]),
             2 if item["kind"] == "strict" else (1 if item["kind"] == "resp" else 0),

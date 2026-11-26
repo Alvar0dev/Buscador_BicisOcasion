@@ -24,6 +24,19 @@ def es_mega_chollo(bici, nota: float) -> bool:
     return pct_dto >= 50.0 and nota >= 9.0
 
 
+def _etiqueta_prioridad_bh(bici, dto_pct: Optional[float] = None) -> str:
+    """Devuelve badge visible de prioridad para bicis BH, o cadena vacía para marcas objetivo."""
+    from evaluator import es_bici_bh, es_bh_irrechazable
+
+    if not es_bici_bh(bici):
+        return ""
+    if es_bh_irrechazable(bici, dto_pvp=dto_pct):
+        return "[🔥 BH IRRECHAZABLE]"
+    if getattr(cfg, "BH_EN_SEGUNDO_PLANO", True):
+        return "[2º plano BH]"
+    return ""
+
+
 def _campos_ficha_bici(bici, desglose: str) -> dict:
     """Normaliza los campos comunes de una bicicleta para mensajes Markdown de Telegram."""
     km = bici.km if bici.km is not None else "no indicado"
@@ -232,11 +245,15 @@ def formatear_mensaje(
             f"💡 _Vuelve al primer puesto tras alternar al #2 (sigue siendo la mejor opción de {bici.sitio}):_\n\n"
         )
 
+    tag_bh = _etiqueta_prioridad_bh(bici, pct_dto_pvp if pvp_orig and pvp_orig > bici.precio else None)
+    linea_bh = f"🏷️ Prioridad marca: *{tag_bh}*\n" if tag_bh else ""
+
     mensaje = (
         f"{banner_repetido}"
         f"{cabecera}\n\n"
         f"*{bici.titulo}*\n"
         f"🏪 Tienda: {bici.sitio}\n"
+        f"{linea_bh}"
         f"{c['linea_ubicacion']}"
         f"{linea_precio}\n"
         f"{linea_pvp}"
@@ -348,9 +365,13 @@ def formatear_mensaje_black_friday(
             f"💡 _Extender +210 Wh (~450 €):_ *~{bici.bateria_wh + 210} Wh* totales dentro de tope (~{bici.precio + 450:.0f} €)\n"
         )
 
+    tag_bh = _etiqueta_prioridad_bh(bici, dto_real)
+    linea_bh = f"🏷️ Prioridad marca: *{tag_bh}*\n" if tag_bh else ""
+
     mensaje = (
         f"{cabecera}\n\n"
         f"🆕 Estado: *{etiqueta_estado}*\n"
+        f"{linea_bh}"
         f"*{bici.titulo}*\n"
         f"🏪 Tienda: {bici.sitio}\n"
         f"{c['linea_ubicacion']}"
@@ -564,9 +585,11 @@ def formatear_informe_respaldo_black_friday(items: list, subtitulo: Optional[str
         km_txt = "NUEVA 0 km" if bici.km == 0 else (f"EXPO {bici.km} km" if (bici.km or 0) <= 50 else f"{bici.km} km")
         bat_txt = f"{bici.bateria_wh} Wh" if bici.bateria_wh is not None else "bat. n/d"
         motivo_seguro = str(motivo_fuera).replace("_", "-").replace("*", "").replace("`", "'")
+        tag_bh = _etiqueta_prioridad_bh(bici, dto_pct)
+        tag_suf = f" {tag_bh}" if tag_bh else ""
 
         bloques.append(
-            f"*{idx}. {bici.titulo}* ({bici.sitio})\n"
+            f"*{idx}. {bici.titulo}* ({bici.sitio}){tag_suf}\n"
             f"💰 *{bici.precio:.0f} €*{linea_pvp}\n"
             f"⚙️ {km_txt} | ⚖️ {peso_txt} | 🔋 {bat_txt} | ⚡ {bici.motor or 'n/d'} | 📏 {bici.talla}\n"
             f"⚠️ _Fuera de filtro:_ {motivo_seguro}\n"

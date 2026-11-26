@@ -218,6 +218,16 @@ NOTA_MIN_BLACK_FRIDAY: float = 7.5
 BLACK_FRIDAY_TOP_N: int = 5
 BLACK_FRIDAY_FALLBACK_TOP_N: int = 3
 
+# Prioridad de marcas (BH en segundo plano salvo oferta irrechazable)
+BH_EN_SEGUNDO_PLANO: bool = True
+BH_IRRECHAZABLE_PRECIO_MAX_NUEVA_EUR: float = 2900.0
+BH_IRRECHAZABLE_DTO_MIN_NUEVA_PCT: float = 45.0
+BH_IRRECHAZABLE_PRECIO_MAX_ALT_NUEVA_EUR: float = 3100.0
+BH_IRRECHAZABLE_DTO_MIN_ALT_NUEVA_PCT: float = 50.0
+BH_IRRECHAZABLE_PRECIO_MAX_OCASION_EUR: float = 2300.0
+BH_IRRECHAZABLE_KM_MAX_OCASION: int = 1200
+BH_IRRECHAZABLE_PESO_MAX_KG: float = 19.0
+
 NOTA_MIN_AGUARDAR: float = 8.0  # Solo nota >= 8.0 pasa filtros estrictos (S8)
 NOTA_MIN_NOTIFICAR: float = 8.5  # Umbral para notificar por Telegram (fallback a Top N si ninguna llega)
 TOP_N_NOTIFICAR: int = 3  # Cantidad de bicicletas más interesantes a enviar por Telegram

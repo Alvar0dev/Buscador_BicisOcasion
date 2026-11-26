@@ -22,6 +22,71 @@ def es_bici_bh(bici: Bicicleta) -> bool:
     return bool(re.search(r"\bbh\b", texto))
 
 
+def es_cuadro_carbono(bici: Bicicleta) -> bool:
+    """Detecta si la bicicleta declara cuadro de carbono en material, título o componentes."""
+    texto = f"{getattr(bici, 'cuadro_material', '') or ''} {bici.titulo or ''} {bici.componentes or ''}".lower()
+    return any(m in texto for m in cfg.MATERIALES_CUADRO_LIGERO)
+
+
+def es_bh_irrechazable(bici: Bicicleta, dto_pvp: Optional[float] = None) -> bool:
+    """
+    True únicamente cuando una BH en carbono y peso top (<= 19 kg, > 500 Wh)
+    presenta un precio/descuento tan agresivo que merece competir en primer plano.
+    """
+    if not es_bici_bh(bici):
+        return False
+    if bici.bateria_wh is None or bici.bateria_wh <= cfg.BATERIA_MIN_WH:
+        return False
+    peso_max = float(getattr(cfg, "BH_IRRECHAZABLE_PESO_MAX_KG", 19.0))
+    if bici.peso_kg is None or bici.peso_kg > peso_max:
+        return False
+    if not es_cuadro_carbono(bici):
+        return False
+
+    precio = float(bici.precio or 0.0)
+    if precio <= 0:
+        return False
+    dto = dto_pvp if dto_pvp is not None else calcular_descuento_pvp_pct(bici)
+
+    texto = f"{bici.titulo or ''} {bici.componentes or ''}"
+    es_oc = es_bici_de_ocasion(bici)
+    es_tienda_nueva = cfg.es_sitio_tienda_nueva(bici.sitio, bici.url, texto)
+    km = bici.km
+    km_semi = int(getattr(cfg, "KM_MAX_SEMINUEVA_BLACK_FRIDAY", 500))
+    es_nueva_o_semi = (not es_oc) and (
+        (km is not None and km <= km_semi)
+        or (es_tienda_nueva and km is None)
+    )
+    if es_nueva_o_semi:
+        p1 = float(getattr(cfg, "BH_IRRECHAZABLE_PRECIO_MAX_NUEVA_EUR", 2900.0))
+        d1 = float(getattr(cfg, "BH_IRRECHAZABLE_DTO_MIN_NUEVA_PCT", 45.0))
+        p2 = float(getattr(cfg, "BH_IRRECHAZABLE_PRECIO_MAX_ALT_NUEVA_EUR", 3100.0))
+        d2 = float(getattr(cfg, "BH_IRRECHAZABLE_DTO_MIN_ALT_NUEVA_PCT", 50.0))
+        return dto is not None and ((precio <= p1 and dto >= d1) or (precio <= p2 and dto >= d2))
+
+    p_oc = float(getattr(cfg, "BH_IRRECHAZABLE_PRECIO_MAX_OCASION_EUR", 2300.0))
+    km_oc = int(getattr(cfg, "BH_IRRECHAZABLE_KM_MAX_OCASION", 1200))
+    return (
+        km is not None
+        and km <= km_oc
+        and precio <= p_oc
+        and (dto is None or dto >= 50.0)
+        and prioridad_modalidad(bici) >= 2
+    )
+
+
+def prioridad_marca(bici: Bicicleta, dto_pvp: Optional[float] = None) -> int:
+    """
+    Devuelve 1 para marcas objetivo (no-BH) o BH irrechazables, y 0 para BH ordinaria
+    cuando BH_EN_SEGUNDO_PLANO está activo.
+    """
+    if not getattr(cfg, "BH_EN_SEGUNDO_PLANO", True):
+        return 1
+    if not es_bici_bh(bici):
+        return 1
+    return 1 if es_bh_irrechazable(bici, dto_pvp=dto_pvp) else 0
+
+
 _RE_MODALIDAD_NO_XC = re.compile(
     r"\b(?:trail|enduro|all[- ]?mountain|freeride|dh)\b",
     re.IGNORECASE,
@@ -534,7 +599,7 @@ def _puntuacion_calidad_precio(bici: Bicicleta) -> Tuple[float, str]:
     puntos = 0.0
     partes: List[str] = []
 
-    if any(m in texto for m in cfg.MATERIALES_CUADRO_LIGERO):
+    if es_cuadro_carbono(bici):
         puntos += 1.0
         partes.append("cuadro carbono: +1.0")
     if any(m in texto for m in ["xt", "axs", "x0", "xtr"]):
@@ -809,7 +874,7 @@ def _puntuacion_black_friday(
     cuadro = (bici.cuadro_material or "").lower()
     motor_str = (bici.motor or "").lower()
     es_gama_alta = any(k in comp for k in ("xtr", "xx1", "x01", "axs", "xt", "gx", "kashima", "factory", "ultimate"))
-    es_carbono = any(k in f"{cuadro} {bici.titulo or ''}".lower() for k in ("carbon", "carbono"))
+    es_carbono = es_cuadro_carbono(bici)
     p_comp = 1.0 if (es_gama_alta or es_carbono) else 0.6
 
     notas_extra: List[str] = []
@@ -1011,6 +1076,7 @@ def evaluar_respaldo_black_friday(
     tramo_km = 2 if bici.km <= cfg.KM_MAX_BLACK_FRIDAY else (1 if bici.km <= 500 else 0)
     nota_ref = round(nota_perito if nota_perito is not None else 0.0, 2)
     clave_orden = (
+        prioridad_marca(bici, dto_pvp=dto_pct),
         en_tramo_3500,
         prio_mod,
         tramo_km,
