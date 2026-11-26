@@ -973,14 +973,23 @@ def _despachar_alertas_sniper(
         return 0
 
     enviadas = 0
-    despachadas_lote = []
+    vistos_lote = []
     for item in sniper_pool:
         bici, nota, motivo_sniper, precio_previo = item
-        if any(
+        es_clon_lote = any(
             (eq.sitio or "").lower() != (bici.sitio or "").lower()
             and abs(float(eq.precio) - float(bici.precio)) <= 25.0
             and titulos_equivalentes_dedup(eq.titulo, bici.titulo)
-            for eq in despachadas_lote
+            for eq in vistos_lote
+        )
+        vistos_lote.append(bici)
+        if es_clon_lote:
+            continue
+        if (
+            not forzar_envio
+            and (bici.sitio or "").lower() == "wallapop"
+            and hasattr(db, "fue_enviada_sniper_equivalente")
+            and db.fue_enviada_sniper_equivalente(bici)
         ):
             continue
         if not forzar_envio and hasattr(db, "debe_enviar_sniper") and not db.debe_enviar_sniper(bici):
@@ -999,7 +1008,6 @@ def _despachar_alertas_sniper(
         ):
             if hasattr(db, "marcar_sniper_enviada"):
                 db.marcar_sniper_enviada(bici, motivo_sniper)
-            despachadas_lote.append(bici)
             enviadas += 1
             logger.info(
                 f"  🎯🔥 SNIPER [{bici.sitio}]: {bici.titulo} ({bici.precio:.0f} €, {bici.peso_kg} kg) -> {motivo_sniper}"
@@ -1115,37 +1123,37 @@ def _despachar_alertas_black_friday(
         )
 
     nuevas_items_caza = [x for x in pool_beast if not _ya_mostrada(x["bici"])]
-    if modo_caza and not forzar_envio:
-        def _bajada_beast_50(b) -> bool:
-            for bid in (b.bici_id, f"respaldo:{b.bici_id}"):
-                prev_p = db.precio_previo_black_friday(bid)
-                if prev_p is not None and float(b.precio) <= float(prev_p) - 50.0:
-                    return True
-            return False
+    def _bajada_beast_50(b) -> bool:
+        for bid in (b.bici_id, f"respaldo:{b.bici_id}"):
+            prev_p = db.precio_previo_black_friday(bid)
+            if prev_p is not None and float(b.precio) <= float(prev_p) - 50.0:
+                return True
+        return False
 
-        hay_bajada_50 = any(_bajada_beast_50(x["bici"]) for x in pool_beast)
-        hay_estricta_nueva = any(
-            x["kind"] == "strict"
-            and db.debe_reenviarse_black_friday(x["bici"])
-            and not db.fue_enviada_black_friday_equivalente(x["bici"])
-            for x in pool_beast
-        )
-        hay_entrada_nueva = (
-            bool(set(pool_ids) - set(prev_pool_ids))
-            if prev_pool_ids
-            else bool(nuevas_items_caza or hay_estricta_nueva)
-        )
-        if not (hay_estricta_nueva or hay_entrada_nueva or hay_bajada_50):
-            logger.info("[Modo Caza] Beast sin novedades ni bajadas >= 50 €; se omite rotación y spam.")
-            if estado_extra is not None:
-                estado_extra["estrictas_enviadas"] = 0
-                estado_extra["respaldo_enviado"] = False
-                estado_extra["respaldo_count"] = 0
-                estado_extra["misma_busqueda"] = True
-            return 0
+    hay_bajada_50 = any(_bajada_beast_50(x["bici"]) for x in pool_beast)
+    hay_estricta_nueva = any(
+        x["kind"] == "strict"
+        and db.debe_reenviarse_black_friday(x["bici"])
+        and not db.fue_enviada_black_friday_equivalente(x["bici"])
+        for x in pool_beast
+    )
+    hay_entrada_nueva = (
+        bool(set(pool_ids) - set(prev_pool_ids))
+        if prev_pool_ids
+        else bool(nuevas_items_caza or hay_estricta_nueva)
+    )
+    if modo_caza and not forzar_envio and not (hay_estricta_nueva or hay_entrada_nueva or hay_bajada_50):
+        logger.info("[Modo Caza] Beast sin novedades ni bajadas >= 50 €; se omite rotación y spam.")
+        if estado_extra is not None:
+            estado_extra["estrictas_enviadas"] = 0
+            estado_extra["respaldo_enviado"] = False
+            estado_extra["respaldo_count"] = 0
+            estado_extra["misma_busqueda"] = True
+        return 0
 
+    sin_novedades_rotacion = misma_busqueda and not (modo_caza and (hay_bajada_50 or hay_estricta_nueva))
     seleccion_beast = []
-    if misma_busqueda or omitir_enviadas:
+    if sin_novedades_rotacion or omitir_enviadas:
         paso = objetivo_top if n_total > objetivo_top else 1
         inicio_rot = (prev_offset + paso) % n_total
         ids_sel = set()
@@ -1244,7 +1252,7 @@ def _despachar_alertas_black_friday(
                 f"priorizando XC y luego Trail ligera / MTB. "
                 f"Búsqueda omitiendo resultados ya mostrados — siguientes {len(informe_items)} más interesantes:"
             )
-        elif misma_busqueda:
+        elif sin_novedades_rotacion:
             subtitulo_resp = (
                 f"Doble suspensión, Talla {cfg.TALLA_OBJETIVO}, < 21 kg, batería > {cfg.BATERIA_MIN_WH} Wh, "
                 f"hasta {cfg.PRECIO_MAX_BLACK_FRIDAY_EUR} € (respaldo hasta {getattr(cfg, 'PRECIO_RESPALDO_BLACK_FRIDAY_EUR', 4000)} €), "
@@ -1261,7 +1269,7 @@ def _despachar_alertas_black_friday(
 
         if enviar_informe_respaldo_black_friday(
             informe_items,
-            silencioso=(misma_busqueda and not omitir_enviadas),
+            silencioso=(sin_novedades_rotacion and not omitir_enviadas),
             subtitulo=subtitulo_resp,
         ):
             respaldo_enviado = True
@@ -1392,7 +1400,10 @@ def _ejecutar_busqueda_interna(
             if modo_caza_activo and not forzar_envio:
                 prev_portal = estado_portales_previo.get(sitio_entry)
                 es_bajada_real = db.ya_enviada(bici.bici_id) and db.debe_reenviarse(bici, nota)
-                es_entrada_vig = bool(seguimiento and seguimiento.get("entrada_desde_vigilancia"))
+                es_entrada_vig = (
+                    bool(seguimiento and seguimiento.get("entrada_desde_vigilancia"))
+                    and db.debe_reenviarse(bici, nota)
+                )
                 supera_top1_previo = (
                     not es_rot2
                     and not ret_top1

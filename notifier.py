@@ -249,7 +249,7 @@ def formatear_mensaje(
             f"💡 _Vuelve al primer puesto tras alternar al #2 (sigue siendo la mejor opción de {bici.sitio}):_\n\n"
         )
 
-    tag_bh = _etiqueta_prioridad_bh(bici, pct_dto_pvp if pvp_orig and pvp_orig > bici.precio else None)
+    tag_bh = _etiqueta_prioridad_bh(bici, None)
     linea_bh = f"🏷️ Prioridad marca: *{tag_bh}*\n" if tag_bh else ""
 
     mensaje = (
@@ -369,7 +369,7 @@ def formatear_mensaje_black_friday(
             f"💡 _Extender +210 Wh (~450 €):_ *~{bici.bateria_wh + 210} Wh* totales dentro de tope (~{bici.precio + 450:.0f} €)\n"
         )
 
-    tag_bh = _etiqueta_prioridad_bh(bici, dto_real)
+    tag_bh = _etiqueta_prioridad_bh(bici, None)
     linea_bh = f"🏷️ Prioridad marca: *{tag_bh}*\n" if tag_bh else ""
 
     mensaje = (

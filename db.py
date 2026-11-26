@@ -161,12 +161,19 @@ class BaseDatos:
                 """
                 CREATE TABLE IF NOT EXISTS alertas_sniper_enviadas (
                     bici_id  TEXT PRIMARY KEY,
+                    sitio    TEXT DEFAULT '',
+                    titulo   TEXT DEFAULT '',
                     precio   REAL NOT NULL,
                     fecha    TEXT NOT NULL DEFAULT (datetime('now')),
                     motivo   TEXT
                 )
                 """
             )
+            for col_def in ("sitio TEXT DEFAULT ''", "titulo TEXT DEFAULT ''"):
+                try:
+                    conn.execute(f"ALTER TABLE alertas_sniper_enviadas ADD COLUMN {col_def}")
+                except Exception:
+                    pass
             conn.commit()
 
     def ya_enviada(self, bici_id: str) -> bool:
@@ -239,7 +246,7 @@ class BaseDatos:
         self, tabla: str, bici: Bicicleta, tolerancia_eur: float = 25.0
     ) -> bool:
         """Comprueba si existe un clon equivalente de otro portal en la tabla indicada."""
-        if tabla not in ("bicis_enviadas", "bicis_black_friday_enviadas"):
+        if tabla not in ("bicis_enviadas", "bicis_black_friday_enviadas", "alertas_sniper_enviadas"):
             raise ValueError(f"Tabla no permitida: {tabla}")
         filtro_extra = " AND bici_id NOT LIKE 'respaldo:%'" if tabla == "bicis_black_friday_enviadas" else ""
         with self._conectar() as conn:
@@ -745,12 +752,20 @@ class BaseDatos:
         with self._conectar() as conn:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO alertas_sniper_enviadas (bici_id, precio, motivo)
-                VALUES (?, ?, ?)
+                INSERT OR REPLACE INTO alertas_sniper_enviadas (bici_id, sitio, titulo, precio, motivo)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (bici.bici_id, float(bici.precio), motivo),
+                (bici.bici_id, bici.sitio or "", bici.titulo or "", float(bici.precio), motivo),
             )
             conn.commit()
+
+    def fue_enviada_sniper_equivalente(
+        self, bici: Bicicleta, tolerancia_eur: float = 25.0
+    ) -> bool:
+        """Evita disparar un clon de Wallapop por Sniper cuando la ficha oficial ya fue enviada."""
+        return self._fue_enviada_equivalente_en_tabla(
+            "alertas_sniper_enviadas", bici, tolerancia_eur=tolerancia_eur
+        )
 
     def obtener_precio_previo_global(self, bici_id: str) -> Optional[float]:
         """

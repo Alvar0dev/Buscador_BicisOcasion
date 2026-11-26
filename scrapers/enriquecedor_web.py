@@ -1618,7 +1618,7 @@ def _aplicar_detalle(bici: Bicicleta, detalle: dict) -> Bicicleta:
                 bici.bateria_wh += extender
 
     for campo, valor in detalle.items():
-        if campo in ("range_extender_wh", "bateria_wh", "disponible", "km_vision_checked", "cache_ts"):
+        if campo in ("range_extender_wh", "bateria_wh", "disponible", "km_vision_checked", "cache_ts", "cache_precio"):
             continue
         if valor is not None and getattr(bici, campo, None) is None:
             setattr(bici, campo, valor)

@@ -4280,6 +4280,166 @@ def test_corte_temprano_sanferbike_escapa_por_techo_precio():
     assert b_levo_alu.cuadro_material == "Aluminio" and b_levo_alu.peso_kg >= 19.5
 
 
+def test_modo_caza_no_respamea_entrada_desde_vigilancia_ni_omite_bajada_beast():
+    """S4: Verifica que --modo-caza no reenvíe entradas de vigilancia ya notificadas ni omita bajadas >= 50 € en Beast."""
+    from dataclasses import replace
+    from pathlib import Path
+    import main as m
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp1, \
+         tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp2:
+        ruta_vig = tmp1.name
+        ruta_b6 = tmp2.name
+
+    try:
+        # 1. Daily: bici entra desde vigilancia (3400 -> 2950) en pasada 1; pasadas 2 y 3 en --modo-caza sin cambios = 0 spam
+        vdb = BaseDatos(ruta_vig)
+        b_old = bici_prueba(
+            sitio="Bike Ocasión", bici_id="bo-vig-reg", titulo="Scott Lumen eRIDE 910",
+            precio=3400.0, pvp_original=5000.0, km=600, peso_kg=16.5, bateria_wh=540, suspension_trasera="si",
+        )
+        vdb.registrar_en_catalogo(b_old)
+        b_drop = replace(b_old, precio=2950.0)
+        envios_daily = []
+
+        def fake_rec(db_arg, forzar_envio=False, telemetria=None):
+            db_arg.registrar_en_catalogo(b_drop)
+            if telemetria is not None:
+                telemetria["conteo_por_portal"] = {"Bike Ocasión": 1}
+                telemetria["total_procesadas"] = 1
+                telemetria["black_friday_pool"] = []
+                telemetria["black_friday_respaldo_pool"] = []
+                telemetria["black_friday_suplemento_pool"] = []
+                telemetria["sniper_pool"] = []
+            return [(b_drop, 8.8, "Perito OK")]
+
+        with patch.object(cfg, "TELEGRAM_BOT_TOKEN", "t1"), \
+             patch.object(cfg, "TELEGRAM_CHAT_ID", "c1"), \
+             patch("main.BaseDatos", return_value=vdb), \
+             patch("main._recolectar_oportunidades", side_effect=fake_rec), \
+             patch("main.exportar_radar_mercado_md", return_value=Path(ruta_vig).with_suffix(".md")), \
+             patch("main.enviar", side_effect=lambda b, *a, **kw: envios_daily.append(b.bici_id) or True), \
+             patch("main.enviar_heartbeat", return_value=True):
+            m.ejecutar_busqueda(modo_caza=False)
+            m.ejecutar_busqueda(modo_caza=True)
+            m.ejecutar_busqueda(modo_caza=True)
+
+        assert envios_daily == ["bo-vig-reg"], f"Spam detectado en vigilancia --modo-caza: {envios_daily}"
+
+        # 2. Beast con >= 6 ítems cuando el #1 baja >= 50 €: debe incluir la rebajada y no respamear después
+        b6db = BaseDatos(ruta_b6)
+        items6 = [
+            (bici_prueba(
+                sitio="Mammoth", bici_id=f"reg-b-{i}", titulo=f"Wilier Urta Hybrid {i}",
+                precio=3500.0, pvp_original=4900.0, km=0, peso_kg=16.4, bateria_wh=540, suspension_trasera="si",
+            ), 28.6, 8.0, "Respaldo")
+            for i in range(1, 7)
+        ]
+        envios_beast = []
+        with patch.object(cfg, "TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", "t2"), \
+             patch.object(cfg, "TELEGRAM_CHAT_ID_BLACK_FRIDAY", "c2"), \
+             patch("main.enviar_informe_respaldo_black_friday", side_effect=lambda its, **kw: envios_beast.append(([x[0].bici_id for x in its], kw.get("silencioso"))) or True):
+            ex1, ex2, ex3 = {}, {}, {}
+            m._despachar_alertas_black_friday(b6db, [], bf_respaldo_pool=items6, estado_extra=ex1, modo_caza=False)
+            items6_drop = [(replace(items6[0][0], precio=3300.0), 32.7, 8.0, "Respaldo")] + items6[1:]
+            m._despachar_alertas_black_friday(b6db, [], bf_respaldo_pool=items6_drop, estado_beast_previo=ex1["beast_estado"], estado_extra=ex2, modo_caza=True)
+            m._despachar_alertas_black_friday(b6db, [], bf_respaldo_pool=items6_drop, estado_beast_previo=ex2.get("beast_estado", ex1["beast_estado"]), estado_extra=ex3, modo_caza=True)
+
+        assert len(envios_beast) == 2, f"Debe enviar exactamente 2 veces (inicial y bajada), obtenido: {envios_beast}"
+        assert "reg-b-1" in envios_beast[1][0], f"La bici rebajada debe notificarse en la pasada de bajada: {envios_beast}"
+        assert envios_beast[1][1] is False, "La bajada en --modo-caza no debe silenciarse como rotación sin cambios"
+    finally:
+        for p in (ruta_vig, ruta_b6, str(Path(ruta_vig).with_suffix(".md"))):
+            if os.path.exists(p):
+                os.unlink(p)
+
+
+def test_sniper_no_filtra_clon_wallapop_en_segunda_pasada_cross_bucket():
+    """S3/S4: Un clon de Wallapop en sniper_ocasion_pre no debe dispararse en la 2ª pasada tras enviarse la tienda."""
+    from pathlib import Path
+    import main as m
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        ruta_db = tmp.name
+
+    try:
+        db = BaseDatos(ruta_db)
+        b_tienda = bici_prueba(
+            sitio="Buhobike", bici_id="bu-cb-1", titulo="Orbea Rise M10 2025 Carbon",
+            precio=3350.0, pvp_original=6500.0, km=0, peso_kg=18.3, bateria_wh=540,
+            modalidad="Trail", recorrido_mm=140, suspension_trasera="si",
+        )
+        b_wal = bici_prueba(
+            sitio="Wallapop", bici_id="wa-cb-1", titulo="Orbea Rise M10 2025 Carbon",
+            precio=3360.0, pvp_original=6500.0, km=800, peso_kg=18.3, bateria_wh=540,
+            modalidad="Trail", recorrido_mm=140, suspension_trasera="si", garantia_anos=0,
+        )
+        sniper_envios = []
+
+        def fake_scrape(sitio):
+            if sitio.nombre == "Buhobike":
+                return [b_tienda]
+            if sitio.nombre == "Wallapop":
+                return [b_wal]
+            return []
+
+        with patch("main.BaseDatos", return_value=db), \
+             patch("main._scrapear_sitio", side_effect=fake_scrape), \
+             patch("main.enriquecer_y_valorar_bici", side_effect=lambda b: (b, 8.0, "ok")), \
+             patch("main.exportar_radar_mercado_md", return_value=Path(ruta_db).with_suffix(".md")), \
+             patch("main.enviar_alerta_sniper", side_effect=lambda *a, **kw: sniper_envios.append(((kw.get("bici") or a[0]).sitio, (kw.get("bici") or a[0]).bici_id)) or True):
+            m.ejecutar_busqueda(modo_caza=False)
+            m.ejecutar_busqueda(modo_caza=True)
+
+        assert sniper_envios == [("Buhobike", "bu-cb-1")], f"Clon Wallapop filtrado en 2ª pasada: {sniper_envios}"
+    finally:
+        for p in (ruta_db, str(Path(ruta_db).with_suffix(".md"))):
+            if os.path.exists(p):
+                os.unlink(p)
+
+
+def test_umbrales_borde_bh_sniper_cache_y_lock():
+    """S2/S3/S4: Bordes numéricos (BH irrechazable, badge redondeo, Sniper T3 149/150 €, cache_precio no-leak)."""
+    from dataclasses import replace
+    from evaluator import es_bh_irrechazable, evaluar_chollo_sniper
+
+    bh_ok = bici_prueba(
+        sitio="Mammoth", bici_id="bh-b1", titulo="BH iLynx Race Carbon 8.2",
+        precio=2900.0, pvp_original=5273.0, km=0, peso_kg=19.0, bateria_wh=540,
+        cuadro_material="Carbono", suspension_trasera="si",
+    )
+    assert es_bh_irrechazable(bh_ok, dto_pvp=45.0) is True
+    assert es_bh_irrechazable(bh_ok, dto_pvp=44.9) is False
+    assert es_bh_irrechazable(replace(bh_ok, precio=2901.0), dto_pvp=45.0) is False
+    assert es_bh_irrechazable(replace(bh_ok, precio=3100.0), dto_pvp=50.0) is True
+    assert es_bh_irrechazable(replace(bh_ok, precio=3100.0), dto_pvp=49.9) is False
+    assert es_bh_irrechazable(replace(bh_ok, precio=3101.0), dto_pvp=50.0) is False
+    assert es_bh_irrechazable(replace(bh_ok, peso_kg=19.1), dto_pvp=55.0) is False
+
+    # Coherencia de redondeo entre prioridad_marca (44.97% -> 45.0%) y badge en formatear_mensaje
+    bh_round = bici_prueba(
+        sitio="Mammoth", bici_id="bh-round", titulo="BH iLynx Race Carbon 8.2",
+        precio=2900.0, pvp_original=5270.0, km=0, peso_kg=18.5, bateria_wh=540,
+        cuadro_material="Carbono", suspension_trasera="si",
+    )
+    assert es_bh_irrechazable(bh_round) is True
+    msg_bh_r = formatear_mensaje(bh_round, 8.5, "OK")
+    assert "[🔥 BH IRRECHAZABLE]" in msg_bh_r and "[2º plano BH]" not in msg_bh_r
+
+    # Sniper T3 Bajada Flash exacto 149 vs 150 €
+    b_fl = bici_prueba(
+        sitio="Wallapop", bici_id="wa-fl", titulo="Orbea Rise H20",
+        precio=3350.0, pvp_original=None, km=1200, peso_kg=18.5, bateria_wh=540,
+        cuadro_material="Aluminio", suspension_trasera="si",
+    )
+    assert evaluar_chollo_sniper(b_fl, 8.0, precio_previo=3500.0)[0] is True
+    assert evaluar_chollo_sniper(b_fl, 8.0, precio_previo=3499.0)[0] is False
+
+    # _aplicar_detalle no filtra metadata cache_precio sobre Bicicleta
+    b_clean = _aplicar_detalle(bici_prueba(talla=None), {"talla": "M", "cache_ts": 1700000000, "cache_precio": 2500.0})
+    assert b_clean.talla == "M" and not hasattr(b_clean, "cache_precio")
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -4326,4 +4486,7 @@ if __name__ == "__main__":
     test_modo_caza_dispara_al_instante_en_reposicion_o_bajada()
     test_upway_paginacion_y_corte_temprano()
     test_corte_temprano_sanferbike_escapa_por_techo_precio()
+    test_modo_caza_no_respamea_entrada_desde_vigilancia_ni_omite_bajada_beast()
+    test_sniper_no_filtra_clon_wallapop_en_segunda_pasada_cross_bucket()
+    test_umbrales_borde_bh_sniper_cache_y_lock()
     print("Todas las pruebas pasaron (GREEN).")
