@@ -103,4 +103,5 @@ Register-ScheduledTask `
     -Force
 ```
 
-> Nota: al mantener `BuscadorBiciOcasion` (12:00) y `BuscadorBiciOcasion_BlackFriday` en paralelo, el archivo lock atómico `cache/buscador.lock` (stale timeout 15 min) evita solapamientos si coinciden en el mismo minuto.
+> Nota 1: al mantener `BuscadorBiciOcasion` (12:00) y `BuscadorBiciOcasion_BlackFriday` en paralelo, el archivo lock atómico `cache/buscador.lock` (stale timeout 15 min) evita solapamientos si coinciden en el mismo minuto.
+> Nota 2: en Windows con el alias de Microsoft Store (`AppData\Local\Microsoft\WindowsApps\python.exe`), conviene pasar en `-Execute` la ruta directa del intérprete real (por ejemplo `C:\Users\alvar\AppData\Local\Python\pythoncore-3.15-64\python.exe`, tal como quedó registrado en producción) y entrecomillar `"G:\Proyectos OpenCode\Buscador BiciOcasion\main.py" --once --modo-caza` en `-Argument`.
