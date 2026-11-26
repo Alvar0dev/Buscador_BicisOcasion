@@ -3830,6 +3830,159 @@ def test_bh_segundo_plano_y_excepcion_irrechazable():
     assert "[2º plano BH]" in txt_rep
 
 
+def test_sniper_rescata_ocasion_premium_y_bloquea_bh_ordinaria():
+    """S3: Verifica detector Sniper transversal (nueva/semi/ocasión/flash), dedup SQLite y despacho previo a caps."""
+    from evaluator import evaluar_chollo_sniper
+    from main import _recolectar_oportunidades, ejecutar_busqueda
+
+    assert cfg.SNIPER_ACTIVO is True
+
+    # 1. Ocasión premium >3.300 € (Moterra Neo SL 2 3.431 € -47% PVP 19.8 kg 2.032 km) -> Sniper True
+    b_moterra = bici_prueba(
+        sitio="Bike Ocasión",
+        bici_id="bo-464328",
+        titulo="Cannondale Moterra Neo SL 2",
+        precio=3431.0,
+        pvp_original=6500.0,
+        km=2032,
+        peso_kg=19.8,
+        bateria_wh=600,
+        motor="Shimano EP801",
+        modalidad="Trail",
+        recorrido_mm=150,
+        talla="M",
+        suspension_trasera="si",
+        es_ocasion=True,
+        garantia_anos=1,
+    )
+    ok_m, mot_m = evaluar_chollo_sniper(b_moterra, nota=8.0)
+    assert ok_m is True and "Ocasión" in mot_m
+
+    # 2. BH ordinaria (-44.5% pero > 2900/3100 €) -> NO dispara Sniper
+    b_bh_ord = bici_prueba(
+        sitio="Bicimarket", bici_id="bm-54681", titulo="BH iLynx Trail Carbon 8.7",
+        precio=3499.0, pvp_original=6299.9, km=0, peso_kg=18.6, bateria_wh=540,
+        motor="BH 2EXMAG", modalidad="Trail", recorrido_mm=150, suspension_trasera="si", garantia_anos=3,
+    )
+    ok_bh, mot_bh = evaluar_chollo_sniper(b_bh_ord, nota=7.5)
+    assert ok_bh is False and "BH" in mot_bh
+
+    # 3. Dos chollazos nuevos en la MISMA tienda (Mammoth) disparan ambos en Sniper (sin tope 1/portal)
+    b_rise_m20 = bici_prueba(
+        sitio="Mammoth", bici_id="mam-rise-m20", titulo="Orbea Rise SL M20 2025",
+        precio=3299.0, pvp_original=6499.0, km=0, peso_kg=18.5, bateria_wh=540,
+        motor="Shimano EP801 RS", modalidad="Trail", recorrido_mm=140, suspension_trasera="si", garantia_anos=3,
+    )
+    b_lumen_910 = bici_prueba(
+        sitio="Mammoth", bici_id="mam-lumen-910", titulo="Scott Lumen eRIDE 910",
+        precio=3450.0, pvp_original=6500.0, km=0, peso_kg=17.6, bateria_wh=540,
+        motor="TQ HPR50", modalidad="XC / Downcountry", recorrido_mm=130, suspension_trasera="si", garantia_anos=3,
+    )
+    assert evaluar_chollo_sniper(b_rise_m20, nota=8.0)[0] is True
+    assert evaluar_chollo_sniper(b_lumen_910, nota=8.0)[0] is True
+
+    # 4. Bajada Flash >= 150 € sin PVP declarado -> dispara T3
+    b_flash = bici_prueba(
+        sitio="Buhobike", bici_id="bu-flash", titulo="Orbea Rise M20 2025",
+        precio=3350.0, pvp_original=None, km=0, peso_kg=18.5, bateria_wh=540,
+        motor="Shimano EP801 RS", modalidad="Trail", recorrido_mm=140, suspension_trasera="si", garantia_anos=3,
+    )
+    assert evaluar_chollo_sniper(b_flash, nota=7.5, precio_previo=None)[0] is False
+    ok_fl, mot_fl = evaluar_chollo_sniper(b_flash, nota=7.5, precio_previo=3600.0)
+    assert ok_fl is True and "Bajada Flash" in mot_fl
+
+    # 5. Invariantes duros respetados en Sniper
+    for bad in (
+        bici_prueba(**{**b_rise_m20.to_dict(), "titulo": "Canyon Spectral:ON CF", "motor": "Shimano EP8"}),
+        bici_prueba(**{**b_rise_m20.to_dict(), "recorrido_mm": 170, "modalidad": "Enduro"}),
+        bici_prueba(**{**b_rise_m20.to_dict(), "titulo": "ORBEA DENNA M30", "modalidad": "Gravel"}),
+        bici_prueba(**{**b_rise_m20.to_dict(), "bateria_wh": 420}),
+        bici_prueba(**{**b_rise_m20.to_dict(), "peso_kg": 21.5}),
+        bici_prueba(**{**b_rise_m20.to_dict(), "talla": "L"}),
+        bici_prueba(**{**b_rise_m20.to_dict(), "suspension_trasera": "no"}),
+    ):
+        assert evaluar_chollo_sniper(bad, nota=8.5)[0] is False
+
+    # 6. Persistencia SQLite (reenvía solo si nueva o baja >= 50 €) + integración E2E + envío siempre sonoro
+    fd_sn, ruta_sn = tempfile.mkstemp(suffix=".db")
+    os.close(fd_sn)
+    try:
+        db_sn = BaseDatos(ruta=ruta_sn)
+        assert db_sn.debe_enviar_sniper(b_moterra) is True
+        db_sn.marcar_sniper_enviada(b_moterra, mot_m)
+        assert db_sn.debe_enviar_sniper(b_moterra) is False
+        assert db_sn.debe_enviar_sniper(bici_prueba(**{**b_moterra.to_dict(), "precio": 3400.0})) is False
+        assert db_sn.debe_enviar_sniper(bici_prueba(**{**b_moterra.to_dict(), "precio": 3380.0})) is True
+
+        # Reset table para E2E completo con _recolectar_oportunidades y ejecutar_busqueda
+        db_sn2_fd, ruta_sn2 = tempfile.mkstemp(suffix=".db")
+        os.close(db_sn2_fd)
+        try:
+            db_sn2 = BaseDatos(ruta=ruta_sn2)
+            fake_empty = MagicMock(); fake_empty.extraer_bicicletas.return_value = []
+            fake_bo = MagicMock(); fake_bo.extraer_bicicletas.return_value = [b_moterra]
+            fake_ma = MagicMock(); fake_ma.extraer_bicicletas.return_value = [b_rise_m20, b_lumen_910]
+            enviados_sniper_calls = []
+            resp_ok = MagicMock(); resp_ok.status_code = 200; resp_ok.raise_for_status.return_value = None
+
+            with patch.dict("main.SCRAPERS", {
+                "Bike Ocasión": lambda s: fake_bo,
+                "Mammoth": lambda s: fake_ma,
+                "Buhobike": lambda s: fake_empty,
+                "Upway": lambda s: fake_empty,
+                "Wallapop": lambda s: fake_empty,
+                "Sanferbike": lambda s: fake_empty,
+                "Bicimarket": lambda s: fake_empty,
+                "Escapa": lambda s: fake_empty,
+                "Fabregues": lambda s: fake_empty,
+            }, clear=True), \
+                 patch("main.enriquecer_y_valorar_bici", side_effect=lambda b: (b, 8.0, "OK")), \
+                 patch("main.BaseDatos", return_value=db_sn2), \
+                 patch("main.exportar_radar_mercado_md"), \
+                 patch("main.enviar", return_value=True), \
+                 patch("main.enviar_black_friday", return_value=True), \
+                 patch("main.enviar_informe_respaldo_black_friday", return_value=True), \
+                 patch("main.enviar_heartbeat"), \
+                 patch("main.enviar_heartbeat_black_friday"), \
+                 patch("notifier.requests.post", side_effect=lambda url, **kw: (enviados_sniper_calls.append(kw["json"]), resp_ok)[1]), \
+                 patch.object(cfg, "TELEGRAM_BOT_TOKEN", "888888:DAILY_TOKEN"), \
+                 patch.object(cfg, "TELEGRAM_CHAT_ID", "-100111"), \
+                 patch.object(cfg, "TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", ""):
+                ejecutar_busqueda(forzar_envio=False)
+            assert len(enviados_sniper_calls) == 3
+            assert all("ALERTA SNIPER" in p["text"] and p["disable_notification"] is False for p in enviados_sniper_calls)
+        finally:
+            if os.path.exists(ruta_sn2):
+                os.unlink(ruta_sn2)
+    finally:
+        if os.path.exists(ruta_sn):
+            os.unlink(ruta_sn)
+
+
+def test_es_mega_chollo_no_silencia_rango_3200_3500():
+    """S3: Verifica que bicis > 3.150 € con gran dto no queden silenciadas por la penalización -2.0 del perito."""
+    b_lumen_3300 = bici_prueba(
+        sitio="Escapa", bici_id="esc-3300", titulo="Scott Lumen eRIDE 910",
+        precio=3300.0, pvp_original=6600.0, km=0, peso_kg=17.6, bateria_wh=540, suspension_trasera="si",
+    )
+    assert es_mega_chollo(b_lumen_3300, 7.5) is True
+    assert es_mega_chollo(b_lumen_3300, 8.0) is True
+
+    b_moterra_3431 = bici_prueba(
+        sitio="Bike Ocasión", bici_id="bo-3431", titulo="Cannondale Moterra Neo SL 2",
+        precio=3431.0, pvp_original=6500.0, km=1800, peso_kg=19.8, bateria_wh=600, suspension_trasera="si",
+    )
+    assert es_mega_chollo(b_moterra_3431, 8.0) is True
+
+    with patch("notifier.requests.post") as mock_post, \
+         patch.object(cfg, "TELEGRAM_BOT_TOKEN", "fake_token"), \
+         patch.object(cfg, "TELEGRAM_CHAT_ID", "123456"):
+        mock_resp = MagicMock(); mock_resp.status_code = 200
+        mock_post.return_value = mock_resp
+        assert enviar(b_lumen_3300, 8.0, "Perito OK") is True
+        assert mock_post.call_args.kwargs["json"]["disable_notification"] is False
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -3870,4 +4023,6 @@ if __name__ == "__main__":
     test_afinado_9_portales_ilynx_plus_enduro_avinox_y_ahorro_gemini()
     test_afinado_26nov_full_power_gravel_y_upway_rigida()
     test_bh_segundo_plano_y_excepcion_irrechazable()
+    test_sniper_rescata_ocasion_premium_y_bloquea_bh_ordinaria()
+    test_es_mega_chollo_no_silencia_rango_3200_3500()
     print("Todas las pruebas pasaron (GREEN).")

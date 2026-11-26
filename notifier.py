@@ -12,7 +12,9 @@ import config as cfg
 def es_mega_chollo(bici, nota: float) -> bool:
     """
     Determina si una bicicleta califica como Mega Chollo:
-    Requiere simultáneamente descuento >= 50% frente a PVP original nuevo Y nota pericial >= 9.0.
+    - Hasta 3.150 €: exige descuento >= 50% frente a PVP original nuevo Y nota pericial >= 9.0.
+    - Por encima de 3.150 € (donde auditar_perito_mecanico resta -2.0 por banda de precio):
+      acepta descuento >= 50% con nota >= 7.5 o descuento >= 40% con nota >= 8.0.
     """
     pvp_orig = getattr(bici, "pvp_original", None)
     precio = getattr(bici, "precio", None)
@@ -21,6 +23,8 @@ def es_mega_chollo(bici, nota: float) -> bool:
     if pvp_orig <= precio:
         return False
     pct_dto = ((pvp_orig - precio) / pvp_orig) * 100.0
+    if float(precio) > 3150.0:
+        return (pct_dto >= 50.0 and nota >= 7.5) or (pct_dto >= 40.0 and nota >= 8.0)
     return pct_dto >= 50.0 and nota >= 9.0
 
 
@@ -631,3 +635,94 @@ def enviar_informe_respaldo_black_friday(
         log_tag="Telegram/BlackFridayTop3",
         log_ok=f"Informe Top {len(items)} de respaldo enviado exitosamente.",
     )
+
+
+def formatear_alerta_sniper(
+    bici,
+    nota: float,
+    motivo_sniper: str,
+    precio_anterior: Optional[float] = None,
+    es_beast: bool = False,
+) -> str:
+    """Construye la alerta prioritaria Sniper transversal para cualquier chollo top (nueva/semi/ocasión)."""
+    c = _campos_ficha_bici(bici, motivo_sniper)
+    pvp_orig = getattr(bici, "pvp_original", None)
+    pct_dto = None
+    if pvp_orig and pvp_orig > bici.precio > 0:
+        pct_dto = ((pvp_orig - bici.precio) / pvp_orig) * 100.0
+
+    linea_precio = f"💰 Precio Sniper: *{bici.precio:.0f} €*"
+    if precio_anterior is not None and float(bici.precio) < float(precio_anterior):
+        ahorro_b = float(precio_anterior) - float(bici.precio)
+        linea_precio += f" (Antes: ~{precio_anterior:.0f} €~ | 📉 *-{ahorro_b:.0f} €*)"
+
+    linea_pvp = ""
+    if pvp_orig and pct_dto is not None:
+        ahorro_p = pvp_orig - bici.precio
+        linea_pvp = f"🏷️ PVP Original: ~{pvp_orig:.0f} €~ (*-{pct_dto:.0f}%* | Ahorro: *-{ahorro_p:.0f} €*)\n"
+
+    canal_txt = "Nueva / Seminueva" if es_beast else "Ocasión / Local"
+    return (
+        f"🎯🔥 *¡ALERTA SNIPER BLACK FRIDAY!* ({canal_txt})\n"
+        f"⚡ _Motivo:_ {c['desglose_seguro']}\n\n"
+        f"*{bici.titulo}*\n"
+        f"🏪 Tienda: {bici.sitio}\n"
+        f"{c['linea_ubicacion']}"
+        f"{linea_precio}\n"
+        f"{linea_pvp}"
+        f"🔥 Nota Pericial: *{nota}/10*\n\n"
+        f"📏 Talla: {c['talla']}\n"
+        f"⚙️ Modalidad: {c['modalidad']}\n"
+        f"⚖️ Peso: {bici.peso_kg if bici.peso_kg else 'n/d'} kg\n"
+        f"🔋 Batería: {c['bateria']}\n"
+        f"🛞 Cuadro: {c['cuadro']}\n"
+        f"⚡ Motor: {c['motor']}\n"
+        f"🛣️ Kilómetros: {c['km']}\n"
+        f"🛡️ Garantía: {c['garantia_txt']}\n\n"
+        f"🔗 [Ver oportunidad Sniper]({bici.url})"
+    )
+
+
+def enviar_alerta_sniper(
+    bici,
+    nota: float,
+    motivo_sniper: str,
+    precio_anterior: Optional[float] = None,
+    es_beast: bool = False,
+) -> bool:
+    """
+    Envía alerta Sniper siempre CON SONIDO (silencioso=False) al bot diario
+    y también a @BlackBikeBeast_bot si corresponde a unidad nueva/seminueva y está configurado.
+    """
+    texto = formatear_alerta_sniper(
+        bici=bici,
+        nota=nota,
+        motivo_sniper=motivo_sniper,
+        precio_anterior=precio_anterior,
+        es_beast=es_beast,
+    )
+    ok_daily = False
+    if cfg.TELEGRAM_BOT_TOKEN and cfg.TELEGRAM_CHAT_ID:
+        ok_daily = _enviar_telegram(
+            token=cfg.TELEGRAM_BOT_TOKEN,
+            chat_id=cfg.TELEGRAM_CHAT_ID,
+            texto=texto,
+            silencioso=False,
+            disable_web_page_preview=False,
+            log_tag="Telegram/Sniper",
+            log_ok=f"Sniper enviado (Daily): {bici.resumen_corto()}",
+        )
+    ok_beast = False
+    token_bf = getattr(cfg, "TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", "")
+    chat_bf = getattr(cfg, "TELEGRAM_CHAT_ID_BLACK_FRIDAY", "") or getattr(cfg, "TELEGRAM_CHAT_ID", "")
+    if es_beast and token_bf and chat_bf and not (token_bf == cfg.TELEGRAM_BOT_TOKEN and chat_bf == cfg.TELEGRAM_CHAT_ID):
+        ok_beast = _enviar_telegram(
+            token=token_bf,
+            chat_id=chat_bf,
+            texto=texto,
+            silencioso=False,
+            disable_web_page_preview=False,
+            log_tag="Telegram/SniperBeast",
+            log_ok=f"Sniper enviado (Beast): {bici.resumen_corto()}",
+        )
+    return bool(ok_daily or ok_beast)

@@ -32,6 +32,8 @@ from evaluator import (
     evaluar_oportunidad_black_friday,
     pasa_prefiltro_respaldo_black_friday,
     evaluar_respaldo_black_friday,
+    evaluar_chollo_sniper,
+    calcular_descuento_pvp_pct,
     es_bici_bh,
     es_bh_irrechazable,
     es_bici_de_ocasion,
@@ -49,6 +51,7 @@ from notifier import (
     enviar,
     enviar_black_friday,
     enviar_informe_respaldo_black_friday,
+    enviar_alerta_sniper,
     enviar_heartbeat,
     enviar_heartbeat_black_friday,
     es_mega_chollo,
@@ -302,6 +305,7 @@ def _recolectar_oportunidades(
     bf_extra_pre = []
     bf_respaldo_pre = []
     vigilancia_aptas = []
+    sniper_ocasion_pre = []
 
     for bici in bicis_brutas:
         if bici.range_extender_wh is None:
@@ -311,17 +315,22 @@ def _recolectar_oportunidades(
                 if bici.bateria_wh is not None and bici.bateria_wh <= 600:
                     bici.bateria_wh += ext
         b_pre = completar_con_catalogo(replace(bici), aplicar_heuristica_peso=False)
+        es_ocasion_o_wallapop_pre = es_bici_de_ocasion(b_pre) or (b_pre.sitio or "").lower() == "wallapop"
         # Registrar en Zona de Vigilancia bicicletas XC aptas entre 3.301 € y 3.500 €
+        # y capturar para Sniper Light e-MTB de ocasión en esa banda sin alterar el techo diario 3.300 €.
         if 3300.0 < bici.precio <= 3500.0:
             bici_test_vig = replace(b_pre, precio=3000.0)
             apto_vig, _ = pasa_filtros_estrictos(bici_test_vig)
             if apto_vig:
                 vigilancia_aptas.append(bici)
+            elif getattr(cfg, "SNIPER_ACTIVO", True) and es_ocasion_o_wallapop_pre:
+                apto_sn_pre, _ = pasa_filtros_estrictos(bici_test_vig, permitir_trail_respaldo=True)
+                if apto_sn_pre and prioridad_modalidad(b_pre) >= 2:
+                    sniper_ocasion_pre.append(bici)
 
         # Pre-filtro rápido usando catálogo local antes de deduplicar o enriquecer:
         # En portales de ocasión/segunda mano y Wallapop admite también Trail ligera / MTB (< 21 kg, > 500 Wh)
         # ordenadas por clave_orden_estrictas (XC [3] > Trail ligera [2] > MTB [1]).
-        es_ocasion_o_wallapop_pre = es_bici_de_ocasion(b_pre) or (b_pre.sitio or "").lower() == "wallapop"
         apto_pre, motivo_pre = pasa_filtros_estrictos(
             b_pre, permitir_trail_respaldo=es_ocasion_o_wallapop_pre
         )
@@ -357,7 +366,10 @@ def _recolectar_oportunidades(
     bf_respaldo_unicas = [b for b in bf_respaldo_dedup if b.bici_id not in ids_catalogo_base]
     ids_enriquecer = ids_catalogo_base | {b.bici_id for b in bf_respaldo_unicas}
     vigilancia_extra = [b for b in vigilancia_dedup if b.bici_id not in ids_enriquecer]
-    todos_enriquecer = candidatas_pre + bf_respaldo_unicas + vigilancia_extra
+    ids_enriquecer = ids_enriquecer | {b.bici_id for b in vigilancia_extra}
+    sniper_dedup = deduplicar_inter_portal(sniper_ocasion_pre)
+    sniper_unicas = [b for b in sniper_dedup if b.bici_id not in ids_enriquecer]
+    todos_enriquecer = candidatas_pre + bf_respaldo_unicas + vigilancia_extra + sniper_unicas
 
     if not todos_enriquecer:
         if telemetria is not None:
@@ -368,6 +380,7 @@ def _recolectar_oportunidades(
             telemetria["black_friday_pool"] = []
             telemetria["black_friday_respaldo_pool"] = []
             telemetria["black_friday_suplemento_pool"] = []
+            telemetria["sniper_pool"] = []
         return []
 
     logger.info(
@@ -380,6 +393,7 @@ def _recolectar_oportunidades(
     black_friday_pool = []
     black_friday_respaldo_pool = []
     black_friday_suplemento_pool = []
+    sniper_pool = []
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         futuros = {
@@ -402,6 +416,17 @@ def _recolectar_oportunidades(
                 continue
             if bici.suspension_trasera is not None and str(bici.suspension_trasera).lower() in ("false", "no", "0"):
                 continue
+
+            # Leer precio previo ANTES de actualizar historial_catalogo en este barrido
+            precio_previo_sniper = (
+                db.obtener_precio_previo_global(bici.bici_id)
+                if hasattr(db, "obtener_precio_previo_global")
+                else None
+            )
+            if getattr(cfg, "SNIPER_ACTIVO", True):
+                ok_sn, mot_sn = evaluar_chollo_sniper(bici, nota, precio_previo=precio_previo_sniper)
+                if ok_sn:
+                    sniper_pool.append((bici, nota, mot_sn, precio_previo_sniper))
 
             # Evaluar elegibilidad Black Bike Beast (nuevas y seminuevas <= 3.500 €, respaldo <= 4.000 €,
             # batería > 500 Wh, < 21 kg, doble suspensión; prioriza XC y como respaldo Trail ligera / MTB)
@@ -514,6 +539,19 @@ def _recolectar_oportunidades(
     )
     black_friday_respaldo_pool.sort(key=lambda x: x[4], reverse=True)
     black_friday_suplemento_pool.sort(key=lambda x: x[4], reverse=True)
+    sniper_pool.sort(
+        key=lambda x: (
+            0 if (x[0].sitio or "").lower() == "wallapop" else 1,
+            1 if cfg.es_sitio_tienda_nueva(x[0].sitio, x[0].url, x[0].titulo) else 0,
+            prioridad_marca(x[0]),
+            prioridad_modalidad(x[0]),
+            calcular_descuento_pvp_pct(x[0]) or 0.0,
+            x[1],
+            -(x[0].peso_kg or 21.0),
+            -float(x[0].precio),
+        ),
+        reverse=True,
+    )
 
     seleccion = [
         (b, n, d) for (b, n, d, _) in (estrictas_pool + respaldo_pool)
@@ -531,6 +569,7 @@ def _recolectar_oportunidades(
         telemetria["black_friday_suplemento_pool"] = [
             x[:4] for x in black_friday_suplemento_pool
         ]
+        telemetria["sniper_pool"] = sniper_pool
 
     return seleccion
 
@@ -869,6 +908,54 @@ def seleccionar_siguientes_sin_repetir(
     return seleccion
 
 
+def _despachar_alertas_sniper(
+    db: BaseDatos,
+    sniper_pool: list,
+    forzar_envio: bool = False,
+) -> int:
+    """
+    Despacha alertas sonoras inmediatas para todos los chollos Sniper detectados,
+    saltándose el tope de 1-por-portal y rotación, con dedup por (bici_id, precio >= -50 €)
+    y evitando clones Wallapop equivalentes dentro del mismo lote.
+    """
+    if not sniper_pool or not getattr(cfg, "SNIPER_ACTIVO", True):
+        return 0
+
+    enviadas = 0
+    despachadas_lote = []
+    for item in sniper_pool:
+        bici, nota, motivo_sniper, precio_previo = item
+        if any(
+            (eq.sitio or "").lower() != (bici.sitio or "").lower()
+            and abs(float(eq.precio) - float(bici.precio)) <= 25.0
+            and titulos_equivalentes_dedup(eq.titulo, bici.titulo)
+            for eq in despachadas_lote
+        ):
+            continue
+        if not forzar_envio and hasattr(db, "debe_enviar_sniper") and not db.debe_enviar_sniper(bici):
+            continue
+
+        es_beast = (not es_bici_de_ocasion(bici)) and (
+            (bici.km is not None and bici.km <= cfg.KM_MAX_SEMINUEVA_BLACK_FRIDAY)
+            or cfg.es_sitio_tienda_nueva(bici.sitio, bici.url, bici.titulo)
+        )
+        if enviar_alerta_sniper(
+            bici=bici,
+            nota=nota,
+            motivo_sniper=motivo_sniper,
+            precio_anterior=precio_previo,
+            es_beast=es_beast,
+        ):
+            if hasattr(db, "marcar_sniper_enviada"):
+                db.marcar_sniper_enviada(bici, motivo_sniper)
+            despachadas_lote.append(bici)
+            enviadas += 1
+            logger.info(
+                f"  🎯🔥 SNIPER [{bici.sitio}]: {bici.titulo} ({bici.precio:.0f} €, {bici.peso_kg} kg) -> {motivo_sniper}"
+            )
+    return enviadas
+
+
 def _despachar_alertas_black_friday(
     db: BaseDatos,
     bf_pool: list,
@@ -1135,6 +1222,9 @@ def ejecutar_busqueda(forzar_envio: bool = False, omitir_enviadas: bool = False)
     except Exception as e:
         logger.warning(f"[Radar] No se pudo exportar docs/radar_mercado.md: {e}")
 
+    sniper_pool = telemetria_ejecucion.get("sniper_pool") or []
+    sniper_notificadas = _despachar_alertas_sniper(db, sniper_pool, forzar_envio=forzar_envio)
+
     total_notificadas = 0
     mega_chollos_count = 0
     aviso_top_repetido = False
@@ -1275,6 +1365,7 @@ def ejecutar_busqueda(forzar_envio: bool = False, omitir_enviadas: bool = False)
             "portales_retorno_top1": portales_retorno_top1,
             "total_en_catalogo": stats_radar.get("total", 0),
             "total_en_vigilancia": len(stats_radar.get("en_vigilancia", [])),
+            "sniper_notificadas": sniper_notificadas,
             "estado": "🟢 Runner operativo" if telemetria_ejecucion.get("total_procesadas", 0) > 0 else "⚠️ Sin bicicletas procesadas",
         }
         enviar_heartbeat(resumen_hb)

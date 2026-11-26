@@ -1087,3 +1087,107 @@ def evaluar_respaldo_black_friday(
         -float(bici.precio),
     )
     return True, dto_pct, nota_ref, motivo_fuera, clave_orden
+
+
+def evaluar_chollo_sniper(
+    bici: Bicicleta,
+    nota: float,
+    precio_previo: Optional[float] = None,
+) -> Tuple[bool, str]:
+    """
+    Detector Sniper transversal (nueva, seminueva <= 500 km u ocasión premium <= 2.500 km).
+    Mantiene todas las barreras mecánicas (Talla M, doble real, > 500 Wh, peso <= 20.5 kg
+    no estimado, XC o Light Trail, cero Full Power/Enduro/Gravel/SUV/rígidas) y relega
+    BH ordinaria salvo excepción irrechazable.
+    """
+    if not getattr(cfg, "SNIPER_ACTIVO", True):
+        return False, "Sniper desactivado"
+    if getattr(bici, "disponible", True) is False:
+        return False, "No disponible"
+    if not bici.talla or bici.talla.strip().upper() != cfg.TALLA_OBJETIVO.upper():
+        return False, f"Talla no confirmada como M ({bici.talla})"
+    if str(bici.suspension_trasera or "").strip().lower() not in ("si", "sí", "true", "1"):
+        return False, "Doble suspensión no confirmada"
+
+    from scraper_base import es_modelo_no_mtb_doble
+
+    if not es_modalidad_mtb_doble_valida(bici) or es_modelo_no_mtb_doble(bici.titulo, bici.url):
+        return False, "No es e-MTB doble válida (e-gravel/SUV/trekking/rígida)"
+    mot_end = _motivo_descarte_enduro(bici)
+    if mot_end:
+        return False, mot_end
+    if prioridad_modalidad(bici) < 2:
+        return False, "Modalidad fuera de XC / Light Trail (recorrido > 150 mm / Enduro)"
+    if bici.bateria_wh is None or bici.bateria_wh <= cfg.BATERIA_MIN_WH:
+        return False, f"Batería <= {cfg.BATERIA_MIN_WH} Wh"
+    es_fp, mot_fp = es_full_power_o_pesada(bici)
+    if es_fp:
+        return False, mot_fp
+
+    peso_max = float(getattr(cfg, "SNIPER_PESO_MAX_KG", 20.5))
+    if getattr(bici, "_peso_estimado", False):
+        return False, "Peso estimado sin dato oficial/báscula"
+    if bici.peso_kg is None or bici.peso_kg > peso_max:
+        return False, f"Peso > {peso_max} kg o no confirmado ({bici.peso_kg})"
+
+    precio = float(bici.precio or 0.0)
+    if precio < cfg.PRECIO_MIN_EUR:
+        return False, f"Precio < {cfg.PRECIO_MIN_EUR} €"
+
+    dto = calcular_descuento_pvp_pct(bici)
+    if es_bici_bh(bici) and not es_bh_irrechazable(bici, dto_pvp=dto):
+        return False, "BH en segundo plano (no irrechazable)"
+
+    texto = f"{bici.titulo or ''} {bici.componentes or ''}"
+    es_oc = es_bici_de_ocasion(bici)
+    es_tienda_nueva = cfg.es_sitio_tienda_nueva(bici.sitio, bici.url, texto)
+    km = bici.km
+    km_semi = int(getattr(cfg, "KM_MAX_SEMINUEVA_BLACK_FRIDAY", 500))
+    es_nueva_o_semi = (not es_oc) and (
+        (km is not None and km <= km_semi)
+        or (es_tienda_nueva and km is None)
+    )
+
+    max_nueva = float(getattr(cfg, "SNIPER_PRECIO_MAX_NUEVA_EUR", 3600.0))
+    max_oc = float(getattr(cfg, "SNIPER_PRECIO_MAX_OCASION_EUR", 3500.0))
+    km_max_oc = int(getattr(cfg, "SNIPER_KM_MAX_OCASION", 2500))
+    dto_min_nueva = float(getattr(cfg, "SNIPER_DTO_MIN_NUEVA_PCT", 40.0))
+    dto_min_oc = float(getattr(cfg, "SNIPER_DTO_MIN_OCASION_PCT", 42.0))
+    rompedor_carb = float(getattr(cfg, "SNIPER_PRECIO_ROMPEDOR_CARBONO_EUR", 2850.0))
+    bajada_min = float(getattr(cfg, "SNIPER_BAJADA_FLASH_MIN_EUR", 150.0))
+    es_carb = es_cuadro_carbono(bici)
+
+    motivos: List[str] = []
+
+    if es_nueva_o_semi:
+        if precio <= float(cfg.PRECIO_MAX_BLACK_FRIDAY_EUR) and dto is not None and dto >= dto_min_nueva:
+            motivos.append(f"Sniper Nueva/Semi -{dto:.0f}% PVP ({bici.peso_kg:.1f} kg)")
+        elif precio <= max_nueva and dto is not None and dto >= 45.0:
+            motivos.append(f"Sniper Top <= {max_nueva:.0f} € (-{dto:.0f}% PVP)")
+        elif es_carb and precio <= 3100.0:
+            motivos.append(f"Sniper Carbono Nueva/Semi <= 3.100 € ({bici.peso_kg:.1f} kg)")
+    else:
+        if (
+            precio <= max_oc
+            and km is not None
+            and km <= km_max_oc
+            and dto is not None
+            and dto >= dto_min_oc
+            and bici.peso_kg <= 20.0
+        ):
+            motivos.append(f"Sniper Ocasión Premium -{dto:.0f}% PVP ({bici.peso_kg:.1f} kg, {km} km)")
+        elif es_carb and km is not None and km <= 2000 and precio <= rompedor_carb:
+            motivos.append(f"Sniper Carbono Ocasión <= {rompedor_carb:.0f} € ({km} km)")
+
+    if (
+        precio_previo is not None
+        and (float(precio_previo) - precio) >= bajada_min
+        and precio <= max_oc
+        and (km is None or km <= km_max_oc)
+    ):
+        ahorro_fl = float(precio_previo) - precio
+        motivos.append(f"Bajada Flash -{ahorro_fl:.0f} € (antes {precio_previo:.0f} €)")
+
+    if motivos:
+        return True, " | ".join(motivos)
+    return False, "No alcanza umbral Sniper"

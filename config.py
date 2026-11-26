@@ -228,6 +228,17 @@ BH_IRRECHAZABLE_PRECIO_MAX_OCASION_EUR: float = 2300.0
 BH_IRRECHAZABLE_KM_MAX_OCASION: int = 1200
 BH_IRRECHAZABLE_PESO_MAX_KG: float = 19.0
 
+# Detector Sniper transversal (Black Friday / Cyber Monday: nueva + seminueva + ocasión)
+SNIPER_ACTIVO: bool = True
+SNIPER_PRECIO_MAX_NUEVA_EUR: float = 3600.0
+SNIPER_PRECIO_MAX_OCASION_EUR: float = 3500.0
+SNIPER_KM_MAX_OCASION: int = 2500
+SNIPER_PESO_MAX_KG: float = 20.5
+SNIPER_DTO_MIN_NUEVA_PCT: float = 40.0
+SNIPER_DTO_MIN_OCASION_PCT: float = 42.0
+SNIPER_PRECIO_ROMPEDOR_CARBONO_EUR: float = 2850.0
+SNIPER_BAJADA_FLASH_MIN_EUR: float = 150.0
+
 NOTA_MIN_AGUARDAR: float = 8.0  # Solo nota >= 8.0 pasa filtros estrictos (S8)
 NOTA_MIN_NOTIFICAR: float = 8.5  # Umbral para notificar por Telegram (fallback a Top N si ninguna llega)
 TOP_N_NOTIFICAR: int = 3  # Cantidad de bicicletas más interesantes a enviar por Telegram

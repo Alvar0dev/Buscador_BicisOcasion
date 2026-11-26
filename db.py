@@ -157,6 +157,16 @@ class BaseDatos:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS alertas_sniper_enviadas (
+                    bici_id  TEXT PRIMARY KEY,
+                    precio   REAL NOT NULL,
+                    fecha    TEXT NOT NULL DEFAULT (datetime('now')),
+                    motivo   TEXT
+                )
+                """
+            )
             conn.commit()
 
     def ya_enviada(self, bici_id: str) -> bool:
@@ -178,7 +188,7 @@ class BaseDatos:
 
     def _precio_previo_en_tabla(self, tabla: str, bici_id: str) -> Optional[float]:
         """Devuelve el último precio registrado en la tabla permitida."""
-        if tabla not in ("bicis_enviadas", "bicis_black_friday_enviadas"):
+        if tabla not in ("bicis_enviadas", "bicis_black_friday_enviadas", "alertas_sniper_enviadas"):
             raise ValueError(f"Tabla no permitida: {tabla}")
         with self._conectar() as conn:
             fila = conn.execute(
@@ -714,4 +724,48 @@ class BaseDatos:
                 "repetido": bool(fila["repetido"]),
                 "estado_portales": estado_portales,
             }
+
+    # ---------------------------------------------------------------------------
+    # ALERTAS SNIPER BLACK FRIDAY / CYBER MONDAY (DEDUP Y PRECIO PREVIO)
+    # ---------------------------------------------------------------------------
+
+    def precio_previo_sniper(self, bici_id: str) -> Optional[float]:
+        """Devuelve el último precio notificado por Sniper para esa bici, o None."""
+        return self._precio_previo_en_tabla("alertas_sniper_enviadas", bici_id)
+
+    def debe_enviar_sniper(self, bici: Bicicleta) -> bool:
+        """True si nunca se envió por Sniper o si bajó al menos 50 € desde la última alerta."""
+        previo = self.precio_previo_sniper(bici.bici_id)
+        if previo is None:
+            return True
+        return float(bici.precio) <= float(previo) - 50.0
+
+    def marcar_sniper_enviada(self, bici: Bicicleta, motivo: str) -> None:
+        """Registra o actualiza una alerta Sniper enviada en alertas_sniper_enviadas."""
+        with self._conectar() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO alertas_sniper_enviadas (bici_id, precio, motivo)
+                VALUES (?, ?, ?)
+                """,
+                (bici.bici_id, float(bici.precio), motivo),
+            )
+            conn.commit()
+
+    def obtener_precio_previo_global(self, bici_id: str) -> Optional[float]:
+        """
+        Consulta el último precio conocido de la bicicleta en catálogo/envíos previos
+        (antes de actualizar el catálogo con el barrido actual) para detectar bajadas flash.
+        """
+        with self._conectar() as conn:
+            fila_cat = conn.execute(
+                "SELECT precio_actual FROM historial_catalogo WHERE bici_id = ?", (bici_id,)
+            ).fetchone()
+            if fila_cat and fila_cat["precio_actual"] is not None:
+                return float(fila_cat["precio_actual"])
+        for tabla in ("bicis_black_friday_enviadas", "bicis_enviadas", "alertas_sniper_enviadas"):
+            val = self._precio_previo_en_tabla(tabla, bici_id)
+            if val is not None:
+                return float(val)
+        return None
 
