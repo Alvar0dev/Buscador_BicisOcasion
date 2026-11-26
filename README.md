@@ -23,6 +23,7 @@ Cuando encuentra bicicletas aptas tras superar los filtros estrictos, las audita
 - [Por qué se ha construido así (Arquitectura e Ingeniería de Decisiones)](#por-qué-se-ha-construido-así-arquitectura-e-ingeniería-de-decisiones)
 - [Proceso de desarrollo y dificultades encontradas](#proceso-de-desarrollo-y-dificultades-encontradas)
 - [Estado actual y TODOs para mañana](#estado-actual-y-todos-para-mañana-27112026)
+- [Modo Caza Black Friday & Cyber Monday (`--modo-caza`)](#26-modo-caza-black-friday--cyber-monday---modo-caza-2611)
 - [Licencia](#licencia)
 
 ---
@@ -209,6 +210,7 @@ Kilometraje: Km moderados (10152 km): +1.5 | Calidad-precio: cuadro carbono: +1.
 El script soporta dos modos de automatización:
 
 - **Programador de tareas de Windows / `cron` (recomendado, en producción)**: ejecuta `python main.py --once` diariamente a las **12:00** con despertar automático (`WakeToRun: True` en `BuscadorBiciOcasion`, ver [CRON.md](CRON.md)).
+- **Modo Caza Black Friday & Cyber Monday (`python main.py --once --modo-caza`)**: barrido intensivo cada **2 horas** (tarea paralela `BuscadorBiciOcasion_BlackFriday`, ver [CRON.md](CRON.md)) con caché de fichas a **45 min**, invalidación por variación de `pvp_original`/`cache_precio`, lock atómico `cache/buscador.lock` (15 min stale timeout), silenciado anti-spam cuando no hay novedades reales y detector transversal **Sniper** con timbre sonoro para chollos excepcionales (relegando BH ordinaria a 2.º plano salvo excepciones irrechazables).
 - **Bucle `schedule` integrado (`python main.py`)**: queda residente y dispara la búsqueda todos los días a las **12:30** (`config.HORA_EJECUCION`).
 
 Consulta [CRON.md](CRON.md) para ver tanto la configuración de cronjob en Linux/macOS como el script PowerShell de Windows Task Scheduler.
@@ -237,26 +239,26 @@ El proyecto está separado en módulos con responsabilidad única:
 
 | Archivo | Responsabilidad |
 |---------|-----------------|
-| `config.py` | Configuración central: URLs objetivo optimizadas, filtros estrictos XC (`RECORRIDO_MAX_XC_MM = 130`), `WALLAPOP_UNICORN_QUERIES`, `PRECIO_MAX_UNICORNIO_XC_EUR = 3500`, `GEMINI_MODELS`, credenciales Telegram/Gemini, user-agents, proxies (opcional) y horarios. |
+| `config.py` | Configuración central: URLs objetivo optimizadas, filtros estrictos XC (`RECORRIDO_MAX_XC_MM = 130`), prioridades BH en 2.º plano (`BH_EN_SEGUNDO_PLANO`, `BH_IRRECHAZABLE_*`), umbrales `SNIPER_*`, `FICHA_TIENDA_TTL_CAZA_SEG = 2700`, `BUSCADOR_LOCK_STALE_SEG = 900`, `WALLAPOP_UNICORN_QUERIES` ampliadas, `GEMINI_MODELS`, credenciales y horarios. |
 | `models.py` | Dataclass `Bicicleta` con todos los campos necesarios para scoring, telemetría de batería (`bateria_salud_pct`, `bateria_ciclos`), `pvp_original`, `ubicacion` y `tiene_factura`. |
-| `db.py` | Base de datos SQLite (`WAL`): registro de bicicletas ya enviadas, tabla `bicis_black_friday_enviadas`, deduplicación por ID y equivalencia cruzada (`respaldo:` aislado), `estado_portales`, historial de catálogo (`historial_catalogo`), permanencia en stock y métricas del Radar (`BH iLynx Race`, `Wilier Urta Hybrid`, `Focus VAM2 SL`, etc.). |
-| `evaluator.py` | Filtros estrictos (S1-S6), purga XC `<= 130 mm` (`es_modalidad_xc`, `es_modelo_trail_o_enduro`), `es_unicornio_xc`, `es_xc_ampliable_en_presupuesto` (Fazua `420–430 Wh` + extender), algoritmo de Nota de Oportunidad, `prioridad_modalidad` y rúbrica Black Friday (`evaluar_oportunidad_black_friday`) para nuevas/expo `<= 3.500 €`. |
-| `gemini_classifier.py` | Motor Perito Mecánico Senior (`perito_v6_xc`), catálogo técnico `CATALOGO_EMTB` (XC vs Trail), desambiguación BH (`2EXMAG` vs `EP801`), seguimiento de peso empírico real y clasificador híbrido (`gemini-3.5-flash-lite` -> `gemini-3-flash-preview` con `thinkingBudget: 0`). |
-| `notifier.py` | Notificador unificado de Telegram vía `requests` (`_enviar_telegram`), ficha diaria Markdown, alertas exclusivas Black Friday (`enviar_black_friday`, nota extender `+210 Wh`), informe Top 3 XC de respaldo y Heartbeats operativos diarios. |
+| `db.py` | Base de datos SQLite (`WAL`): registro de bicicletas ya enviadas, tabla `bicis_black_friday_enviadas` (`respaldo:` aislado), tabla `alertas_sniper_enviadas` (`sitio`/`titulo` y equivalencia cross-bucket), `estado_portales`, `historial_catalogo`, permanencia en stock y métricas del Radar. |
+| `evaluator.py` | Filtros estrictos (S1-S6), ranking con `es_bh_irrechazable` / `prioridad_marca`, detector transversal `evaluar_chollo_sniper`, purga XC `<= 130 mm`, `es_xc_ampliable_en_presupuesto` (Fazua `420–430 Wh` + extender), Perito y rúbrica Black Friday (`evaluar_oportunidad_black_friday` / `evaluar_respaldo_black_friday`). |
+| `gemini_classifier.py` | Motor Perito Mecánico Senior (`perito_v6_xc`), catálogo técnico `CATALOGO_EMTB` (incluyendo `Levo SL Comp Alloy`), desambiguación BH (`2EXMAG` vs `EP801`), marca `_peso_catalogo`, invalidación de caché ante cambio de `pvp_original_int` y clasificador híbrido (`gemini-3.5-flash-lite` -> `gemini-3-flash-preview` con `thinkingBudget: 0`). |
+| `notifier.py` | Notificador unificado de Telegram vía `requests` (`_enviar_telegram`), etiquetas BH (`_etiqueta_prioridad_bh`), alerta sonora transversal `enviar_alerta_sniper`, regla dual `es_mega_chollo` (preserva `<= 3.150 €` y desbloquea `> 3.150 €`), informe Top 3 Beast y Heartbeats operativos diarios. |
 | `scraper_base.py` | Clase base con **motor Scrapling**: `Fetcher` (HTTP con impersonación TLS) → `StealthyFetcher` (navegador stealth con `solve_cloudflare=True`), con `usar_stealth_directo` y salto inmediato ante bloqueos HTTP 403/503 de Cloudflare. |
 | `scrapers/bike_ocasion.py` | Adaptador específico para Bike Ocasión. Extrae título limpio (`h3.s_title_block a`), talla, batería, km, marca del motor (`Km / <Marca>`), PVP original y doble suspensión directamente de la tarjeta del listado. Paginación de hasta 6 páginas (180+ bicis). |
-| `scrapers/buhobike.py` | Adaptador específico para Buhobike con modo stealth directo (`usar_stealth_directo=True`), rastreo combinado de `/3230-electricas-trail-dobles` (págs. 1 y 2 + `?q=MODELO-LUMEN`) y segunda mano (`/9448-...`, `/3225-...`), y extracción de título, talla (`#/...-talla-m`), año, km en SKU y PVP original. |
-| `scrapers/upway.py` | Adaptador específico para Upway sobre `/collections/doble-suspension`. Extrae año, kilometraje (`km` y `< 5 km`), talla (desde el rango de estatura `1mXX-1mYY`), PVP original nuevo ('6.000 € nuevo') y doble suspensión directamente de la tarjeta en `< 1s`. |
-| `scrapers/mammoth.py` | Adaptador específico para Mammoth Bikes sobre `/bicicletas-electricas-mtb-dobles-rally-xc/c-3104` y `/bicicletas-electricas-mtb-trail-all-mountain-dobles/c-2139`. Extrae precio (`:not(.is__old)`), tallas en stock (`M`), modalidad XC, año, PVP original tachado (`.is__old`), telemetría de bici nueva (`km=0`, `SoH=100%`) y filtro anti-rígidas en `~2.5s`. |
-| `scrapers/wallapop.py` | Adaptador para API v3 de Wallapop (`source="quick_filters"`, geo-radio `<= 50 km` desde Fuenlabrada) + búsqueda local por modelo (`WALLAPOP_UNICORN_QUERIES`), dedup por talla/precio, `_extraer_pvp_wallapop`, `tiene_factura` y detección segura de `km=0` / `SIN ESTRENAR`. |
-| `scrapers/prestashop_base.py` | Base reutilizable para tiendas PrestaShop: paginación con preservación de parámetros, extracción de título sin contaminación de badges, precio/PVP, detección `TEST RIDE` / `DEMO` y guardas anti-rígidas. |
-| `scrapers/sanferbike.py` | Adaptador PrestaShop para Sanferbike con stock real por talla desde `.js-miniature-product-variants` (`data-qty-*` / `attribute-not-in-stock`) y precio desde `span.product-price[content]`. |
+| `scrapers/buhobike.py` | Adaptador específico para Buhobike con modo stealth directo (`usar_stealth_directo=True`), rastreo combinado de `/3230-electricas-trail-dobles` (págs. 1 y 2 + `?q=MODELO-LUMEN`), `/3229-enduro-electricas` (págs. 1 y 2) y segunda mano (`/9448-...`, `/3225-...`). |
+| `scrapers/upway.py` | Adaptador específico para Upway sobre `/collections/doble-suspension` con paginación `MAX_PAGINAS = 4` y corte temprano cuando no hay IDs nuevos o el catálogo termina, conservando la guardia anti-rígidas. |
+| `scrapers/mammoth.py` | Adaptador específico para Mammoth Bikes sobre `/c-3104` y `POST /filtrarproductos` en `/c-2139` (`precioMaximo = 4400`), extrayendo precio (`:not(.is__old)`), tallas en stock (`M`), PVP tachado (`.is__old`) y telemetría nueva. |
+| `scrapers/wallapop.py` | Adaptador para API v3 de Wallapop (`source="quick_filters"`, geo-radio `<= 50 km` desde Fuenlabrada) + búsqueda local por modelo (`WALLAPOP_UNICORN_QUERIES` Light e-MTB priorizadas sobre BH), dedup por talla/precio y detección segura de `km=0`. |
+| `scrapers/prestashop_base.py` | Base reutilizable para tiendas PrestaShop: paginación con preservación de parámetros, corte temprano por página sin ítems nuevos o `TECHO_CORTE_PRECIO`, extracción sin badges, detección `TEST RIDE` / `DEMO` y anti-rígidas. |
+| `scrapers/sanferbike.py` | Adaptador PrestaShop para Sanferbike (`MAX_PAGINAS = 4`, `TECHO_CORTE_PRECIO = 4200.0`) con stock real por talla desde `.js-miniature-product-variants` (`data-qty-*` / `attribute-not-in-stock`) y precio `span.product-price[content]`. |
 | `scrapers/bicimarket.py` | Adaptador PrestaShop para Bicimarket sobre faceta de Doble Suspensión ordenada por precio ascendente (`PVPR`), delegando validación real de talla M a la ficha del producto. |
-| `scrapers/escapa.py` | Adaptador BigCommerce para Escapa con descarga HTTP directa vía `requests`, descarte preventivo de tarjetas `Avísame` y validación de stock talla `M`/`MD` por `BCData.in_stock_attributes`. |
+| `scrapers/escapa.py` | Adaptador BigCommerce para Escapa (`MAX_PAGINAS = 4`) con descarga HTTP directa vía `requests`, corte temprano por página repetida o techo de precio y validación de stock `M`/`MD` por `BCData.in_stock_attributes`. |
 | `scrapers/fabregues.py` | Adaptador PrestaShop para Fabregues Bicicletas con limpieza de códigos SKU BH (`\|EC796\|`), tratamiento de unidades *Test Ride* y verificación real de talla `M`/`MD` en ficha. |
-| `scrapers/enriquecedor_web.py` | Enriquecedor web paralelo con caché JSON (`cache/fichas_detalle.json`, TTL 6h para stock en tiendas nuevas) y DuckDuckGo; extrae variantes en stock (`PrestaShop` / `BCData`), `<dt>/<dd>`, SoH/ciclos, recorrido (`mm` ignorando rotores de freno `180 mm`) y `_extraer_km` sin falsos positivos. |
-| `main.py` | Orquestador: scrape paralelo de los 9 portales → **health check** → pre-filtro con `CATALOGO_EMTB` → dedup separada → enriquecimiento → selección por portal + Black Bike Beast (`<= 3.500/4.000 €`) → SQLite → Telegram + Radar (`docs/radar_mercado.md`). |
-| `test_buscador.py` | Suite de pruebas unitarias e integración con mocks para validar filtros XC vs Trail, Fazua ampliable, unicornios XC `<= 3.500 €`, Perito `perito_v6_xc`, scrapers (incluyendo Wallapop nacional y `_extraer_km`), rotación por portal y dedup SQLite. |
+| `scrapers/enriquecedor_web.py` | Enriquecedor web paralelo con caché JSON (`cache/fichas_detalle.json`, TTL 6h normal / 45m en `--modo-caza`) e invalidación inmediata ante variación de `cache_precio`; extrae variantes en stock, SoH/ciclos, recorrido y `_extraer_km`. |
+| `main.py` | Orquestador: lock atómico `cache/buscador.lock` (15m stale), scrape paralelo de 9 portales → health check → pre-filtro + `sniper_ocasion_pre` → dedup separada → enriquecimiento → despacho **Sniper** (sin caps) + Diario + Beast (sin spam en `--modo-caza`) → Radar. |
+| `test_buscador.py` | Suite de pruebas unitarias e integración con mocks para validar ranking BH en 2.º plano, Sniper + `es_mega_chollo`, `--modo-caza` anti-spam/TTL/lock, paginación `Upway`/`Sanferbike`/`Escapa`, rotación y dedup SQLite. |
 | `CRON.md` | Instrucciones para ejecutar mediante cronjob en Linux/Mac o Programador de tareas de Windows. |
 | `.env.example` | Plantilla de variables de entorno. |
 | `requirements.txt` | Dependencias de Python. |
@@ -331,7 +333,17 @@ TELEGRAM_CHAT_ID=-1001234567890
 
 ## Cómo usar
 
-### Opción A: Ejecución manual con bucle diario (schedule)
+### Opción A: Ejecución puntual (`--once`) y Modo Caza (`--modo-caza`)
+
+```bash
+# Corrida única diaria normal (envía ofertas, rotación y heartbeats)
+python main.py --once
+
+# Corrida intensiva Black Friday / Cyber Monday (caché 45m + anti-spam si no hay cambios)
+python main.py --once --modo-caza
+```
+
+### Opción B: Ejecución manual con bucle diario (schedule)
 
 ```bash
 python main.py
@@ -339,7 +351,7 @@ python main.py
 
 El script quedará corriendo y ejecutará la búsqueda todos los días a la hora configurada en `config.HORA_EJECUCION` (`12:30`). Presiona `Ctrl+C` para detenerlo.
 
-### Opción B: Cronjob (Linux / Mac)
+### Opción C: Cronjob (Linux / Mac) / Windows Task Scheduler
 
 Consultá el archivo `CRON.md` para la configuración exacta. Ejemplo de entrada en crontab:
 
@@ -691,6 +703,13 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
   * **Bloqueo Full Power verificado (`evaluator.py`, `test_buscador.py`)**: Tras contrastar pesos empíricos (`MMR X-Bolt 120` `22.3–23.5 kg`, `Rockrider E-FEEL 700 S` `24.8–25.4 kg`, `Canyon Spectral:ON` `21.8–22.9 kg`, `Canyon Neuron:ON` `22.6–25.5 kg`, `Stevens E-Inception` `22.5–25.3 kg`), se amplió `_PATRONES_MODELO_FULL_POWER_PESADA` (`spectral:on`, `spectral on`, `neuron:on`, `neuron on`, `torque:on`, `torque on`, `stevens e-inception`, `e-inception`, `x-bolt`, `e-feel`, `e-expl`) cubierto con la regresión TDD `test_afinado_26nov_full_power_gravel_y_upway_rigida`.
   * **Validación dinámica de reposición en tiempo real (`#32`, `44.1s`)**: En la ejecución en vivo de hoy, la caché TTL 6h y el lector de variantes PrestaShop detectaron al instante la reposición de Talla M en `Bicimarket` para `BH iLynx Trail Carbon 8.7` (`3.499 €`, `-44.5%`), promocionándola al `#1` de `@BlackBikeBeast_bot`, mientras filtraron por `[Perito Rápido]` la `BH iLynx Trail Carbon 8.8 2023` al quedarse solo en `talla=L`.
 
+### 26. Modo Caza Black Friday & Cyber Monday (`--modo-caza`) (`26/11`)
+* **Por qué**: En campañas de picos rápidos de stock y rebajas (Black Friday y Cyber Monday), ejecutar una sola vez al día (`12:00`) con TTL de 6 horas hace perder reposiciones fugaces o chollos flash, mientras que re-ejecutar `--once` cada 2 horas sin cambios generaría spam constante en Telegram. Además, **BH** dominaba los Top 3 por encima de modelos prioritarios (**Orbea Rise**, **Scott Lumen**, **Cannondale Moterra SL**, **Specialized Levo SL**, **Trek Fuel EXe**, **Mondraker Neat**, **Focus VAM²**).
+* **Cómo se construyó** (spec ODD en [odd/tasks/modo-caza-black-friday.md](odd/tasks/modo-caza-black-friday.md)):
+  * **Priorización no-BH y excepción irrechazable (`config.py`, `evaluator.py`, `main.py`, `notifier.py`)**: `prioridad_marca` sitúa las marcas no-BH por delante en Diario (`clave_orden_estrictas`, `clave_orden_respaldo`) y en `@BlackBikeBeast_bot` (`black_friday_pool`, `pool_beast`), relegando BH a 2.º plano (`[2º plano BH]`) salvo cuando cumple `es_bh_irrechazable` (`[🔥 BH IRRECHAZABLE]`: nueva/semi `<= 2.900 €` con `>= 45%` o `<= 3.100 €` con `>= 50%`, ocasión `<= 2.300 €` con `<= 1.200 km`, o carbono ultraligero `<= 19.0 kg` con `>= 40%`).
+  * **Detector transversal Sniper (`evaluator.py`, `db.py`, `notifier.py`, `main.py`)**: `evaluar_chollo_sniper` evalúa antes de los topes de rotación cualquier candidata que supere los guardas mecánicos duros en 3 disparadores (`T1` nueva/semi `<= 3.600 €` con `>= 40%` y peso empírico/catálogo `<= 20.5 kg`; `T2` carbono `<= 2.850 €` y `<= 2.000 km`; `T3` bajada flash `>= 150 €` con ocasión `<= 3.500 €` y `<= 2.500 km`), excluyendo BH ordinaria. Persiste envíos e historial en `alertas_sniper_enviadas` (con deduplicación cross-bucket también contra clones Wallapop `±25 €`) y corrige `es_mega_chollo` para no silenciar descuentos `>= 40%/50%` en la franja `> 3.150 €`.
+  * **Infraestructura `--modo-caza` anti-spam y cobertura ampliada (`enriquecedor_web.py`, `gemini_classifier.py`, `main.py`, `scrapers/*`)**: TTL de ficha reducido a **45 min** en modo caza, re-evaluación automática ante cambios de `cache_precio` o `pvp_original_int` en IA, lock atómico `cache/buscador.lock` (stale timeout 15 min), silenciado completo de rotaciones Diario/Beast/Heartbeats sin novedades ni bajadas `>= 50 €`, paginación ampliada (`Upway`, `Sanferbike`, `Escapa`, `Buhobike`, `Mammoth` hasta `4.400 €`) y nuevas queries locales Light e-MTB en Wallapop más ficha `Levo SL Comp Alloy` (`20.1 kg`).
+
 ---
 
 ## Proceso de desarrollo y dificultades encontradas
@@ -748,41 +767,34 @@ El sistema no es un simple scraper de precios: está diseñado como un **embudo 
 | **Falsos URL `#fragment` PrestaShop (`talla-xl`), tallas `SM` (=BH Small) vs `MD`, Escapa 403 en `curl_cffi` y discos `180/180 mm` como recorrido** | `prestashop_base.py` / `sanferbike.py` / `escapa.py` / `enriquecedor_web.py` / `config.py` | En PrestaShop (`Sanferbike`, `Bicimarket`, `Fabregues`) la URL de listado apunta por defecto a `#/...-talla-xl` ocultando la M real en stock; en `Fabregues` el prefijo BH `SM` (Small) corría riesgo de confundirse con `S/M` o `M`, y en ficha PrestaShop la clase `.disabled` puede residir en el `<span>` hijo. Además `Escapa` devolvía 403 ante el TLS de `Fetcher`, y las fichas con frenos `180/180 mm` se capturaban erróneamente como `180 mm` de suspensión. | Ignorado el `#fragment` por defecto en listado PrestaShop e indexada caché de ficha sin `#fragment` (TTL 6h); añadida lectura de `.js-miniature-product-variants` (`data-qty-*`), `.product-variants-item` (recorriendo `el/inp/lbl/span`), `BCData.in_stock_attributes` y botón `Avísame`; `normalizar_codigo_talla` mapea `MD->M` y `SM->S` preservando `M/L->ML`; `usar_requests_primero=True` en `Escapa` y filtro negativo de rotores/discos en `_extraer_recorrido`. |
 | **Fuga de `BH iLynx+ SL / Enduro / 8.7`, motores `Avinox M2`, `SUV`, `Orbea Rise` repetidas en Mammoth y 11+ llamadas inútiles a Gemini para `Talla != M`** | `evaluator.py` / `gemini_classifier.py` / `scraper_base.py` / `enriquecer_y_valorar_bici` | Un patrón genérico `"ilynx+"` asignaba falsamente `20.4 kg`, `Carbono` y `Shimano EP801` a modelos `SL` de Aluminio (`Shimano EP6`, `630 Wh`, `~22.8 kg`), `Enduro` (`160–170 mm`) y `Trail Carbon 8.7` (`21.2 kg`); además `Bicicleta BH Eléctrica Ilynx Trail...` en Fabregues no cruzaba `"bh ilynx trail"`, las variantes de color en Mammoth duplicaban 2/3 del Top 3, modelos `Avinox M2` / `SUV` pasaban pre-filtro y fichas `Bicimarket`/`Fabregues` sin stock M llamaban a Gemini antes del descarte S1. | Separación en `CATALOGO_EMTB` y bloqueo Full Power de `ilynx+ sl`, `ilynx+ enduro`, `ilynx+ trail carbon 8.7`, `Avinox` (salvo `Amflow PL`), `SUV` (`es_modelo_no_mtb_doble`) y Enduro (`_motivo_descarte_enduro >165mm`); patrones `"ilynx trail"` / `"ilynx race"`; dedup por variante de color en Beast y cortocircuito `[Perito Rápido]` antes de DuckDuckGo/Gemini (`75.5s -> 37.5s` en vivo). |
 | **Bypass de rígidas en `Upway /doble-suspension`, fugas e-Gravel (`ORBEA DENNA`) / `Flyer Goroc` y Full Power `>= 22 kg` (`Spectral:ON`, `X-Bolt`, `E-FEEL`)** | `scrapers/upway.py` / `scraper_base.py` / `evaluator.py` | `UpwayScraper` asignaba incondicionalmente `suspension_trasera="si"` al venir de `/collections/doble-suspension`, permitiendo colarse a rígidas como `Haibike AllTrack 7`; además faltaban patrones para `ORBEA DENNA` (e-gravel), `Flyer Goroc` (trekking SUV) y familias Full Power `21.8–25.5 kg` (`Canyon Spectral:ON / Neuron:ON / Torque:ON`, `Stevens E-Inception`, `MMR X-Bolt 120`, `Rockrider E-FEEL 700 S`, `E-EXPL 520`). | `UpwayScraper` consulta `es_modelo_no_mtb_doble` antes de fijar `suspension_trasera="si"`; ampliado `_PATRONES_NO_MTBD_COMUNES` (`"denna"`, `"goroc"`) y `_PATRONES_MODELO_FULL_POWER_PESADA` con las 11 variantes validadas empíricamente; cubierto con test TDD y verificado con reposición en vivo Talla M en `Bicimarket`. |
+| **Modo Caza (`--modo-caza`): re-spam desde Vigilancia, bajadas ocultas en pools Beast `>= 6`, dedup Sniper cross-bucket y atributo `cache_precio`** | `main.py` / `db.py` / `notifier.py` / `scrapers/enriquecedor_web.py` | Durante la auditoría independiente (`T5`) afloraron 4 bordes reales: (1) una bici reaparecida desde `Zona de Vigilancia` con `reaparecio=False` omitía `db.debe_reenviarse`, repitiendo envíos en corridas cada 2h; (2) `misma_busqueda` en Beast silenciaba bajadas `>= 50 €` en candidatos en posición 4+ cuando el pool tenía `>= 6` unidades; (3) `alertas_sniper_enviadas` carecía de `sitio`/`titulo` y `dedup` cross-bucket para clones Wallapop (`±25 €`) ya enviados en Sniper; (4) una BH con `44.97%` de descuento mostraba `[🔥 BH IRRECHAZABLE]` con texto redondeado `45%` pero `es_bh_irrechazable` exigía `>= 45.0%` sin redondeo, y `_aplicar_detalle` propagaba la clave interna `cache_precio` como atributo. | En `main.py` se exige `and db.debe_reenviarse(...)` incluso para `vigilancia`; Beast comprueba cambios de `set(pool_ids)` y bajadas `>= 50 €` en todo el pool; `db.py` migra columnas `sitio`/`titulo` en `alertas_sniper_enviadas` con `fue_enviada_sniper_equivalente` + tracking intralote `vistos_lote`; `notifier.py` pasa `descuento_pct=None` en `BH` para evitar incoherencia de redondeo y `_aplicar_detalle` ignora `"cache_precio"`. Cubierto con regresiones TDD en `test_buscador.py`. |
 
 ---
 
 ## Estado actual y TODOs para mañana (`27/11/2026`)
 
-### Fotografía real del proyecto (`26/11/2026` — tras corrida en vivo `#32` de 9 portales en `44.1s`)
-- **Suite unitaria e integración (`python test_buscador.py`)**: **100% GREEN** (incluyendo la nueva regresión `test_afinado_26nov_full_power_gravel_y_upway_rigida` sobre `Upway` rígidas, e-gravel/SUV y las nuevas familias Full Power).
-- **Auditoría previa y ejecución en vivo de los 9 portales (`#32`, `44.1s`)**: revisada primero la ejecución automática del `25/11` (`#31`, `12:00:45`, `42.6s`, `LastTaskResult: 0`, rotación Beast en `offset: 4` con `wallapop-pzpkpw08kkj3`, `escapa-54704`, `bicimarket-54682`); posteriormente en `#32` (`26/11 10:33:11`, `44.1s`) se procesaron **Bike Ocasión** (`179`), **Buhobike** (`92`), **Upway** (`21`), **Mammoth** (`140`), **Sanferbike** (`48`), **Bicimarket** (`55`), **Escapa** (`36`), **Fabregues** (`96`) y **Wallapop** (`533` en radio `<= 50 km`), obteniendo `11` candidatas aptas y confirmando de nuevo `Pedalmoto` / `BikePhilosophy` fuera de cobertura (`HTTP 404` / sin stock útil).
-- **Resultados verificados hoy (`26/11/2026`) en ambos canales de Telegram y Radar**:
-  - **Canal Diario / Segunda mano (`3` notificadas de `11` candidatas aptas — `< 21 kg`, `> 500 Wh`, Talla `M`, `XC > Trail ligera > MTB`)**:
-    1. **`BH iLYNX TRAIL CARBON 8.6`** — **Wallapop (`<= 50 km`)** (`2.299,0 €`, `20.0 kg`, **Nota `7.5/10`**)
-    2. **`ORBEA RISE H10 T-M 2022 BICICLETA SEGUNDA MANO`** — **Buhobike Segunda Mano** (`2.599,0 €`, `19.57 kg`, **Nota `5.5/10`**)
-    3. **`Orbea Rise H15 XT`** — **Bike Ocasión** (`2.649,0 €`, `20.5 kg`, **Nota `3.5/10`**)
-  - **Canal Nuevas y Seminuevas `@BlackBikeBeast_bot` (pool `__beast__` de `7` unidades limpias, `offset: 0` reiniciado con la nueva entrada `<= 3.500 €`)**:
-    1. **`BH iLynx Trail Carbon 8.7`** (`bicimarket-54681`) — **Bicimarket** (`3.499,0 €`, PVP `6.299,9 €`, **`-44.5%`**, **`18.6 kg`**, `540 Wh`, **Talla M repuesta hoy**, **Nota `7.5/10`**)
-    2. **`BH iLynx Trail 8.1`** (`bicimarket-58720`) — **Bicimarket** (`3.599,0 €`, PVP `4.799,9 €`, `-25.0%`, `19.6 kg`, `540 Wh`, **Nota `7.0/10`**)
-    3. **`BH iLynx Trail 8.2`** (`bicimarket-58721`) — **Bicimarket** (`3.999,0 €`, PVP `5.299,9 €`, `-24.5%`, `19.6 kg`, `540 Wh`, **Nota `7.0/10`**)
-    - **Stock dinámico validado y cola de rotación (`__beast__`)**: `bicimarket-54682` (`BH iLynx Trail Carbon 8.8 2023`) agotó la Talla M (`talla=L`) y quedó filtrada al instante por `[Perito Rápido]`; permanecen en cola para siguientes rotaciones `wallapop-mzn290yp0gzn` (`Orbea Rise H10 2023/24`), `escapa-54704` (`Orbea Rise SL H30 2026`), `bicimarket-58722` y `wallapop-pzpkpw08kkj3`.
-  - **Radar de Mercado ([docs/radar_mercado.md](docs/radar_mercado.md))**: actualizado el `2026-11-26 10:33:10` con **`15` unidades** (`Wallapop 10`, `Bike Ocasión 2`, `Buhobike 2`, `Upway 1`), **`3.7 días`** de estancia media, `0` rebajas nuevas y **`3` en Zona de Vigilancia** (`Orbea RiseH15` `2.950 €` y `2x BH iLynx Race Carbon 8.4 LT XT` `3.129 €`).
+### Fotografía real del proyecto (`26/11/2026` — tras implementación y smoke tests `--once` y `--modo-caza`)
+- **Suite unitaria e integración (`python test_buscador.py`) + Verificador independiente (`T1-T3`)**: **100% GREEN** tras el commit `0e8d320`, validando ranking BH en 2.º plano (`fc09cf2`), detector Sniper y alerta sonora en `> 3.150 €` (`24c6d14`), `--modo-caza` anti-spam con caché `45 min` y lock de concurrencia (`d505a0b`), paginación/cobertura en 9 portales + `Levo SL Comp Alloy` (`e445b85`) y resolución de los 3 blockers `B1-B3` más advisories del verificador (`0e8d320`).
+- **Validación en vivo de los 9 portales (`--once` y `--modo-caza` consecutivos)**:
+  - **Corrida 1 (`python main.py --once`, `49.7s`, 9 portales)**: **Bike Ocasión** (`179`), **Buhobike** (`112`), **Mammoth** (`141`), **Fabregues** (`96`), **Sanferbike** (`72`), **Bicimarket** (`55`), **Escapa** (`36`), **Upway** (`21`) y **Wallapop** (`537` en `<= 50 km`, `3` clones deduplicados). Ranking BH en 2.º plano verificado en vivo en Diario: `Orbea Rise H10 2023/24 540w Talla M` (`2.200 €`, `Nota 7.0/10`) quedó **#1 de Wallapop** por delante de BH con mayor nota (`7.5/10`), junto con `BH ILYNX RACE CARBON LT 7.6 T-M 2022` (`Buhobike rot #2`, `2.599 €`, `5.0/10`) y `Orbea Rise H15 XT` (`Bike Ocasión #1`, `2.649 €`, `3.5/10`).
+  - **Corrida 2 (`python main.py --once --modo-caza`, `49.8s`)**: la reducción automática de TTL a `45 min` detectó en tiempo real la reposición en **Bicimarket** de `BH iLynx Trail Carbon 8.8 2023` (`3.999 €`, `-45.2%`) en talla M y actualizó el Top 3 de `@BlackBikeBeast_bot` con marcas **no-BH al frente** (`Orbea Rise H10` `2.200 €`, `Orbea Rise SL H30 2026` en `Escapa` `3.524 €` `-25.0%` delante de `BH iLynx Trail Carbon 8.7` `3.499 €` `-44.5%`), manteniendo **`0 notificadas`** y **`0` Heartbeats** en Diario.
+  - **Corrida 3 (`python main.py --once --modo-caza`, `46.6s`, segunda pasada sin cambios)**: `[Modo Caza] Beast sin novedades ni bajadas >= 50 €; se omite rotación y spam` y **`0 notificadas`** en Diario (`0` alertas y `0` heartbeats en ambos canales).
 
 ### Estado final del sistema
 
 | Componente | Estado |
 |------------|--------|
-| Canal Diario multi-portal (ocasion + Wallapop `<= 50 km` + `XC <= 130 mm` `> 500 Wh`) | ✅ Operativo y verificado en vivo (`BH iLYNX TRAIL CARBON 8.6` `2.299 €` + `Orbea Rise H10` `2.599 €` + `Orbea Rise H15 XT` `2.649 €`) |
-| Canal `@BlackBikeBeast_bot` (9 fuentes, nuevas/seminuevas `<= 500 km`, `> 500 Wh`, `< 21 kg`, sin Full Power ni Enduro) | ✅ Operativo y verificado en vivo (`BH iLynx Trail Carbon 8.7` repuesta en M a `3.499 €` `-44.5%` + rotación limpia en `7` unidades `__beast__`) |
-| Filtros anti-ruido (`Upway` rígidas, e-gravel/SUV, Full Power `>= 22 kg` y `[Perito Rápido]`) | ✅ Operativos y cubiertos por TDD (`test_afinado_26nov_full_power_gravel_y_upway_rigida`) |
-| Scrapers tiendas online `0 km` (`Mammoth`, `Buhobike`, `Sanferbike`, `Bicimarket`, `Escapa`, `Fabregues`) + Ocasión/Wallapop | ✅ Operativos en paralelo en `44.1s` con stock real Talla `M`/`MD` y caché TTL 6h |
-| Salud del repositorio, Tests y Programador de Tareas (`12:00`) | ✅ `python test_buscador.py` GREEN (`exit 0`), Task Scheduler `LastTaskResult: 0` (próxima `26/11/2026 12:00:00`) |
+| Priorización anti-BH y excepción irrechazable (`fc09cf2`) | ✅ Operativo y verificado en vivo (Orbea Rise delante de BH ordinaria tanto en Diario como en `@BlackBikeBeast_bot`) |
+| Detector transversal Sniper + `es_mega_chollo` `> 3.150 €` (`24c6d14`, `0e8d320`) | ✅ Operativo (`alertas_sniper_enviadas` + dedup cross-bucket Wallapop sin falsos disparos en el barrido actual) |
+| Modo Caza `--modo-caza`, TTL `45m`, lock `cache/buscador.lock` y anti-spam (`d505a0b`, `0e8d320`) | ✅ Operativo y validado en vivo (`49.8s` detectando reposición + `46.6s` con `0` spam sin novedades) |
+| Cobertura ampliada en 9 portales y `CATALOGO_EMTB` (`e445b85`) | ✅ Operativo (`Sanferbike: 72`, `Buhobike: 112`, `Mammoth: 141`, `Upway: 21`, `Wallapop: 537` en paralelo) |
+| Documentación (`README.md`, `CRON.md`) y Tarea Programada Black Friday (`BuscadorBiciOcasion_BlackFriday`) | ⏳ Documentado en rama `feat/modo-caza-black-friday`; pendiente de confirmación final del usuario para registrar tarea cada 2 h (26/11 23:55 -> 01/12 01:00) y mergear/pushear a `main` |
 
-### TODOs concretos para mañana (`27/11/2026`)
+### TODOs concretos post-campaña y mantenimiento
 
-- [ ] **1. Revisar la corrida automática de hoy `12:00` (`BuscadorBiciOcasion`) y la rotación Black Friday**: confirmar si `BH iLynx Trail Carbon 8.7` (`3.499 €` en Bicimarket) mantiene stock en Talla M y hacia qué unidades rotó `@BlackBikeBeast_bot` (`wallapop-mzn290yp0gzn`, `escapa-54704`, `bicimarket-58722`, `wallapop-pzpkpw08kkj3`).
-- [ ] **2. Decidir sobre el techo diario `PRECIO_MAX_EXCEPCIONAL_EUR` (`3.300 €` vs `3.500 €`)**: hoy `Bike Ocasión` publicó `464328 Cannondale Moterra Neo SL 2` (`3.431 €`, PVP `6.500 €`, `19.8 kg`, `600 Wh`, `2.032 km`, Talla `M`), actualmente descartada por superar el techo de `3.300 €` con `> 500 km`; decidir si se mantiene `3.300 €` o se amplía a `3.500 €`.
-- [ ] **3. Revisar posibles rebajas Black Friday en la Zona de Vigilancia y Radar**: comprobar en [docs/radar_mercado.md](docs/radar_mercado.md) si `Orbea RiseH15` (`2.950 €`) o las `BH iLynx Race Carbon 8.4 LT XT` (`3.129 €`) bajan hacia el umbral objetivo.
+- [ ] **1. Activar (tras confirmación) y monitorizar `BuscadorBiciOcasion_BlackFriday` durante Black Friday y Cyber Monday**: vigilar envíos en `@BlackBikeBeast_bot` / canal Sniper y confirmar que `cache/buscador.lock` convive sin colisiones con el cron diario de las `12:00`.
+- [ ] **2. Revisar posibles alertas Sniper en reposiciones/bajadas flash**: comprobar si modelos premium (`Cannondale Moterra Neo SL 2` `3.431 €` en `Bike Ocasión`, `Orbea Rise`, `Scott Lumen`, `Levo SL`, `Focus VAM²`) reciben rebaja adicional `>= 150 €` o PVP `-40%/-42%`.
+- [ ] **3. Desactivar/limpiar `BuscadorBiciOcasion_BlackFriday` tras el `01/12/2026`**: una vez expirada la ventana `EndBoundary = 2026-12-01T01:00:00`, eliminar la tarea temporal si se desea volver únicamente al cron diario de las `12:00`.
 - [ ] **4. Vigilar `logs/buscador.log` ante nuevas referencias 2026/2027**: auditar cualquier título nuevo sin peso explícito que supere el prefiltro diario o Beast para ampliar `CATALOGO_EMTB` o `_PATRONES_MODELO_FULL_POWER_PESADA` si hace falta.
 
 ### Dependencias instaladas

@@ -67,3 +67,40 @@ Register-ScheduledTask `
     -Description "Búsqueda diaria de e-MTB de ocasión y envío de Top 3 a Telegram" `
     -Force
 ```
+
+## Operación intensiva Black Friday / Cyber Monday (`--modo-caza`, cada 2 h)
+
+Durante campañas clave se puede registrar una tarea paralela temporal `BuscadorBiciOcasion_BlackFriday` sin alterar el cron diario de las `12:00`, ejecutando `main.py --once --modo-caza` (caché de fichas reducida a 45 min, lock de concurrencia `cache/buscador.lock` y supresión de envíos repetidos si no hay cambios reales):
+
+```powershell
+$actionCaza = New-ScheduledTaskAction `
+    -Execute "python.exe" `
+    -Argument "main.py --once --modo-caza" `
+    -WorkingDirectory "G:\Proyectos OpenCode\Buscador BiciOcasion"
+
+$triggerCaza = New-ScheduledTaskTrigger `
+    -Once -At ([datetime]"2026-11-26T23:55:00") `
+    -RepetitionInterval (New-TimeSpan -Hours 2) `
+    -RepetitionDuration (New-TimeSpan -Days 5)
+
+# Tope explícito al 01/12/2026 01:00 (cubre Black Friday + Cyber Monday)
+$triggerCaza.EndBoundary = "2026-12-01T01:00:00"
+
+$settingsCaza = New-ScheduledTaskSettingsSet `
+    -WakeToRun `
+    -StartWhenAvailable `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -MultipleInstances IgnoreNew `
+    -ExecutionTimeLimit (New-TimeSpan -Hours 1)
+
+Register-ScheduledTask `
+    -TaskName "BuscadorBiciOcasion_BlackFriday" `
+    -Action $actionCaza `
+    -Trigger $triggerCaza `
+    -Settings $settingsCaza `
+    -Description "Caza Black Friday y Cyber Monday (--modo-caza cada 2h hasta 01/12/2026 01:00)" `
+    -Force
+```
+
+> Nota: al mantener `BuscadorBiciOcasion` (12:00) y `BuscadorBiciOcasion_BlackFriday` en paralelo, el archivo lock atómico `cache/buscador.lock` (stale timeout 15 min) evita solapamientos si coinciden en el mismo minuto.
