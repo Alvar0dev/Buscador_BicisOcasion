@@ -3983,6 +3983,182 @@ def test_es_mega_chollo_no_silencia_rango_3200_3500():
         assert mock_post.call_args.kwargs["json"]["disable_notification"] is False
 
 
+def test_modo_caza_sin_cambios_no_envia_spam_ni_heartbeat():
+    """S4: En --modo-caza, sin novedades ni bajadas no rota ni manda mensajes/Heartbeats; lock de concurrencia evita colisiones."""
+    import os
+    import time
+    from pathlib import Path
+    from main import ejecutar_busqueda
+
+    assert hasattr(cfg, "MODO_CAZA_BF")
+    assert cfg.FICHA_TIENDA_TTL_CAZA_SEG == 45 * 60
+    assert cfg.BUSCADOR_LOCK_STALE_SEG == 15 * 60
+
+    fd_c, ruta_c = tempfile.mkstemp(suffix=".db")
+    os.close(fd_c)
+    try:
+        db_c = BaseDatos(ruta=ruta_c)
+        b_d1 = bici_prueba(sitio="Upway", bici_id="u-c1", titulo="Orbea Rise M20 2023", precio=2799.0, peso_kg=18.5, km=600, modalidad="XC", recorrido_mm=130, suspension_trasera="si")
+        b_d2 = bici_prueba(sitio="Upway", bici_id="u-c2", titulo="Scott Lumen eRIDE 900", precio=2899.0, peso_kg=17.5, km=800, modalidad="XC", recorrido_mm=130, suspension_trasera="si")
+        b_bf_1 = bici_prueba(sitio="Escapa", bici_id="esc-1", titulo="Orbea Rise SL H30 2026", precio=3524.0, pvp_original=4699.0, km=0, peso_kg=20.2, bateria_wh=540, modalidad="Trail", recorrido_mm=140, suspension_trasera="si")
+        b_bf_2 = bici_prueba(sitio="Sanferbike", bici_id="sf-2", titulo="Scott Lumen eRIDE 910", precio=3899.0, pvp_original=6499.0, km=0, peso_kg=17.6, bateria_wh=520, modalidad="XC", recorrido_mm=130, suspension_trasera="si")
+        b_bf_3 = bici_prueba(sitio="Fabregues", bici_id="fb-3", titulo="Focus VAM2 SL 9.8", precio=3799.0, pvp_original=5999.0, km=0, peso_kg=18.4, bateria_wh=540, modalidad="XC", recorrido_mm=130, suspension_trasera="si")
+        b_bf_4 = bici_prueba(sitio="Mammoth", bici_id="mam-4", titulo="Wilier Urta Hybrid", precio=3950.0, pvp_original=6999.0, km=0, peso_kg=16.8, bateria_wh=640, modalidad="XC", recorrido_mm=120, suspension_trasera="si")
+
+        tel_fixture = {
+            "black_friday_pool": [],
+            "black_friday_respaldo_pool": [
+                (b_bf_2, 40.0, 7.5, "+399 €"),
+                (b_bf_3, 36.7, 7.5, "+299 €"),
+                (b_bf_4, 43.6, 7.5, "+450 €"),
+                (b_bf_1, 25.0, 7.0, "+24 €"),
+            ],
+            "black_friday_suplemento_pool": [],
+            "sniper_pool": [],
+            "total_procesadas": 20,
+            "conteo_por_portal": {"Upway": 2, "Escapa": 1, "Sanferbike": 1},
+        }
+
+        daily_calls, beast_calls, hb_calls = [], [], []
+        with patch("main.BaseDatos", return_value=db_c), \
+             patch("main._recolectar_oportunidades", side_effect=lambda db, forzar_envio=False, telemetria=None: (
+                 telemetria.update(tel_fixture) if telemetria is not None else None,
+                 [(b_d1, 8.8, "OK"), (b_d2, 8.2, "OK")],
+             )[1]), \
+             patch("main.exportar_radar_mercado_md"), \
+             patch("main.enviar", side_effect=lambda b, *a, **kw: daily_calls.append(b.bici_id) or True), \
+             patch("main.enviar_informe_respaldo_black_friday", side_effect=lambda items, **kw: beast_calls.append([x[0].bici_id for x in items]) or True), \
+             patch("main.enviar_heartbeat", side_effect=lambda r: hb_calls.append("daily")), \
+             patch("main.enviar_heartbeat_black_friday", side_effect=lambda r: hb_calls.append("beast")), \
+             patch.object(cfg, "TELEGRAM_BOT_TOKEN_BLACK_FRIDAY", "999999:TEST_BF"):
+            # Pasada 1 normal (12:00): envía Daily + Beast + Heartbeats
+            ejecutar_busqueda(forzar_envio=False, modo_caza=False)
+            assert daily_calls == ["u-c1"]
+            assert len(beast_calls) == 1
+            assert hb_calls == ["daily", "beast"]
+
+            # Pasada 2 en --modo-caza sin cambios: 0 envíos y 0 Heartbeats (no rota u-c2 ni mam-4)
+            daily_calls.clear(); beast_calls.clear(); hb_calls.clear()
+            ejecutar_busqueda(forzar_envio=False, modo_caza=True)
+            assert daily_calls == []
+            assert beast_calls == []
+            assert hb_calls == []
+
+        # Verificar lock de concurrencia activo vs expirado (>15 min)
+        lock_file = Path(cfg.BASE_DIR) / "cache" / "buscador_test_lock.lock"
+        lock_file.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            lock_file.write_text("99999", encoding="utf-8")
+            with patch("main.LOCK_FILE_PATH", lock_file), \
+                 patch("main._recolectar_oportunidades", side_effect=AssertionError("No debe correr si hay lock activo")):
+                ejecutar_busqueda(forzar_envio=False, modo_caza=True)
+
+            # Expirar mtime (> 15 min) -> limpia lock huérfano y ejecuta normalmente
+            old_ts = time.time() - cfg.BUSCADOR_LOCK_STALE_SEG - 30
+            os.utime(lock_file, (old_ts, old_ts))
+            ran = []
+            with patch("main.LOCK_FILE_PATH", lock_file), \
+                 patch("main.BaseDatos", return_value=db_c), \
+                 patch("main._recolectar_oportunidades", side_effect=lambda db, **kw: (ran.append(True), [])[1]), \
+                 patch("main.exportar_radar_mercado_md"), \
+                 patch("main.enviar_heartbeat"), \
+                 patch("main.enviar_heartbeat_black_friday"):
+                ejecutar_busqueda(forzar_envio=False, modo_caza=True)
+            assert ran == [True]
+            assert not lock_file.exists()
+        finally:
+            if lock_file.exists():
+                lock_file.unlink()
+    finally:
+        if os.path.exists(ruta_c):
+            os.unlink(ruta_c)
+
+
+def test_modo_caza_dispara_al_instante_en_reposicion_o_bajada():
+    """S4: Verifica caché fresca 45 min, invalidación por precio/PVP y disparo inmediato ante novedad/bajada en --modo-caza."""
+    import time
+    from gemini_classifier import enriquecer_y_valorar_bici
+    from main import ejecutar_busqueda
+    from scrapers.enriquecedor_web import _extraer_desde_ficha_sitio
+
+    # 1. TTL de 45 min en modo caza detecta reposición Talla L -> Talla M; cambio de precio invalida al instante
+    mem_cache = {}
+    html_l = (
+        "<html><body><main><h1>Scott Lumen</h1><p>Peso: 17,6 kg.</p>"
+        "<div class='product-variants-item'><span class='control-label'>Talla</span><ul>"
+        "<li><span class='radio-label'>L</span></li></ul></div></main></body></html>"
+    )
+    html_m = html_l.replace(">L<", ">M<")
+    url_f = "https://www.sanferbike.com/es/scott-lumen-910.html"
+    with patch("scrapers.enriquecedor_web._buscar_en_cache", side_effect=lambda k: mem_cache.get(k)), \
+         patch("scrapers.enriquecedor_web._guardar_en_cache", side_effect=lambda k, v: mem_cache.__setitem__(k, v)), \
+         patch("scrapers.enriquecedor_web.SCRAPLING_AVAILABLE", True), \
+         patch("scrapers.enriquecedor_web.Fetcher.get", side_effect=[
+             MagicMock(status=200, html_content=html_l),
+             MagicMock(status=200, html_content=html_m),
+             MagicMock(status=200, html_content=html_m),
+         ]) as m_fetch:
+        d1 = _extraer_desde_ficha_sitio(url_f, "Sanferbike", km_ya_conocido=True, precio_actual=3899.0, modo_caza=True)
+        assert d1.get("talla") == "L" and m_fetch.call_count == 1
+        # A los 46 min en modo caza (>45 min), re-consulta y capta Talla M
+        mem_cache[url_f]["cache_ts"] = int(time.time()) - (46 * 60)
+        d2 = _extraer_desde_ficha_sitio(url_f, "Sanferbike", km_ya_conocido=True, precio_actual=3899.0, modo_caza=True)
+        assert d2.get("talla") == "M" and m_fetch.call_count == 2
+        # Con solo 2 min pero cambio de precio en listado (3899 -> 3499), re-consulta al instante
+        d3 = _extraer_desde_ficha_sitio(url_f, "Sanferbike", km_ya_conocido=True, precio_actual=3499.0, modo_caza=True)
+        assert d3.get("talla") == "M" and m_fetch.call_count == 3
+
+    # 2. Caché IA invalida si cambia pvp_original
+    b_pvp = bici_prueba(
+        sitio="Wallapop", bici_id="w-pvp-chg", titulo="Scott Lumen eRIDE 910",
+        precio=3000.0, pvp_original=6500.0, km=500, peso_kg=17.5, bateria_wh=520, suspension_trasera="si",
+    )
+    cache_ia_pvp = {
+        "perito_v6_xc:Wallapop:w-pvp-chg:3000": {
+            "talla": "M", "modalidad": "XC", "peso_kg": 17.5, "bateria_wh": 520,
+            "km": 500, "pvp_original_int": 0, "recorrido_mm": 130, "suspension_trasera": "si", "desglose": "Old",
+        }
+    }
+    with patch("gemini_classifier.enriquecer_bici", side_effect=lambda b, **kw: b), \
+         patch("gemini_classifier.completar_desde_duckduckgo", side_effect=lambda b: b), \
+         patch("gemini_classifier._cargar_cache_ia", return_value=cache_ia_pvp), \
+         patch("gemini_classifier._guardar_entrada_cache_ia"), \
+         patch("gemini_classifier._llamar_gemini_api", return_value={"peso_kg": 17.5, "modalidad": "XC"}) as m_gem:
+        enriquecer_y_valorar_bici(b_pvp)
+        assert m_gem.call_count == 1
+
+    # 3. En --modo-caza, un nuevo #1 en Daily o bajada de precio dispara alerta al instante (sin Heartbeat)
+    fd_d, ruta_d = tempfile.mkstemp(suffix=".db")
+    os.close(fd_d)
+    try:
+        db_d = BaseDatos(ruta=ruta_d)
+        b_old = bici_prueba(sitio="Upway", bici_id="u-old", titulo="Orbea Rise M20", precio=2800.0, peso_kg=18.5, km=900, modalidad="XC", recorrido_mm=130, suspension_trasera="si")
+        b_new_top = bici_prueba(sitio="Upway", bici_id="u-new", titulo="Scott Lumen eRIDE 900", precio=2650.0, pvp_original=6000.0, peso_kg=16.5, km=300, modalidad="XC", recorrido_mm=130, suspension_trasera="si")
+        db_d.registrar(b_old, 8.2)
+        db_d.registrar_analisis(
+            top3_ids=["u-old"], enviados_ids=["u-old"],
+            estado_portales={"Upway": {"top1_id": "u-old", "enviado_id": "u-old", "posicion": 1}},
+        )
+
+        env_caza, hb_caza = [], []
+        with patch("main.BaseDatos", return_value=db_d), \
+             patch("main._recolectar_oportunidades", side_effect=lambda db, forzar_envio=False, telemetria=None: (
+                 telemetria.update({"black_friday_pool": [], "black_friday_respaldo_pool": [], "black_friday_suplemento_pool": [], "sniper_pool": [], "total_procesadas": 1, "conteo_por_portal": {"Upway": 1}})
+                 if telemetria is not None else None,
+                 [(b_new_top, 9.2, "Top"), (b_old, 8.2, "Old")],
+             )[1]), \
+             patch("main.exportar_radar_mercado_md"), \
+             patch("main.enviar", side_effect=lambda b, *a, **kw: env_caza.append(b.bici_id) or True), \
+             patch("main.enviar_heartbeat", side_effect=lambda r: hb_caza.append(True)), \
+             patch("main.enviar_heartbeat_black_friday", side_effect=lambda r: hb_caza.append(True)):
+            ejecutar_busqueda(forzar_envio=False, modo_caza=True)
+        assert env_caza == ["u-new"]
+        assert hb_caza == []
+    finally:
+        if os.path.exists(ruta_d):
+            os.unlink(ruta_d)
+
+
 if __name__ == "__main__":
     test_pasa_filtros_valida()
     test_descarta_talla_no_m()
@@ -4025,4 +4201,6 @@ if __name__ == "__main__":
     test_bh_segundo_plano_y_excepcion_irrechazable()
     test_sniper_rescata_ocasion_premium_y_bloquea_bh_ordinaria()
     test_es_mega_chollo_no_silencia_rango_3200_3500()
+    test_modo_caza_sin_cambios_no_envia_spam_ni_heartbeat()
+    test_modo_caza_dispara_al_instante_en_reposicion_o_bajada()
     print("Todas las pruebas pasaron (GREEN).")

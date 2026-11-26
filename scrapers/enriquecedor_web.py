@@ -40,6 +40,7 @@ except Exception:
     obtener_html_requests_simple = lambda url, timeout=15: None
 
 FICHA_TIENDA_TTL_SEG = 6 * 3600
+FICHA_TIENDA_TTL_CAZA_SEG = getattr(cfg, "FICHA_TIENDA_TTL_CAZA_SEG", 45 * 60)
 
 
 import threading
@@ -347,7 +348,13 @@ def _extraer_tallas_disponibles_ficha(soup: BeautifulSoup) -> Tuple[Optional[str
     return None, True
 
 
-def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str, km_ya_conocido: bool = False) -> dict:
+def _extraer_desde_ficha_sitio(
+    url: str,
+    sitio_nombre: str,
+    km_ya_conocido: bool = False,
+    precio_actual: Optional[float] = None,
+    modo_caza: Optional[bool] = None,
+) -> dict:
     """
     Entra a la ficha de producto del sitio y extrae los campos que pueda:
     talla, bateria_wh, km, motor, cuadro_material, ano, peso_kg,
@@ -356,6 +363,12 @@ def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str, km_ya_conocido: bool
     """
     detalle: dict = {}
     es_tienda_nueva_ficha = cfg.es_sitio_tienda_nueva(sitio_nombre, url)
+    modo_caza_activo = bool(modo_caza) if modo_caza is not None else bool(getattr(cfg, "MODO_CAZA_BF", False))
+    ttl_seg = (
+        getattr(cfg, "FICHA_TIENDA_TTL_CAZA_SEG", FICHA_TIENDA_TTL_CAZA_SEG)
+        if modo_caza_activo
+        else FICHA_TIENDA_TTL_SEG
+    )
     url_fetch = url.split("#")[0] if "#" in url else url
     cache_key = url_fetch if es_tienda_nueva_ficha else url
     usar_requests_directo = "escapa.com" in url_fetch.lower()
@@ -368,14 +381,20 @@ def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str, km_ya_conocido: bool
         tiene_km_cache = _normalizar_km_existente(cache_hit.get("km")) is not None
         vision_ya_verificada = bool(cache_hit.get("km_vision_checked"))
         cache_ts = cache_hit.get("cache_ts")
-        stock_fresco = (
+        precio_cached = cache_hit.get("cache_precio")
+        precio_cambio = (
+            precio_actual is not None
+            and precio_cached is not None
+            and abs(float(precio_actual) - float(precio_cached)) >= 1.0
+        )
+        stock_fresco = (not precio_cambio) and (
             not es_tienda_nueva_ficha
-            or (isinstance(cache_ts, (int, float)) and (time.time() - cache_ts) <= FICHA_TIENDA_TTL_SEG)
+            or (isinstance(cache_ts, (int, float)) and (time.time() - cache_ts) <= ttl_seg)
         )
         if stock_fresco and (km_ya_conocido or tiene_km_cache or vision_ya_verificada or not cfg.GEMINI_API_KEY):
             log.info(f"[Caché] Ficha ya consultada: {cache_key} -> {list(cache_hit.keys())}")
             return dict(cache_hit)
-        log.info(f"[Caché] Re-analizando ficha (stock/km actualizado): {cache_key}")
+        log.info(f"[Caché] Re-analizando ficha (stock/km/precio actualizado): {cache_key}")
 
     html: Optional[str] = None
     if usar_requests_directo:
@@ -582,6 +601,8 @@ def _extraer_desde_ficha_sitio(url: str, sitio_nombre: str, km_ya_conocido: bool
     if detalle:
         detalle_cache = dict(detalle)
         detalle_cache["cache_ts"] = int(time.time())
+        if precio_actual is not None:
+            detalle_cache["cache_precio"] = float(precio_actual)
         _guardar_en_cache(cache_key, detalle_cache)
 
     return detalle
@@ -1501,6 +1522,7 @@ def enriquecer_bici(
     bici: Bicicleta,
     url_ficha: Optional[str] = None,
     usar_duckduckgo: bool = True,
+    modo_caza: Optional[bool] = None,
 ) -> Bicicleta:
     """
     Intenta completar datos faltantes de una bici.
@@ -1562,6 +1584,8 @@ def enriquecer_bici(
                 url_ficha,
                 bici.sitio,
                 km_ya_conocido=(bici.km is not None),
+                precio_actual=getattr(bici, "precio", None),
+                modo_caza=modo_caza,
             )
             if detalle:
                 bici = _aplicar_detalle(bici, detalle)

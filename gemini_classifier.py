@@ -1017,6 +1017,8 @@ def completar_con_catalogo(bici: Bicicleta, aplicar_heuristica_peso: bool = True
         if any(p in texto for p in entrada["patrones"]):
             if bici.peso_kg is None:
                 bici.peso_kg = entrada["peso_kg"]
+            if entrada.get("peso_kg") is not None:
+                bici._peso_catalogo = True
             if bici.bateria_wh is None:
                 base_bat = entrada["bateria_wh_default"]
                 if bici.range_extender_wh is not None and base_bat <= 600:
@@ -1609,12 +1611,14 @@ def enriquecer_y_valorar_bici(bici: Bicicleta) -> Tuple[Bicicleta, float, str]:
     # Verificar caché de valoración IA (perito_v6_xc: XC <= 130 mm estricto)
     cache_version = "perito_v6_xc"
     cache_key = f"{cache_version}:{bici.sitio}:{bici.bici_id}:{int(bici.precio)}"
+    pvp_actual_int = int(getattr(bici, "pvp_original", 0) or 0)
     cache_ia = _cargar_cache_ia()
     if cache_key in cache_ia:
         entry = cache_ia[cache_key]
         km_cambio = entry.get("km") != bici.km
         peso_corregido = (bici.peso_kg is not None and entry.get("peso_kg") != bici.peso_kg)
-        if not km_cambio and not peso_corregido:
+        pvp_cambio = ("pvp_original_int" in entry and entry.get("pvp_original_int") != pvp_actual_int)
+        if not km_cambio and not peso_corregido and not pvp_cambio:
             for campo in ("talla", "modalidad", "peso_kg", "bateria_wh", "range_extender_wh",
                           "bateria_salud_pct", "bateria_ciclos", "cuadro_material",
                           "motor", "ano", "componentes", "suspension_trasera", "recorrido_mm"):
@@ -1834,6 +1838,7 @@ Verifica la aritmética antes de responder y devuelve ÚNICAMENTE un objeto JSON
                 "motor": bici.motor,
                 "km": bici.km,
                 "ano": bici.ano,
+                "pvp_original_int": pvp_actual_int,
                 "componentes": bici.componentes,
                 "suspension_trasera": bici.suspension_trasera,
                 "recorrido_mm": bici.recorrido_mm,

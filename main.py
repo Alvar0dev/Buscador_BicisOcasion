@@ -10,13 +10,64 @@ Ejecucion diaria a las 12:00 con schedule + while True (S10).
 """
 
 import argparse
+import os
 import schedule
 import time
 import logging
+from contextlib import contextmanager
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+LOCK_FILE_PATH: Path = Path(__file__).resolve().parent / "cache" / "buscador.lock"
+
+
+@contextmanager
+def _adquirir_lock_ejecucion(
+    lock_path: Optional[Path] = None,
+    stale_seg: Optional[int] = None,
+):
+    """
+    Evita ejecuciones concurrentes (p. ej. tarea diaria 12:00 vs --modo-caza cada 2h)
+    mediante creación atómica de fichero lock con expiración segura para locks huérfanos.
+    """
+    ruta = Path(lock_path) if lock_path is not None else LOCK_FILE_PATH
+    timeout_stale = int(stale_seg if stale_seg is not None else getattr(cfg, "BUSCADOR_LOCK_STALE_SEG", 15 * 60))
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    adquirido = False
+
+    for intento in range(2):
+        try:
+            fd = os.open(str(ruta), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                os.write(fd, f"{os.getpid()}|{int(time.time())}".encode("utf-8"))
+            finally:
+                os.close(fd)
+            adquirido = True
+            break
+        except FileExistsError:
+            try:
+                edad_seg = time.time() - ruta.stat().st_mtime
+                if edad_seg > timeout_stale and intento == 0:
+                    logger.warning(
+                        f"[Lock] Lock huérfano expirado ({edad_seg:.0f}s > {timeout_stale}s) en {ruta}; limpiando."
+                    )
+                    ruta.unlink(missing_ok=True)
+                    continue
+            except OSError:
+                pass
+            logger.warning(f"[Lock] Otra instancia en ejecución ({ruta}); abortando pasada para evitar colisión.")
+            break
+
+    try:
+        yield adquirido
+    finally:
+        if adquirido:
+            try:
+                ruta.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 import config as cfg
 from config import SITIOS, HORA_EJECUCION, NOTA_MIN_NOTIFICAR, NOTA_MIN_AGUARDAR, TOP_N_NOTIFICAR
@@ -965,6 +1016,7 @@ def _despachar_alertas_black_friday(
     estado_beast_previo: Optional[dict] = None,
     estado_extra: Optional[dict] = None,
     omitir_enviadas: bool = False,
+    modo_caza: bool = False,
 ) -> int:
     """
     Envía las mejores nuevas y seminuevas (hasta 3 por defecto) al bot Black Bike Beast:
@@ -1061,6 +1113,36 @@ def _despachar_alertas_black_friday(
             or not db.debe_reenviarse_black_friday(replace(b, bici_id=f"respaldo:{b.bici_id}"))
             or db.fue_enviada_black_friday_equivalente(b)
         )
+
+    nuevas_items_caza = [x for x in pool_beast if not _ya_mostrada(x["bici"])]
+    if modo_caza and not forzar_envio:
+        def _bajada_beast_50(b) -> bool:
+            for bid in (b.bici_id, f"respaldo:{b.bici_id}"):
+                prev_p = db.precio_previo_black_friday(bid)
+                if prev_p is not None and float(b.precio) <= float(prev_p) - 50.0:
+                    return True
+            return False
+
+        hay_bajada_50 = any(_bajada_beast_50(x["bici"]) for x in pool_beast)
+        hay_estricta_nueva = any(
+            x["kind"] == "strict"
+            and db.debe_reenviarse_black_friday(x["bici"])
+            and not db.fue_enviada_black_friday_equivalente(x["bici"])
+            for x in pool_beast
+        )
+        hay_entrada_nueva = (
+            bool(set(pool_ids) - set(prev_pool_ids))
+            if prev_pool_ids
+            else bool(nuevas_items_caza or hay_estricta_nueva)
+        )
+        if not (hay_estricta_nueva or hay_entrada_nueva or hay_bajada_50):
+            logger.info("[Modo Caza] Beast sin novedades ni bajadas >= 50 €; se omite rotación y spam.")
+            if estado_extra is not None:
+                estado_extra["estrictas_enviadas"] = 0
+                estado_extra["respaldo_enviado"] = False
+                estado_extra["respaldo_count"] = 0
+                estado_extra["misma_busqueda"] = True
+            return 0
 
     seleccion_beast = []
     if misma_busqueda or omitir_enviadas:
@@ -1207,10 +1289,37 @@ def _despachar_alertas_black_friday(
     return estrictas_enviadas + (len(informe_items) if respaldo_enviado else 0)
 
 
-def ejecutar_busqueda(forzar_envio: bool = False, omitir_enviadas: bool = False) -> None:
+def ejecutar_busqueda(
+    forzar_envio: bool = False,
+    omitir_enviadas: bool = False,
+    modo_caza: Optional[bool] = None,
+) -> None:
     """Ejecuta una pasada completa de búsqueda, valoración pericial y entrega 1 opción por página."""
+    modo_caza_activo = bool(modo_caza) if modo_caza is not None else bool(getattr(cfg, "MODO_CAZA_BF", False))
+    modo_caza_prev = getattr(cfg, "MODO_CAZA_BF", False)
+    with _adquirir_lock_ejecucion() as lock_ok:
+        if not lock_ok:
+            return
+        cfg.MODO_CAZA_BF = modo_caza_activo
+        try:
+            _ejecutar_busqueda_interna(
+                forzar_envio=forzar_envio,
+                omitir_enviadas=omitir_enviadas,
+                modo_caza_activo=modo_caza_activo,
+            )
+        finally:
+            cfg.MODO_CAZA_BF = modo_caza_prev
+
+
+def _ejecutar_busqueda_interna(
+    forzar_envio: bool = False,
+    omitir_enviadas: bool = False,
+    modo_caza_activo: bool = False,
+) -> None:
+    """Núcleo protegido por lock de ejecución de una pasada completa del buscador."""
     t_inicio = time.time()
-    logger.info(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Iniciando búsqueda de e-MTB...")
+    modo_label = " [MODO CAZA]" if modo_caza_activo else ""
+    logger.info(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Iniciando búsqueda de e-MTB{modo_label}...")
 
     db = BaseDatos()
     telemetria_ejecucion: Dict[str, Any] = {}
@@ -1280,6 +1389,20 @@ def ejecutar_busqueda(forzar_envio: bool = False, omitir_enviadas: bool = False)
             ret_top1 = entry["retorno_top1"]
             precio_anterior = db.precio_previo(bici.bici_id)
             seguimiento = db.obtener_seguimiento(bici.bici_id)
+            if modo_caza_activo and not forzar_envio:
+                prev_portal = estado_portales_previo.get(sitio_entry)
+                es_bajada_real = db.ya_enviada(bici.bici_id) and db.debe_reenviarse(bici, nota)
+                es_entrada_vig = bool(seguimiento and seguimiento.get("entrada_desde_vigilancia"))
+                supera_top1_previo = (
+                    not es_rot2
+                    and not ret_top1
+                    and (
+                        prev_portal is None
+                        or (prev_portal.get("top1_id") != bici.bici_id and db.debe_reenviarse(bici, nota))
+                    )
+                )
+                if not (supera_top1_previo or es_entrada_vig or es_bajada_real):
+                    continue
             es_mega = es_mega_chollo(bici, nota)
             tag_mega = " [💥 MEGA CHOLLO]" if es_mega else ""
 
@@ -1331,20 +1454,22 @@ def ejecutar_busqueda(forzar_envio: bool = False, omitir_enviadas: bool = False)
         estado_beast_previo=estado_portales_previo.get("__beast__"),
         estado_extra=bf_estado_envio,
         omitir_enviadas=omitir_enviadas,
+        modo_caza=modo_caza_activo,
     )
     if "beast_estado" in bf_estado_envio:
         estado_portales_confirmado["__beast__"] = bf_estado_envio["beast_estado"]
-    db.registrar_analisis(
-        top3_ids=top1_ids_por_portal,
-        enviados_ids=enviados_ids,
-        offset_usado=0,
-        repetido=aviso_top_repetido,
-        estado_portales=estado_portales_confirmado,
-    )
+    if (not modo_caza_activo) or enviados_ids or ("beast_estado" in bf_estado_envio):
+        db.registrar_analisis(
+            top3_ids=top1_ids_por_portal,
+            enviados_ids=enviados_ids,
+            offset_usado=0,
+            repetido=aviso_top_repetido,
+            estado_portales=estado_portales_confirmado,
+        )
     stats_radar = db.obtener_estadisticas_mercado()
 
-    # Heartbeat a Telegram: si está configurado, o si se forzó la búsqueda
-    if cfg.TELEGRAM_HEARTBEAT or forzar_envio:
+    # Heartbeat a Telegram: omitido en --modo-caza para evitar ruido cada 2h (se envía a las 12:00 o --forzar)
+    if (not modo_caza_activo and cfg.TELEGRAM_HEARTBEAT) or forzar_envio:
         resumen_hb = {
             "fecha_hora": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "duracion_seg": duracion_seg,
@@ -1446,6 +1571,11 @@ def main() -> None:
         help="Omite los resultados ya enviados y notifica las siguientes opciones más interesantes (< 21 kg, > 500 Wh).",
     )
     parser.add_argument(
+        "--modo-caza",
+        action="store_true",
+        help="Modo caza Black Friday/Cyber Monday: caché fresca 45 min, cero rotaciones/Heartbeats repetidos y alertas inmediatas ante novedades/bajadas.",
+    )
+    parser.add_argument(
         "--stats",
         "--radar",
         action="store_true",
@@ -1485,7 +1615,11 @@ def main() -> None:
         return
 
     if args.once:
-        ejecutar_busqueda(forzar_envio=args.forzar, omitir_enviadas=args.omitir_enviadas)
+        ejecutar_busqueda(
+            forzar_envio=args.forzar,
+            omitir_enviadas=args.omitir_enviadas,
+            modo_caza=True if args.modo_caza else None,
+        )
         return
 
     logger.info(f"Buscador de e-MTB iniciado. Ejecucion diaria a las {HORA_EJECUCION}.")

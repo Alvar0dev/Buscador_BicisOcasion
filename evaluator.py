@@ -1124,8 +1124,18 @@ def evaluar_chollo_sniper(
     if es_fp:
         return False, mot_fp
 
+    texto = f"{bici.titulo or ''} {bici.componentes or ''}"
+    es_oc = es_bici_de_ocasion(bici)
+    es_tienda_nueva = cfg.es_sitio_tienda_nueva(bici.sitio, bici.url, texto)
+    km = bici.km
+    km_semi = int(getattr(cfg, "KM_MAX_SEMINUEVA_BLACK_FRIDAY", 500))
+    es_nueva_o_semi = (not es_oc) and (
+        (km is not None and km <= km_semi)
+        or (es_tienda_nueva and km is None)
+    )
+
     peso_max = float(getattr(cfg, "SNIPER_PESO_MAX_KG", 20.5))
-    if getattr(bici, "_peso_estimado", False):
+    if getattr(bici, "_peso_estimado", False) and not (es_nueva_o_semi and getattr(bici, "_peso_catalogo", False)):
         return False, "Peso estimado sin dato oficial/báscula"
     if bici.peso_kg is None or bici.peso_kg > peso_max:
         return False, f"Peso > {peso_max} kg o no confirmado ({bici.peso_kg})"
@@ -1137,16 +1147,6 @@ def evaluar_chollo_sniper(
     dto = calcular_descuento_pvp_pct(bici)
     if es_bici_bh(bici) and not es_bh_irrechazable(bici, dto_pvp=dto):
         return False, "BH en segundo plano (no irrechazable)"
-
-    texto = f"{bici.titulo or ''} {bici.componentes or ''}"
-    es_oc = es_bici_de_ocasion(bici)
-    es_tienda_nueva = cfg.es_sitio_tienda_nueva(bici.sitio, bici.url, texto)
-    km = bici.km
-    km_semi = int(getattr(cfg, "KM_MAX_SEMINUEVA_BLACK_FRIDAY", 500))
-    es_nueva_o_semi = (not es_oc) and (
-        (km is not None and km <= km_semi)
-        or (es_tienda_nueva and km is None)
-    )
 
     max_nueva = float(getattr(cfg, "SNIPER_PRECIO_MAX_NUEVA_EUR", 3600.0))
     max_oc = float(getattr(cfg, "SNIPER_PRECIO_MAX_OCASION_EUR", 3500.0))

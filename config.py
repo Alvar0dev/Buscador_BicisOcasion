@@ -239,6 +239,11 @@ SNIPER_DTO_MIN_OCASION_PCT: float = 42.0
 SNIPER_PRECIO_ROMPEDOR_CARBONO_EUR: float = 2850.0
 SNIPER_BAJADA_FLASH_MIN_EUR: float = 150.0
 
+# Modo Caza Black Friday / Cyber Monday (--modo-caza o MODO_CAZA_BF=true)
+MODO_CAZA_BF: bool = os.getenv("MODO_CAZA_BF", "false").lower() in ("1", "true", "yes")
+FICHA_TIENDA_TTL_CAZA_SEG: int = 45 * 60
+BUSCADOR_LOCK_STALE_SEG: int = 15 * 60
+
 NOTA_MIN_AGUARDAR: float = 8.0  # Solo nota >= 8.0 pasa filtros estrictos (S8)
 NOTA_MIN_NOTIFICAR: float = 8.5  # Umbral para notificar por Telegram (fallback a Top N si ninguna llega)
 TOP_N_NOTIFICAR: int = 3  # Cantidad de bicicletas más interesantes a enviar por Telegram
