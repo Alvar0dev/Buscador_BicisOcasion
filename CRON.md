@@ -105,3 +105,12 @@ Register-ScheduledTask `
 
 > Nota 1: al mantener `BuscadorBiciOcasion` (12:00) y `BuscadorBiciOcasion_BlackFriday` en paralelo, el archivo lock atómico `cache/buscador.lock` (stale timeout 15 min) evita solapamientos si coinciden en el mismo minuto.
 > Nota 2: en Windows con el alias de Microsoft Store (`AppData\Local\Microsoft\WindowsApps\python.exe`), conviene pasar en `-Execute` la ruta directa del intérprete real (por ejemplo `C:\Users\alvar\AppData\Local\Python\pythoncore-3.15-64\python.exe`, tal como quedó registrado en producción) y entrecomillar `"G:\Proyectos OpenCode\Buscador BiciOcasion\main.py" --once --modo-caza` en `-Argument`.
+> Nota 3: `WakeToRun` solo reactiva el equipo desde **Modo de espera (S3)** (no desde apagado completo `Shutdown Off` / S5). Si el PC estuvo apagado durante la noche o acumuló `NumberOfMissedRuns > 0` al encenderlo, conviene lanzar manualmente `python main.py --once --modo-caza` para cubrir las franjas perdidas sin esperar al siguiente tick cada 2 h.
+
+### Limpieza post-campaña (después del `01/12/2026 01:00`)
+
+Una vez expirado `EndBoundary` tras Cyber Monday (`01/12/2026`), puedes deshabilitar o eliminar la tarea temporal manteniendo intacta `BuscadorBiciOcasion`:
+
+```powershell
+Unregister-ScheduledTask -TaskName "BuscadorBiciOcasion_BlackFriday" -Confirm:$false
+```
