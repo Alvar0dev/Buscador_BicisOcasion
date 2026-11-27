@@ -4453,6 +4453,48 @@ def test_umbrales_borde_bh_sniper_cache_y_lock():
     assert b_clean.talla == "M" and not hasattr(b_clean, "cache_precio")
 
 
+def test_auditoria_27nov_modelos_2027_full_power_y_focus_sam():
+    """TODO 3 (27/11): Bloquea modelos 2026/2027 Full Power/Enduro detectados en vivo (Megamo Ryal/Reason Air, Merida ETMO/eOne-Eighty, Focus Sam, Raymon railray)."""
+    from evaluator import es_full_power_o_pesada, pasa_prefiltro_respaldo_black_friday
+
+    modelos_fp = (
+        ("Sanferbike", "Bicicleta eléctrica MEGAMO Ryal 10 2027"),
+        ("Buhobike", "MEGAMO REASON AIR 05 29 T-M"),
+        ("Buhobike", "MERIDA ETMO 500 PRO 2026 BICICLETA ELÉCTRICA TRAIL"),
+        ("Buhobike", "MERIDA EONE EIGHTY 700 2025 BICICLETA ELÉCTRICA ENDURO"),
+        ("Upway", "Focus Sam 26.7"),
+        ("Upway", "Raymon railray 180 Pro"),
+    )
+    for sitio, titulo in modelos_fp:
+        b = bici_prueba(
+            sitio=sitio,
+            bici_id=f"fp-27nov-{titulo[:10]}",
+            titulo=titulo,
+            precio=3599.0,
+            pvp_original=5999.0,
+            km=0 if sitio in ("Sanferbike", "Buhobike") else 800,
+            peso_kg=None,
+            bateria_wh=800,
+            motor=None,
+            modalidad=None,
+            recorrido_mm=None,
+            suspension_trasera="si",
+        )
+        es_fp, _ = es_full_power_o_pesada(b)
+        assert es_fp is True, f"Debió bloquear Full Power/Enduro: {titulo}"
+        if sitio in ("Sanferbike", "Buhobike"):
+            ok_resp, _ = pasa_prefiltro_respaldo_black_friday(b)
+            assert ok_resp is False, f"Debió bloquear respaldo Beast para {titulo}"
+
+        b_cat = completar_con_catalogo(b, aplicar_heuristica_peso=False)
+        assert b_cat.peso_kg is not None and b_cat.peso_kg >= 21.0, f"Falta peso >= 21 kg en CATALOGO_EMTB para {titulo}: {b_cat.peso_kg}"
+
+    # No romper excepciones ligeras reales
+    for titulo_ok in ("Orbea Rise M20 2025", "Amflow PL Carbon 2025", "Cannondale Moterra Neo SL 2"):
+        b_ok = bici_prueba(sitio="Mammoth", titulo=titulo_ok, precio=3499.0, km=0, motor=None, peso_kg=None, bateria_wh=600, suspension_trasera="si")
+        assert es_full_power_o_pesada(b_ok)[0] is False, f"Falso positivo Full Power en ligera: {titulo_ok}"
+
+
 if __name__ == "__main__":
     import requests as _req
 
@@ -4512,4 +4554,5 @@ if __name__ == "__main__":
         test_modo_caza_no_respamea_entrada_desde_vigilancia_ni_omite_bajada_beast()
         test_sniper_no_filtra_clon_wallapop_en_segunda_pasada_cross_bucket()
         test_umbrales_borde_bh_sniper_cache_y_lock()
+        test_auditoria_27nov_modelos_2027_full_power_y_focus_sam()
         print("Todas las pruebas pasaron (GREEN).")
