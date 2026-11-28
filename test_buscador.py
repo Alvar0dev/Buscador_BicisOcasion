@@ -4495,6 +4495,244 @@ def test_auditoria_27nov_modelos_2027_full_power_y_focus_sam():
         assert es_full_power_o_pesada(b_ok)[0] is False, f"Falso positivo Full Power en ligera: {titulo_ok}"
 
 
+def test_prestashop_bicimarket_colores_y_boton_no_disponible():
+    """Valida bloqueo de button.add-to-cart 'No disponible' y chequeo color x M en PrestaShop."""
+    from bs4 import BeautifulSoup
+    from scrapers.enriquecedor_web import (
+        _extraer_disponibilidad_ficha,
+        _extraer_desde_ficha_sitio,
+        _variante_ps_m_en_stock,
+    )
+
+    # 1. _extraer_disponibilidad_ficha detecta button.add-to-cart 'No disponible' / disabled / clase / input
+    html_no_disp_sin_attr = """
+    <html><body><main>
+      <span id="product-availability">Envío de 2 a 6 días</span>
+      <button class="btn btn-primary add-to-cart">No disponible</button>
+    </main></body></html>
+    """
+    soup_no_disp = BeautifulSoup(html_no_disp_sin_attr, "html.parser")
+    assert _extraer_disponibilidad_ficha(soup_no_disp, soup_no_disp.get_text(" ", strip=True)) is False
+
+    html_btn_disabled = """
+    <html><body><main>
+      <button class="btn btn-primary add-to-cart" disabled="disabled">Añadir al carrito</button>
+    </main></body></html>
+    """
+    soup_dis = BeautifulSoup(html_btn_disabled, "html.parser")
+    assert _extraer_disponibilidad_ficha(soup_dis, soup_dis.get_text(" ", strip=True)) is False
+
+    soup_cls_dis = BeautifulSoup("<main><button class='add-to-cart disabled'>Comprar</button></main>", "html.parser")
+    assert _extraer_disponibilidad_ficha(soup_cls_dis, "Comprar") is False
+
+    soup_inp_no = BeautifulSoup("<main><input type='submit' data-button-action='add-to-cart' value='No disponible'/></main>", "html.parser")
+    assert _extraer_disponibilidad_ficha(soup_inp_no, "") is False
+
+    html_btn_ok = """
+    <html><body><main>
+      <button class="btn btn-primary add-to-cart">Comprar ahora</button>
+    </main></body></html>
+    """
+    soup_ok = BeautifulSoup(html_btn_ok, "html.parser")
+    assert _extraer_disponibilidad_ficha(soup_ok, soup_ok.get_text(" ", strip=True)) is True
+    assert _extraer_disponibilidad_ficha(BeautifulSoup("<main><p>Sin botón</p></main>", "html.parser"), "Sin botón") is True
+
+    # 1b. Regresión carrusel relacionados: un botón activo en carrusel NO enmascara un formulario principal agotado,
+    #     y _variante_ps_m_en_stock rechaza JSON vacío, fallback a talla L y m_val con comillas.
+    html_carrusel = """
+    <html><body>
+      <form id="add-to-cart-or-refresh">
+        <div class="product-variants-item"><span class="control-label">Tallas</span><ul>
+          <li><input type="radio" name="group[2]" value="20" checked="checked"/><span>M</span></li>
+        </ul></div>
+        <button class="btn btn-primary add-to-cart">No disponible</button>
+      </form>
+      <div class="related-products"><button class="btn btn-primary add-to-cart">Comprar ahora</button></div>
+    </body></html>
+    """
+    soup_car = BeautifulSoup(html_carrusel, "html.parser")
+    assert _extraer_disponibilidad_ficha(soup_car, soup_car.get_text(" ", strip=True)) is False
+    assert _variante_ps_m_en_stock({}, "20") is False
+    assert _variante_ps_m_en_stock({
+        "product_variants": (
+            "<div><input type='radio' name='group[2]' value='20'/><span>M</span>"
+            "<input type='radio' name='group[2]' value='21' checked='checked'/><span>L</span></div>"
+        ),
+        "product_add_to_cart": "<button class='add-to-cart'>Comprar ahora</button>",
+    }, "20") is False
+    assert _variante_ps_m_en_stock({
+        "product_variants": "<div><input type='radio' name='group[2]' value=\"20'x\" checked='checked'/><span>M</span></div>",
+        "product_add_to_cart": "<button class='add-to-cart'>Comprar ahora</button>",
+    }, "20'x") is True
+
+    # 2. Bicimarket 54681-like: ningún color tiene talla M disponible (incl. carrusel con 'Comprar ahora')
+    html_bm_54681 = """
+    <html><body><main><h1>BH iLynx Trail Carbon 8.7</h1>
+      <p>Motor BH 2EXMAG 540Wh. Recorrido 150 mm. Cuadro Carbono.</p>
+      <form id="add-to-cart-or-refresh" action="https://www.bicimarket.com/es/carrito">
+        <input type="hidden" name="token" value="tok123"/>
+        <input type="hidden" name="id_product" value="54681"/>
+        <div class="product-variants">
+          <div class="product-variants-item grupo-1">
+            <span class="control-label">Colores</span>
+            <ul>
+              <li class="input-container"><input class="input-color" type="radio" name="group[1]" value="2" checked="checked"/><span class="sr-only">rojo</span></li>
+              <li class="input-container"><input class="input-color" type="radio" name="group[1]" value="8"/><span class="sr-only">negro</span></li>
+            </ul>
+          </div>
+          <div class="product-variants-item grupo-2">
+            <span class="control-label">Tallas</span>
+            <ul>
+              <li class="input-container"><input class="input-radio disabled" type="radio" name="group[2]" value="20"/><span class="radio-label">M</span></li>
+              <li class="input-container"><input class="input-radio" type="radio" name="group[2]" value="21" checked="checked"/><span class="radio-label">L</span></li>
+            </ul>
+          </div>
+        </div>
+        <button class="btn btn-primary add-to-cart">No disponible</button>
+      </form>
+      <div class="related-products"><button class="btn btn-primary add-to-cart">Comprar ahora</button></div>
+    </main></body></html>
+    """
+
+    def _ajax_sin_stock_m(_url, payload):
+        return {
+            "product_variants": (
+                "<div class='product-variants-item grupo-2'><ul>"
+                "<li class='input-container'><input class='input-radio' type='radio' name='group[2]' value='20' checked='checked'/><span>M</span></li>"
+                "<li class='input-container'><input class='input-radio' type='radio' name='group[2]' value='21'/><span>L</span></li>"
+                "</ul></div>"
+            ),
+            "product_add_to_cart": "<button class='btn btn-primary add-to-cart' disabled>No disponible</button>",
+        }
+
+    mem_cache_1 = {}
+    with patch("scrapers.enriquecedor_web._buscar_en_cache", side_effect=lambda k: mem_cache_1.get(k)), \
+         patch("scrapers.enriquecedor_web._guardar_en_cache", side_effect=lambda k, v: mem_cache_1.__setitem__(k, v)), \
+         patch("scrapers.enriquecedor_web.SCRAPLING_AVAILABLE", True), \
+         patch("scrapers.enriquecedor_web.Fetcher.get", return_value=MagicMock(status=200, html_content=html_bm_54681)), \
+         patch("scrapers.enriquecedor_web._post_prestashop_refresh", side_effect=_ajax_sin_stock_m):
+        det_54681 = _extraer_desde_ficha_sitio("https://www.bicimarket.com/es/54681.html", "Bicimarket", km_ya_conocido=True, precio_actual=3499.0)
+        assert det_54681.get("talla") == "L"
+
+    # Si solo existe M y ningún color la tiene comprable, disponible debe ser False
+    html_solo_m = html_bm_54681.replace(
+        '<li class="input-container"><input class="input-radio" type="radio" name="group[2]" value="21" checked="checked"/><span class="radio-label">L</span></li>',
+        "",
+    )
+    mem_cache_1b = {}
+    with patch("scrapers.enriquecedor_web._buscar_en_cache", side_effect=lambda k: mem_cache_1b.get(k)), \
+         patch("scrapers.enriquecedor_web._guardar_en_cache", side_effect=lambda k, v: mem_cache_1b.__setitem__(k, v)), \
+         patch("scrapers.enriquecedor_web.SCRAPLING_AVAILABLE", True), \
+         patch("scrapers.enriquecedor_web.Fetcher.get", return_value=MagicMock(status=200, html_content=html_solo_m)), \
+         patch("scrapers.enriquecedor_web._post_prestashop_refresh", side_effect=_ajax_sin_stock_m):
+        det_solo_m = _extraer_desde_ficha_sitio("https://www.bicimarket.com/es/54681b.html", "Bicimarket", km_ya_conocido=True, precio_actual=3499.0)
+        assert det_solo_m.get("disponible") is False
+
+    # 3. Bicimarket 54682 / 58720-like: color por defecto (negro) sin M ni stock (#product-availability Agotado + btn No disponible),
+    #    pero color secundario (rojo) SÍ tiene M ('Comprar ahora') -> rescata talla M y disponible != False
+    html_bm_otro_color = (
+        html_bm_54681.replace('value="54681"', 'value="54682"')
+        .replace('value="2" checked="checked"', 'value="2"')
+        .replace('value="8"/>', 'value="8" checked="checked"/><span id="product-availability">Producto agotado</span>')
+    )
+
+    def _ajax_rojo_ok(_url, payload):
+        if payload.get("group[1]") == "2":  # rojo
+            return {
+                "product_variants": (
+                    "<div class='product-variants-item grupo-2'><ul>"
+                    "<li class='input-container'><input class='input-radio' type='radio' name='group[2]' value='20' checked='checked'/><span>M</span></li>"
+                    "<li class='input-container'><input class='input-radio' type='radio' name='group[2]' value='21'/><span>L</span></li>"
+                    "</ul></div>"
+                ),
+                "product_add_to_cart": "<button class='btn btn-primary add-to-cart'>Comprar ahora</button>",
+            }
+        return _ajax_sin_stock_m(_url, payload)
+
+    mem_cache_2 = {}
+    with patch("scrapers.enriquecedor_web._buscar_en_cache", side_effect=lambda k: mem_cache_2.get(k)), \
+         patch("scrapers.enriquecedor_web._guardar_en_cache", side_effect=lambda k, v: mem_cache_2.__setitem__(k, v)), \
+         patch("scrapers.enriquecedor_web.SCRAPLING_AVAILABLE", True), \
+         patch("scrapers.enriquecedor_web.Fetcher.get", return_value=MagicMock(status=200, html_content=html_bm_otro_color)), \
+         patch("scrapers.enriquecedor_web._post_prestashop_refresh", side_effect=_ajax_rojo_ok):
+        det_54682 = _extraer_desde_ficha_sitio("https://www.bicimarket.com/es/54682.html", "Bicimarket", km_ya_conocido=True, precio_actual=3999.0)
+        assert det_54682.get("talla") == "M" and det_54682.get("disponible") is not False
+
+    # 4. Fabregues allow_oosp: aunque product_add_to_cart diga 'Añadir al carrito', attribute-not-in-stock sigue excluyendo MD
+    html_fab_oosp = """
+    <html><body><main><h1>BH iLynx Trail 8.0</h1>
+      <form id="add-to-cart-or-refresh" action="https://fabreguesbicicletas.com/es/carrito">
+        <input type="hidden" name="token" value="tokf"/>
+        <input type="hidden" name="id_product" value="682746"/>
+        <div class="product-variants">
+          <div class="product-variants-item"><span class="control-label">Colores</span><ul>
+            <li class="input-container"><input class="input-color" type="radio" name="group[6]" value="1" checked="checked"/><span>NEGRO</span></li>
+            <li class="input-container"><input class="input-color" type="radio" name="group[6]" value="2"/><span>ROJO</span></li>
+          </ul></div>
+          <div class="product-variants-item"><span class="control-label">Talla</span><ul>
+            <li class="input-container attribute-not-in-stock"><input class="input-radio" type="radio" name="group[4]" value="130"/><span>MD</span></li>
+            <li class="input-container"><input class="input-radio" type="radio" name="group[4]" value="131" checked="checked"/><span>LA</span></li>
+          </ul></div>
+        </div>
+        <button class="btn btn-primary add-to-cart">Añadir al carrito</button>
+      </form>
+    </main></body></html>
+    """
+
+    def _ajax_fab_oosp(_url, payload):
+        return {
+            "product_variants": (
+                "<div class='product-variants-item'><ul>"
+                "<li class='input-container attribute-not-in-stock'><input class='input-radio' type='radio' name='group[4]' value='130' checked='checked'/><span>MD</span></li>"
+                "<li class='input-container'><input class='input-radio' type='radio' name='group[4]' value='131'/><span>LA</span></li>"
+                "</ul></div>"
+            ),
+            "product_add_to_cart": "<button class='btn btn-primary add-to-cart'>Añadir al carrito</button>",
+        }
+
+    mem_cache_3 = {}
+    with patch("scrapers.enriquecedor_web._buscar_en_cache", side_effect=lambda k: mem_cache_3.get(k)), \
+         patch("scrapers.enriquecedor_web._guardar_en_cache", side_effect=lambda k, v: mem_cache_3.__setitem__(k, v)), \
+         patch("scrapers.enriquecedor_web.SCRAPLING_AVAILABLE", True), \
+         patch("scrapers.enriquecedor_web.Fetcher.get", return_value=MagicMock(status=200, html_content=html_fab_oosp)), \
+         patch("scrapers.enriquecedor_web._post_prestashop_refresh", side_effect=_ajax_fab_oosp):
+        det_fab = _extraer_desde_ficha_sitio("https://fabreguesbicicletas.com/es/682746", "Fabregues", km_ya_conocido=True, precio_actual=3654.0)
+        assert det_fab.get("talla") == "L"
+
+    # 5. Fast-path Sanferbike (data-qty-41='0' en color por defecto + btn 'No disponible' pero data-qty-42='2' > 0): 0 Ajax y disponible
+    html_sf_qty = html_bm_54681.replace('value="20"/>', 'value="20" data-qty-41="0" data-qty-42="2"/>')
+    mem_cache_4 = {}
+    with patch("scrapers.enriquecedor_web._buscar_en_cache", side_effect=lambda k: mem_cache_4.get(k)), \
+         patch("scrapers.enriquecedor_web._guardar_en_cache", side_effect=lambda k, v: mem_cache_4.__setitem__(k, v)), \
+         patch("scrapers.enriquecedor_web.SCRAPLING_AVAILABLE", True), \
+         patch("scrapers.enriquecedor_web.Fetcher.get", return_value=MagicMock(status=200, html_content=html_sf_qty)), \
+         patch("scrapers.enriquecedor_web._post_prestashop_refresh") as m_post:
+        det_sf = _extraer_desde_ficha_sitio("https://www.sanferbike.com/es/123.html", "Sanferbike", km_ya_conocido=True, precio_actual=3524.0)
+        assert m_post.call_count == 0 and det_sf.get("talla") == "M" and det_sf.get("disponible") is not False
+
+    # 6. PrestaShop monocolor con talla S agotada seleccionada por defecto (btn 'No disponible') pero M disponible sin marcar,
+    #    más fast-path con badge agotado dentro de .related-products sin falsos positivos
+    html_monocolor_s = """
+    <html><body><main><h1>Orbea Rise SL H30</h1>
+      <form id="add-to-cart-or-refresh">
+        <div class="product-variants-item"><span class="control-label">Talla</span><ul>
+          <li><input class="input-radio disabled" type="radio" name="group[2]" value="19" checked="checked"/><span>S</span></li>
+          <li><input class="input-radio" type="radio" name="group[2]" value="20"/><span>M</span></li>
+        </ul></div>
+        <button class="btn btn-primary add-to-cart" disabled>No disponible</button>
+      </form>
+      <div class="related-products"><span class="out-of-stock">Agotado</span></div>
+    </main></body></html>
+    """
+    mem_cache_5 = {}
+    with patch("scrapers.enriquecedor_web._buscar_en_cache", side_effect=lambda k: mem_cache_5.get(k)), \
+         patch("scrapers.enriquecedor_web._guardar_en_cache", side_effect=lambda k, v: mem_cache_5.__setitem__(k, v)), \
+         patch("scrapers.enriquecedor_web.SCRAPLING_AVAILABLE", True), \
+         patch("scrapers.enriquecedor_web.Fetcher.get", return_value=MagicMock(status=200, html_content=html_monocolor_s)):
+        det_mc = _extraer_desde_ficha_sitio("https://www.bicimarket.com/es/monocolor.html", "Bicimarket", km_ya_conocido=True, precio_actual=3524.0)
+        assert det_mc.get("talla") == "M" and det_mc.get("disponible") is not False
+
+
 if __name__ == "__main__":
     import requests as _req
 
@@ -4555,4 +4793,5 @@ if __name__ == "__main__":
         test_sniper_no_filtra_clon_wallapop_en_segunda_pasada_cross_bucket()
         test_umbrales_borde_bh_sniper_cache_y_lock()
         test_auditoria_27nov_modelos_2027_full_power_y_focus_sam()
+        test_prestashop_bicimarket_colores_y_boton_no_disponible()
         print("Todas las pruebas pasaron (GREEN).")

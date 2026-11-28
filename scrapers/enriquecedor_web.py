@@ -19,7 +19,7 @@ import base64
 import time
 from urllib.parse import urljoin
 import requests
-from typing import Optional, Dict, Tuple, List, Any
+from typing import Optional, Dict, Tuple, List, Any, Set
 from pathlib import Path
 from bs4 import BeautifulSoup
 from models import Bicicleta
@@ -283,35 +283,331 @@ def _extraer_tallas_bc(soup: BeautifulSoup) -> Tuple[Optional[str], bool, bool]:
     return cfg.seleccionar_talla_disponible(tallas_bc), True, True
 
 
-def _extraer_tallas_prestashop(soup: BeautifulSoup) -> Tuple[Optional[str], bool, bool]:
+_NO_DISP_TEXTO_RE = re.compile(
+    r"\b(?:reservad[oa]s?|agotad[oa]s?|vendid[oa]s?|sin\s+stock|no\s+disponible|fuera\s+de\s+stock)\b",
+    re.IGNORECASE,
+)
+_NO_DISP_BOTON_RE = re.compile(
+    r"\b(?:no\s+disponible|agotad[oa]s?|sin\s+stock|fuera\s+de\s+stock|av[ií]same|reservad[oa]s?|vendid[oa]s?)\b",
+    re.IGNORECASE,
+)
+_CARRUSEL_RELACIONADO_RE = re.compile(
+    r"(?:related-products|product-accessories|crossselling|featured-products|products-section|product-miniature)"
+)
+
+
+def _es_en_carrusel_relacionados(el) -> bool:
+    """Devuelve True si el nodo pertenece a un carrusel o tarjeta de relacionados."""
+    return hasattr(el, "find_parent") and el.find_parent(class_=_CARRUSEL_RELACIONADO_RE) is not None
+
+
+def _boton_carrito_no_disponible(soup: Optional[BeautifulSoup]) -> bool:
+    """Devuelve True si los botones del formulario principal indican producto agotado o deshabilitado."""
+    if soup is None:
+        return False
+    form = soup.select_one("#add-to-cart-or-refresh")
+    if form is not None:
+        btns = form.select("button.add-to-cart, [data-button-action='add-to-cart']")
+    else:
+        btns = [
+            b
+            for b in soup.select("button.add-to-cart, [data-button-action='add-to-cart']")
+            if not _es_en_carrusel_relacionados(b)
+        ]
+    if not btns:
+        return False
+    return all(
+        btn.has_attr("disabled")
+        or _tiene_marca_sin_stock(btn)
+        or bool(_NO_DISP_BOTON_RE.search(f"{btn.get_text(' ', strip=True)} {btn.get('value', '')}"))
+        for btn in btns
+    )
+
+
+def _nodos_variante_prestashop(el) -> Tuple[Any, Any, Any, str]:
+    """Extrae input, label, span y texto visible de una opción de variante PrestaShop."""
+    inp = el.select_one("input") if hasattr(el, "select_one") else None
+    lbl_sub = el.select_one("label") if hasattr(el, "select_one") else None
+    span_sub = el.select_one(".radio-label, span.radio-label") if hasattr(el, "select_one") else None
+    txt = (
+        (span_sub.get_text(" ", strip=True) if span_sub else "")
+        or (lbl_sub.get_text(" ", strip=True) if lbl_sub else "")
+        or (inp.get("title", "") if inp else "")
+        or el.get_text(" ", strip=True)
+    )
+    return inp, lbl_sub, span_sub, txt
+
+
+def _grupos_variantes_prestashop(scope: BeautifulSoup) -> List[Any]:
+    """Devuelve grupos de variantes excluyendo carruseles de productos relacionados."""
+    if scope is None:
+        return []
+    return [
+        g
+        for g in scope.select(".product-variants-item, .js-miniature-product-variants .clearfix")
+        if not _es_en_carrusel_relacionados(g)
+    ]
+
+
+def _debe_comprobar_boton_carrito(soup: Optional[BeautifulSoup]) -> bool:
+    """
+    Evita usar button.add-to-cart del estado inicial cuando el botón representa otra talla
+    (ej. S agotada con M en stock) o una tienda con data-qty-* por color (Sanferbike).
+    """
+    if soup is None:
+        return False
+    scope = soup.select_one("#add-to-cart-or-refresh") or soup
+    tallas_checked: List[str] = []
+    hay_tallas = False
+    for grupo in _grupos_variantes_prestashop(scope):
+        lbl = grupo.select_one(".control-label, p, span.control-label")
+        lbl_txt = lbl.get_text(" ", strip=True).lower() if lbl else ""
+        if any(k in lbl_txt for k in ("color", "acabado")) or bool(grupo.select_one("input.input-color")):
+            continue
+        elementos = grupo.select("ul li") or grupo.select("option")
+        es_talla = bool(re.search(r"\b(?:talla|size|tallas)\b", lbl_txt)) or any(
+            cfg.normalizar_codigo_talla(_nodos_variante_prestashop(el)[3]) for el in elementos
+        )
+        if not es_talla or not elementos:
+            continue
+        hay_tallas = True
+        for el in elementos:
+            inp, _, _, txt = _nodos_variante_prestashop(el)
+            if inp is not None and any(k.startswith("data-qty-") for k in inp.attrs):
+                return False
+            if inp is not None and inp.has_attr("checked"):
+                norm = cfg.normalizar_codigo_talla(txt)
+                if norm:
+                    tallas_checked.append(norm)
+    if not hay_tallas:
+        return True
+    if tallas_checked and "M" not in tallas_checked:
+        return False
+    return True
+
+
+def _post_prestashop_refresh(url_ajax: str, payload: dict) -> Optional[dict]:
+    """Consulta el endpoint AJAX estándar de PrestaShop para una combinación color x talla."""
+    headers = {
+        "X-Requested-With": "XMLHttpRequest",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+    }
+    resp = None
+    if SCRAPLING_AVAILABLE:
+        try:
+            kwargs_post: Dict[str, Any] = {
+                "data": payload,
+                "headers": headers,
+                "impersonate": "chrome120",
+                "timeout": 15,
+            }
+            rotator = crear_proxy_rotator()
+            if rotator is not None:
+                kwargs_post["proxy_rotator"] = rotator
+            resp = Fetcher.post(url_ajax, **kwargs_post)
+            if getattr(resp, "status", 200) != 200:
+                resp = None
+        except Exception:
+            resp = None
+    if resp is None:
+        try:
+            resp = requests.post(url_ajax, data=payload, headers=headers, timeout=15)
+            if getattr(resp, "status_code", 200) != 200:
+                return None
+        except Exception:
+            return None
+    try:
+        data = resp.json()
+        return data if isinstance(data, dict) else None
+    except Exception:
+        try:
+            raw = getattr(resp, "text", None) or getattr(resp, "body", b"").decode("utf-8", errors="ignore")
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+
+def _variante_ps_m_en_stock(ajax_json: dict, m_val: str) -> bool:
+    """Comprueba si la respuesta AJAX de PrestaShop deja Talla M realmente comprable."""
+    vs_html = ajax_json.get("product_variants") or ""
+    atc_html = ajax_json.get("product_add_to_cart") or ""
+    if not vs_html and not atc_html:
+        return False
+
+    if vs_html:
+        vs_soup = BeautifulSoup(vs_html, "html.parser")
+        inp_m = vs_soup.find("input", attrs={"value": m_val})
+        if inp_m is None:
+            return False
+        cont = inp_m.find_parent("li") or inp_m.find_parent("option")
+        lbl_sub = cont.select_one("label") if cont is not None else None
+        span_sub = cont.select_one(".radio-label, span.radio-label") if cont is not None else None
+        if any(_tiene_marca_sin_stock(n) for n in (cont, inp_m, lbl_sub, span_sub)):
+            return False
+        grupo_name = inp_m.get("name")
+        if grupo_name and not inp_m.has_attr("checked"):
+            if any(
+                i is not inp_m and i.has_attr("checked")
+                for i in vs_soup.find_all("input", attrs={"name": grupo_name})
+            ):
+                return False
+
+    if atc_html:
+        atc_soup = BeautifulSoup(atc_html, "html.parser")
+        if _boton_carrito_no_disponible(atc_soup):
+            return False
+
+    for frag_html in (ajax_json.get("product_details") or "", atc_html):
+        if not frag_html:
+            continue
+        frag_soup = BeautifulSoup(frag_html, "html.parser")
+        if frag_soup.select_one(".product-unavailable, #product-availability .product-unavailable"):
+            return False
+        avail_el = frag_soup.select_one("#product-availability, .product-availability, .availability-label")
+        if avail_el and _NO_DISP_TEXTO_RE.search(avail_el.get_text(" ", strip=True)):
+            return False
+
+    return True
+
+
+def _tiene_marca_disponibilidad_negativa_dom(scope: BeautifulSoup) -> bool:
+    """Detecta badges o texto de no disponibilidad en el contenedor principal."""
+    for badge in scope.select(
+        ".product-unavailable, .out-of-stock, .out_of_stock, .sold-out, "
+        ".agotado, .reservado, #product-availability .product-unavailable"
+    ):
+        if not _es_en_carrusel_relacionados(badge):
+            return True
+    for avail_el in scope.select("#product-availability, .product-availability, .availability-label"):
+        if not _es_en_carrusel_relacionados(avail_el) and _NO_DISP_TEXTO_RE.search(avail_el.get_text(" ", strip=True)):
+            return True
+    return False
+
+
+def _verificar_stock_prestashop_m_por_colores(url_fetch: str, soup: BeautifulSoup) -> Optional[bool]:
+    """Verifica si existe stock real en Talla M combinando colores disponibles en PrestaShop."""
+    if soup is None or "buhobike.com" in url_fetch.lower():
+        return None
+    form = soup.select_one("#add-to-cart-or-refresh")
+    if form is None:
+        return None
+    tok_el = form.select_one("input[name='token']")
+    pid_el = form.select_one("input[name='id_product']")
+    token = str(tok_el.get("value", "")) if tok_el is not None else ""
+    id_product = str(pid_el.get("value", "")) if pid_el is not None else ""
+    if not token or not id_product:
+        return None
+
+    colores: List[Tuple[str, str, bool]] = []
+    m_info: Optional[Tuple[Any, Any, Any, Any]] = None
+    tiene_data_qty = False
+
+    grupos = _grupos_variantes_prestashop(form) or _grupos_variantes_prestashop(soup)
+    for grupo in grupos:
+        lbl = grupo.select_one(".control-label, p, span.control-label")
+        lbl_txt = lbl.get_text(" ", strip=True).lower() if lbl else ""
+        elementos = grupo.select("ul li") or grupo.select("option")
+        if not elementos:
+            continue
+
+        es_color = any(k in lbl_txt for k in ("color", "acabado")) or bool(grupo.select_one("input.input-color"))
+        if es_color:
+            for el in elementos:
+                inp, _, _, _ = _nodos_variante_prestashop(el)
+                if inp is not None and inp.get("name") and inp.get("value"):
+                    colores.append((str(inp.get("name")), str(inp.get("value")), inp.has_attr("checked")))
+            continue
+
+        es_talla = bool(re.search(r"\b(?:talla|size|tallas)\b", lbl_txt)) or any(
+            cfg.normalizar_codigo_talla(_nodos_variante_prestashop(el)[3]) for el in elementos
+        )
+        if not es_talla:
+            continue
+
+        for el in elementos:
+            inp, lbl_sub, span_sub, txt = _nodos_variante_prestashop(el)
+            if inp is not None and any(k.startswith("data-qty-") for k in inp.attrs):
+                tiene_data_qty = True
+            if m_info is None and cfg.normalizar_codigo_talla(txt) == "M" and inp is not None and inp.get("name") and inp.get("value"):
+                m_info = (el, inp, lbl_sub, span_sub)
+
+    if tiene_data_qty or not colores or m_info is None:
+        return None
+
+    m_el, m_inp, m_lbl, m_span = m_info
+    m_name = str(m_inp.get("name"))
+    m_val = str(m_inp.get("value"))
+    m_checked = m_inp.has_attr("checked")
+    m_deshab_inicial = any(_tiene_marca_sin_stock(n) for n in (m_el, m_inp, m_lbl, m_span))
+    scope_disp = soup.select_one("#main .product-container, .product-container, main") or form
+
+    if (
+        m_checked
+        and not m_deshab_inicial
+        and not _boton_carrito_no_disponible(form)
+        and not _tiene_marca_disponibilidad_negativa_dom(scope_disp)
+    ):
+        return True
+
+    candidatos: List[Tuple[str, str]] = []
+    if not m_checked and not m_deshab_inicial:
+        candidatos.extend((c_name, c_val) for c_name, c_val, is_chk in colores if is_chk)
+    candidatos.extend((c_name, c_val) for c_name, c_val, is_chk in colores if not is_chk)
+    if not candidatos:
+        return False
+
+    sep = "&" if "?" in url_fetch else "?"
+    url_ajax = f"{url_fetch.split('#')[0]}{sep}controller=product&ajax=1&action=refresh"
+
+    respuestas_ok = 0
+    fallos_red = 0
+    for c_name, c_val in candidatos[:6]:
+        payload = {
+            "token": token,
+            "id_product": id_product,
+            "id_customization": "0",
+            c_name: c_val,
+            m_name: m_val,
+            "qty": "1",
+        }
+        data = _post_prestashop_refresh(url_ajax, payload)
+        if data is not None:
+            respuestas_ok += 1
+            if _variante_ps_m_en_stock(data, m_val):
+                return True
+        else:
+            fallos_red += 1
+            if fallos_red >= 2 and respuestas_ok == 0:
+                break
+
+    return False if respuestas_ok > 0 else None
+
+
+def _extraer_tallas_prestashop(
+    soup: BeautifulSoup,
+    excluir_tallas: Optional[Set[str]] = None,
+) -> Tuple[Optional[str], bool, bool]:
     """Extrae tallas en stock de variantes PrestaShop (.product-variants-item / js-miniature)."""
     tallas_ps: List[str] = []
     hay_grupo = False
-    for grupo in soup.select(".product-variants-item, .js-miniature-product-variants .clearfix"):
+    for grupo in _grupos_variantes_prestashop(soup):
         lbl = grupo.select_one(".control-label, p, span.control-label")
         lbl_txt = lbl.get_text(" ", strip=True).lower() if lbl else ""
         if any(k in lbl_txt for k in ("color", "acabado")):
             continue
         elementos = grupo.select("ul li") or grupo.select("option")
         es_talla = bool(re.search(r"\b(?:talla|size|tallas)\b", lbl_txt)) or any(
-            cfg.normalizar_codigo_talla(el.get_text(" ", strip=True)) for el in elementos
+            cfg.normalizar_codigo_talla(_nodos_variante_prestashop(el)[3]) for el in elementos
         )
         if not es_talla or not elementos:
             continue
 
         hay_grupo = True
         for el in elementos:
-            inp = el.select_one("input") if hasattr(el, "select_one") else None
-            lbl_sub = el.select_one("label") if hasattr(el, "select_one") else None
-            span_sub = el.select_one(".radio-label, span.radio-label") if hasattr(el, "select_one") else None
-            txt = (
-                (span_sub.get_text(" ", strip=True) if span_sub else "")
-                or (lbl_sub.get_text(" ", strip=True) if lbl_sub else "")
-                or (inp.get("title", "") if inp else "")
-                or el.get_text(" ", strip=True)
-            )
+            inp, lbl_sub, span_sub, txt = _nodos_variante_prestashop(el)
             norm = cfg.normalizar_codigo_talla(txt)
-            if not norm:
+            if not norm or (excluir_tallas and norm in excluir_tallas):
                 continue
             qtys = [int(v) for k, v in (inp.attrs if inp else {}).items() if k.startswith("data-qty-") and str(v).isdigit()]
             if qtys:
@@ -328,7 +624,10 @@ def _extraer_tallas_prestashop(soup: BeautifulSoup) -> Tuple[Optional[str], bool
     return cfg.seleccionar_talla_disponible(tallas_ps), True, True
 
 
-def _extraer_tallas_disponibles_ficha(soup: BeautifulSoup) -> Tuple[Optional[str], bool]:
+def _extraer_tallas_disponibles_ficha(
+    soup: BeautifulSoup,
+    excluir_tallas: Optional[Set[str]] = None,
+) -> Tuple[Optional[str], bool]:
     """
     Inspecciona selectores de variantes en fichas PrestaShop y BigCommerce (BCData)
     para determinar si Talla M ('M', 'MD', 'S/M', 'M/L') está realmente en stock.
@@ -341,7 +640,7 @@ def _extraer_tallas_disponibles_ficha(soup: BeautifulSoup) -> Tuple[Optional[str
     if hallado_bc:
         return talla_bc, disp_bc
 
-    talla_ps, disp_ps, hallado_ps = _extraer_tallas_prestashop(soup)
+    talla_ps, disp_ps, hallado_ps = _extraer_tallas_prestashop(soup, excluir_tallas=excluir_tallas)
     if hallado_ps:
         return talla_ps, disp_ps
 
@@ -429,8 +728,12 @@ def _extraer_desde_ficha_sitio(
     soup = BeautifulSoup(html, "html.parser")
 
     # 0. Stock real por talla antes de descomponer scripts (BCData vive en <script>)
-    talla_var, stock_var_ok = _extraer_tallas_disponibles_ficha(soup)
-    if not stock_var_ok:
+    m_en_stock_ps = _verificar_stock_prestashop_m_por_colores(url_fetch, soup) if es_tienda_nueva_ficha else None
+    excluir_tallas = {"M"} if m_en_stock_ps is False else None
+    talla_var, stock_var_ok = _extraer_tallas_disponibles_ficha(soup, excluir_tallas=excluir_tallas)
+    if m_en_stock_ps is True:
+        detalle["talla"] = "M"
+    elif not stock_var_ok:
         detalle["disponible"] = False
     elif talla_var:
         detalle["talla"] = talla_var
@@ -528,7 +831,12 @@ def _extraer_desde_ficha_sitio(
         detalle["bateria_ciclos"] = ciclos_bat
 
     # --- Disponibilidad (Reservada / Agotada) ---
-    if not _extraer_disponibilidad_ficha(soup, texto_completo):
+    if not _extraer_disponibilidad_ficha(
+        soup,
+        texto_completo,
+        ignorar_boton_carrito=(m_en_stock_ps is True),
+        variante_m_confirmada=(m_en_stock_ps is True),
+    ):
         detalle["disponible"] = False
 
     # --- Range Extender ---
@@ -859,28 +1167,25 @@ def _extraer_salud_bateria(texto: str) -> Tuple[Optional[int], Optional[int]]:
     return salud_pct, ciclos
 
 
-def _extraer_disponibilidad_ficha(soup: BeautifulSoup, texto_completo: str) -> bool:
+def _extraer_disponibilidad_ficha(
+    soup: BeautifulSoup,
+    texto_completo: str,
+    ignorar_boton_carrito: bool = False,
+    variante_m_confirmada: bool = False,
+) -> bool:
     """
     Verifica en la ficha de detalle si la bicicleta sigue disponible para compra
     o si está marcada como Reservada, Agotada o Fuera de stock.
     """
+    if variante_m_confirmada:
+        return True
+
     if soup is not None:
-        badge_no_disp = soup.select_one(
-            ".product-unavailable, .out-of-stock, .out_of_stock, .sold-out, "
-            ".agotado, .reservado, #product-availability .product-unavailable"
-        )
-        if badge_no_disp is not None:
+        if _tiene_marca_disponibilidad_negativa_dom(soup):
             return False
 
-        avail_el = soup.select_one("#product-availability, .product-availability, .availability-label")
-        if avail_el:
-            txt_avail = avail_el.get_text(" ", strip=True)
-            if re.search(
-                r"\b(?:reservad[oa]s?|agotad[oa]s?|vendid[oa]s?|sin\s+stock|no\s+disponible|fuera\s+de\s+stock)\b",
-                txt_avail,
-                re.IGNORECASE,
-            ):
-                return False
+        if not ignorar_boton_carrito and _debe_comprobar_boton_carrito(soup) and _boton_carrito_no_disponible(soup):
+            return False
 
     if texto_completo:
         if re.search(
